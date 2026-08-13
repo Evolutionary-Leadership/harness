@@ -1,0 +1,96 @@
+name: Clean up feature branch after merge to dev
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [dev]
+
+jobs:
+  cleanup:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'feature/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Extract feature name
+        id: feature
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          FEATURE_NAME="${BRANCH#feature/}"
+          echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Delete Railway environment
+        env:
+          RAILWAY_ACCOUNT_TOKEN: ${{ secrets.RAILWAY_ACCOUNT_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+        run: |
+          if [ -z "$RAILWAY_ACCOUNT_TOKEN" ] || [ -z "$RAILWAY_PROJECT_ID" ]; then
+            echo "Skipping: RAILWAY_ACCOUNT_TOKEN or RAILWAY_PROJECT_ID not set."
+            exit 0
+          fi
+
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          gql() {
+            local resp
+            resp=$(curl -s -X POST "$API_URL" \
+              -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\":\"$1\"}") || true
+            if echo "$resp" | jq . >/dev/null 2>&1; then
+              echo "$resp"
+            else
+              echo '{"data":null}'
+            fi
+          }
+
+          # Find the environment ID by name
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty")
+
+          if [ -z "$ENV_ID" ]; then
+            echo "Warning: environment '$FEATURE_NAME' not found, may already be deleted."
+            exit 0
+          fi
+
+          echo "Deleting Railway environment '$FEATURE_NAME' (ID: $ENV_ID)..."
+          gql "mutation { environmentDelete(id: \\\"$ENV_ID\\\") }"
+          echo "Railway environment '$FEATURE_NAME' deleted."
+
+      - name: Delete feature branch
+        run: |
+          BRANCH="${{ steps.feature.outputs.branch }}"
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$BRANCH" \
+            || echo "Warning: branch may already be deleted."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The feature-context file (see .claude/HARNESS.md) lives only while a
+      # feature is in flight. /mergedev deletes it before triggering the
+      # merge; this step is the net for merges that bypassed /mergedev
+      # (the GitHub UI merge button, a manual git merge), so the file
+      # never lingers on dev.
+      - name: Remove leftover feature-context file from dev
+        run: |
+          SLUG="${{ steps.feature.outputs.name }}"
+          FILE=".harness/feature-context/${SLUG}.md"
+          git clone --depth 1 --branch dev \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" dev-clone
+          cd dev-clone
+          if [ -f "$FILE" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git rm -q "$FILE"
+            git commit -m "chore: remove feature context for merged ${SLUG}"
+            git push origin dev \
+              || echo "Warning: could not push context cleanup to dev (branch protection?)."
+          else
+            echo "No feature-context file to clean up."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

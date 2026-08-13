@@ -1,0 +1,49 @@
+name: Clean up feature branch after merge to dev
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [dev]
+
+jobs:
+  cleanup:
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'feature/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete feature branch
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/$BRANCH" \
+            || echo "Warning: branch may already be deleted."
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The feature-context file (see .claude/HARNESS.md) lives only while a
+      # feature is in flight. /mergedev deletes it before triggering the
+      # merge; this step is the net for merges that bypassed /mergedev
+      # (the GitHub UI merge button, a manual git merge), so the file
+      # never lingers on dev.
+      - name: Remove leftover feature-context file from dev
+        run: |
+          SLUG="${{ github.event.pull_request.head.ref }}"
+          SLUG="${SLUG#feature/}"
+          FILE=".harness/feature-context/${SLUG}.md"
+          git clone --depth 1 --branch dev \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" dev-clone
+          cd dev-clone
+          if [ -f "$FILE" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git rm -q "$FILE"
+            git commit -m "chore: remove feature context for merged ${SLUG}"
+            git push origin dev \
+              || echo "Warning: could not push context cleanup to dev (branch protection?)."
+          else
+            echo "No feature-context file to clean up."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,299 @@
+name: Merge feature branch to dev (mergedev)
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+    paths:
+      - '.pr-description.md'
+
+concurrency:
+  group: mergedev-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  mergedev:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dev-write
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      # checks: read is required by the CI merge gate below: it reads the
+      # 'check' run's conclusion on the PR head via the default token, which
+      # otherwise gets no checks scope on private repos.
+      checks: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Extract feature name from branch
+        id: feature
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          WITHOUT_PREFIX="${BRANCH#claude/}"
+          CODENAME="${WITHOUT_PREFIX%-*}"
+          # Prefer the committed slug in .harness-feature; fall back to the
+          # random session codename. Keep this validation identical to
+          # .claude/scripts/resolve-feature-name.sh and the other workflows.
+          SLUG="$(git show "${{ github.sha }}:.harness-feature" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+          if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
+          echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+          echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Merge claude/ into feature/ (idempotent)
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          CLAUDE_SHA="${{ github.sha }}"
+
+          git fetch origin "$FEATURE_BRANCH" 2>/dev/null || true
+
+          if git ls-remote --exit-code origin "$FEATURE_BRANCH" > /dev/null 2>&1; then
+            git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          else
+            git checkout dev
+            git checkout -B "$FEATURE_BRANCH"
+          fi
+
+          # If claude-to-feature-branch.yml already raced ahead of us and
+          # merged $CLAUDE_SHA, skip the merge+push and let the rest of
+          # the workflow (Railway teardown, PR creation) proceed.
+          if git merge-base --is-ancestor "$CLAUDE_SHA" HEAD 2>/dev/null; then
+            echo "feature/$FEATURE_BRANCH already contains $CLAUDE_SHA. Skipping merge+push."
+            echo "skip_push=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git merge "$CLAUDE_SHA" --no-edit
+          echo "skip_push=false" >> "$GITHUB_OUTPUT"
+
+      - name: Delete Railway environment
+        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        env:
+          RAILWAY_ACCOUNT_TOKEN: ${{ secrets.RAILWAY_ACCOUNT_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          gql() {
+            local resp
+            resp=$(curl -s -X POST "$API_URL" \
+              -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\":\"$1\"}") || true
+            if echo "$resp" | jq . >/dev/null 2>&1; then
+              echo "$resp"
+            else
+              echo '{"data":null}'
+            fi
+          }
+
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty")
+
+          if [ -z "$ENV_ID" ]; then
+            echo "No Railway environment '$FEATURE_NAME' found, nothing to delete."
+            exit 0
+          fi
+
+          echo "Deleting Railway environment '$FEATURE_NAME' (ID: $ENV_ID)..."
+          gql "mutation { environmentDelete(id: \\\"$ENV_ID\\\") }"
+          echo "Railway environment deleted. Push will not trigger a deploy."
+
+      - name: Push feature branch (race-resistant)
+        if: steps.merge.outputs.skip_push != 'true'
+        run: |
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          CLAUDE_SHA="${{ github.sha }}"
+
+          for attempt in 1 2 3 4 5; do
+            if git push origin "$FEATURE_BRANCH"; then
+              echo "Pushed feature/$FEATURE_BRANCH on attempt $attempt."
+              exit 0
+            fi
+
+            echo "Push rejected on attempt $attempt, refetching and retrying..."
+            git fetch origin "$FEATURE_BRANCH" 2>/dev/null || true
+
+            if git merge-base --is-ancestor "$CLAUDE_SHA" "origin/$FEATURE_BRANCH" 2>/dev/null; then
+              echo "feature/$FEATURE_BRANCH already contains $CLAUDE_SHA after refetch, nothing more to push."
+              exit 0
+            fi
+
+            git reset --hard "origin/$FEATURE_BRANCH"
+            git merge "$CLAUDE_SHA" --no-edit
+            sleep "$attempt"
+          done
+
+          echo "::error::Failed to push feature/$FEATURE_BRANCH after 5 attempts."
+          exit 1
+
+      - name: Create PR and handle merge
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+
+          # Preflight: gh requires a non-empty token. We deliberately do NOT fall
+          # back to GITHUB_TOKEN here: a PR auto-merged with GITHUB_TOKEN does not
+          # trigger downstream workflows (e.g. harness-version-bump.yml), which
+          # silently breaks the dogfooded version-bump chain.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PAT_TOKEN is missing or empty in repo secrets."
+            echo "::error::This workflow needs a Personal Access Token to create the PR and trigger downstream workflows on auto-merge. GITHUB_TOKEN cannot be used as a fallback because PRs merged with it do not trigger workflow runs (e.g. harness-version-bump.yml would never fire)."
+            echo "::error::Fix: Settings -> Secrets and variables -> Actions -> add PAT_TOKEN. Fine-grained PAT scoped to this repo with Contents: read/write, Pull requests: read/write, Workflows: read/write. Classic PAT equivalent: 'repo' + 'workflow' scopes."
+            echo "::error::After the secret is set, re-push the claude/ branch to retrigger this workflow. The signal file (.pr-description.md) is still on feature/<name> because cleanup now runs after PR creation."
+            exit 1
+          fi
+
+          git checkout "$FEATURE_BRANCH"
+
+          # Parse frontmatter fields
+          TITLE=$(sed -n '/^---$/,/^---$/{ /^title:/{ s/^title: *//; p; } }' .pr-description.md)
+          if [ -z "$TITLE" ]; then
+            TITLE="Merge $FEATURE_BRANCH into dev"
+          fi
+          REVIEW=$(sed -n '/^---$/,/^---$/{ /^review:/{ s/^review: *//; p; } }' .pr-description.md)
+          REVIEWERS=$(sed -n '/^---$/,/^---$/{ /^reviewers:/{ s/^reviewers: *//; p; } }' .pr-description.md)
+
+          # Parse body: everything after the second ---
+          awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' .pr-description.md > /tmp/pr-body.md
+
+          # Create or reuse PR. Done BEFORE removing the signal file so a token
+          # failure or transient gh error can't strand feature/ with the signal
+          # file gone but no PR open.
+          EXISTING=$(gh pr list --head "$FEATURE_BRANCH" --base dev --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            PR_NUMBER="$EXISTING"
+          else
+            PR_URL=$(gh pr create --base dev --head "$FEATURE_BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md)
+            PR_NUMBER=$(echo "$PR_URL" | grep -oP '/pull/\K[0-9]+')
+          fi
+
+          # Assign reviewers if configured
+          if [ -n "$REVIEWERS" ]; then
+            IFS=', ' read -ra REVIEWER_LIST <<< "$REVIEWERS"
+            for reviewer in "${REVIEWER_LIST[@]}"; do
+              reviewer=$(echo "$reviewer" | xargs)
+              [ -n "$reviewer" ] && gh pr edit "$PR_NUMBER" --add-reviewer "$reviewer" || true
+            done
+          fi
+
+          # Remove signal files now that the PR exists.
+          # .harness-feature MUST be removed here: it carries this session's
+          # feature name and must not leak onto dev, or a future session
+          # cloned from dev would inherit this feature's name.
+          #
+          # Race-resistant signal-file cleanup (both workflows can push
+          # feature/ concurrently): commit the removal, then push with a
+          # refetch-reset-retry loop. If a concurrent push already removed
+          # the signal files, the working tree matches origin and we break.
+          # The cleanup push below must start a fresh 'check' run on the
+          # final PR head, but pushes authenticated as the checkout's
+          # persisted GITHUB_TOKEN start no workflows. Two steps make the
+          # push run as the PAT instead (GH_TOKEN is PAT_TOKEN here):
+          # the PAT goes into the remote URL, and the push resets the
+          # http extraheader that checkout persisted, because git sends
+          # only that header when it is set and ignores URL credentials.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          pat_push() {
+            git -c "http.https://github.com/.extraheader=" push origin "$FEATURE_BRANCH"
+          }
+
+          remove_signal_files() {
+            git rm -f --ignore-unmatch \
+              .pr-description.md .railway-url .harness-init .harness-feature > /dev/null 2>&1 || true
+            git commit -m "chore: remove signal files" > /dev/null 2>&1 || true
+          }
+          remove_signal_files
+          for attempt in 1 2 3 4 5; do
+            if pat_push; then break; fi
+            git fetch origin "$FEATURE_BRANCH" 2>/dev/null || true
+            git reset --hard "origin/$FEATURE_BRANCH"
+            remove_signal_files
+            if git diff --quiet "origin/$FEATURE_BRANCH"; then break; fi
+            sleep "$attempt"
+          done
+
+          # If review mode: skip auto-merge, leave PR open for review
+          if [ "$REVIEW" = "true" ]; then
+            echo "PR #$PR_NUMBER created for review, skipping auto-merge."
+            echo "::notice::PR #$PR_NUMBER is open for review at $(gh pr view $PR_NUMBER --json url --jq .url)"
+            exit 0
+          fi
+
+          # When a check: command is configured in .harness-version, CI is
+          # the merge gate: wait for the 'check' run on the PR HEAD and merge
+          # only on success. Never rely on 'gh pr merge --auto' for this:
+          # auto-merge only waits for checks that branch protection marks as
+          # required, and on repos without branch protection (for example a
+          # private repo on a free plan) it degrades to an immediate merge,
+          # making CI decorative for the merge decision.
+          CHECK_CMD=$(grep '^check:' .harness-version 2>/dev/null | sed 's/^check: *//' || true)
+          if [ -n "$CHECK_CMD" ]; then
+            # Budget: 72 ticks of 10s is a hard 12-minute cap. A check:
+            # command that runs longer than that fails every gated merge;
+            # keep the check chain under the cap or raise the budget here.
+            echo "Waiting for CI 'check' status on PR #$PR_NUMBER HEAD..."
+            CI_RESULT=pending
+            CHECK=missing
+            for i in $(seq 1 72); do
+              PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+              if [ -z "$PR_HEAD" ]; then
+                echo "  [$i/72] HEAD fetch failed, retrying next tick"
+                sleep 10
+                continue
+              fi
+              # The check-runs API needs checks:read; PAT_TOKEN may not
+              # carry that scope, so use the workflow's default token for
+              # this one call.
+              CHECK=$(GH_TOKEN=${{ github.token }} gh api \
+                "/repos/${{ github.repository }}/commits/$PR_HEAD/check-runs" \
+                --jq '[.check_runs[] | select(.name=="check")] | max_by(.started_at) | (.conclusion // .status // "missing")' 2>/dev/null || echo missing)
+              echo "  [$i/72] HEAD=$PR_HEAD check=$CHECK"
+              case "$CHECK" in
+                success) CI_RESULT=success; break ;;
+                failure|cancelled|timed_out) CI_RESULT="$CHECK"; break ;;
+              esac
+              sleep 10
+            done
+            if [ "$CI_RESULT" != "success" ]; then
+              # Exit non-zero so the workflow conclusion honestly reports
+              # that the merge did NOT happen. Timeouts report the last
+              # observed run state (e.g. action_required, skipped) so the
+              # operator sees why the gate never resolved.
+              echo "::error::CI status '$CI_RESULT' (last check state: '$CHECK') for PR #$PR_NUMBER; merge not performed."
+              gh pr comment "$PR_NUMBER" --body "**Merge not performed: CI status was '$CI_RESULT'** (last check state: '$CHECK'). Fix the failure (or wait for CI to finish) and merge manually with \`gh pr merge $PR_NUMBER --merge\`, or push a new change to re-trigger mergedev."
+              exit 1
+            fi
+          fi
+
+          # Merge now. With CI configured this point is only reached on a
+          # green check; without CI there is nothing to wait for. The --auto
+          # fallback stays for repos where required status checks make an
+          # immediate merge refuse.
+          merged=0
+          for i in 1 2 3 4 5; do
+            if gh pr merge "$PR_NUMBER" --merge; then merged=1; break; fi
+            if gh pr merge "$PR_NUMBER" --auto --merge 2>/dev/null; then merged=1; break; fi
+            echo "Merge attempt $i did not complete, retrying in ${i}s..."
+            sleep "$i"
+          done
+          if [ "$merged" = 1 ]; then
+            echo "PR #$PR_NUMBER merged (or set to auto-merge once required checks pass) into dev."
+          else
+            echo "::warning::merge did not complete for PR #$PR_NUMBER"
+            gh pr comment "$PR_NUMBER" --body "**Auto-merge did not complete**, likely due to merge conflicts with dev. Check out the feature branch locally, merge dev into it, resolve conflicts, push, and merge this PR manually."
+          fi
+
+      - name: Delete source claude/ branch
+        run: git push origin --delete ${{ github.ref_name }} || true

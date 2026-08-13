@@ -1,0 +1,72 @@
+name: Clean up Railway environment on feature branch deletion
+
+on:
+  delete:
+
+jobs:
+  cleanup-railway:
+    if: >-
+      github.event.ref_type == 'branch' &&
+      startsWith(github.event.ref, 'feature/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Railway secrets are available
+        id: check
+        env:
+          HAS_RAILWAY_ACCOUNT_TOKEN: ${{ secrets.RAILWAY_ACCOUNT_TOKEN }}
+          HAS_RAILWAY_PROJECT: ${{ secrets.RAILWAY_PROJECT_ID }}
+        run: |
+          HAS_RAILWAY="false"
+          if [ -n "$HAS_RAILWAY_ACCOUNT_TOKEN" ] && [ -n "$HAS_RAILWAY_PROJECT" ]; then
+            HAS_RAILWAY="true"
+          fi
+          if [ "$HAS_RAILWAY" != "true" ]; then
+            echo "Railway secrets not configured, skipping cleanup."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract feature name
+        if: steps.check.outputs.skip != 'true'
+        id: feature
+        run: |
+          BRANCH="${{ github.event.ref }}"
+          FEATURE_NAME="${BRANCH#feature/}"
+          echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Delete Railway environment
+        if: steps.check.outputs.skip != 'true'
+        env:
+          RAILWAY_ACCOUNT_TOKEN: ${{ secrets.RAILWAY_ACCOUNT_TOKEN }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          gql() {
+            local resp
+            resp=$(curl -s -X POST "$API_URL" \
+              -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\":\"$1\"}") || true
+            if echo "$resp" | jq . >/dev/null 2>&1; then
+              echo "$resp"
+            else
+              echo '{"data":null}'
+            fi
+          }
+
+          # Find the environment ID by name
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty")
+
+          if [ -z "$ENV_ID" ]; then
+            echo "Warning: environment '$FEATURE_NAME' not found, may already be deleted."
+            exit 0
+          fi
+
+          echo "Deleting Railway environment '$FEATURE_NAME' (ID: $ENV_ID)..."
+          gql "mutation { environmentDelete(id: \\\"$ENV_ID\\\") }"
+          echo "Railway environment '$FEATURE_NAME' deleted."

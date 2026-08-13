@@ -1,0 +1,74 @@
+name: Create feature branch & merge claude/ into it
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+    paths-ignore:
+      - '.pr-description.md'
+
+concurrency:
+  group: feature-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  merge-to-feature:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Check for release (skip feature branch)
+        id: release
+        run: |
+          if git show ${{ github.sha }}:.release-description.md > /dev/null 2>&1; then
+            echo "Release detected, skipping feature branch creation."
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract feature name from branch
+        if: steps.release.outputs.is_release != 'true'
+        id: feature
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          WITHOUT_PREFIX="${BRANCH#claude/}"
+          CODENAME="${WITHOUT_PREFIX%-*}"
+          # Prefer the committed slug in .harness-feature; fall back to the
+          # random session codename. Keep this validation identical to
+          # .claude/scripts/resolve-feature-name.sh and the other workflows.
+          SLUG="$(git show "${{ github.sha }}:.harness-feature" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+          if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
+          echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+          echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Create feature branch (if new) and merge
+        if: steps.release.outputs.is_release != 'true'
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+
+          if git ls-remote --exit-code origin "$FEATURE_BRANCH" > /dev/null 2>&1; then
+            git checkout "$FEATURE_BRANCH"
+            echo "is_new=false" >> "$GITHUB_OUTPUT"
+          else
+            git checkout dev
+            git checkout -b "$FEATURE_BRANCH"
+            echo "is_new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          git merge ${{ github.sha }} --no-edit
+          git push origin "$FEATURE_BRANCH"
+
+      - name: Delete source claude/ branch
+        if: steps.release.outputs.is_release != 'true'
+        run: git push origin --delete ${{ github.ref_name }} || true

@@ -1,0 +1,201 @@
+name: Release to production
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - '.release-description.md'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.2.3). Leave empty to read from .release-description.md.'
+        required: false
+
+concurrency:
+  group: dev-write
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, 'chore: remove release signal file')"
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Parse release metadata
+        id: release
+        run: |
+          if [ ! -f .release-description.md ]; then
+            # workflow_dispatch without signal file, use input version
+            VERSION="${{ github.event.inputs.version }}"
+            if [ -z "$VERSION" ]; then
+              echo "::error::No .release-description.md and no version input. Nothing to release."
+              exit 1
+            fi
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+
+            # Generate minimal release body from git log
+            LAST_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo "v0.0.0")
+            echo "## Release $VERSION" > /tmp/release-body.md
+            echo "" >> /tmp/release-body.md
+            git log "$LAST_TAG"..origin/dev --oneline --no-merges >> /tmp/release-body.md || true
+            exit 0
+          fi
+
+          VERSION=$(sed -n '/^---$/,/^---$/{ /^version:/{ s/^version: *//; p; } }' .release-description.md)
+          TYPE=$(sed -n '/^---$/,/^---$/{ /^type:/{ s/^type: *//; p; } }' .release-description.md)
+          CLEANUP_BRANCH=$(sed -n '/^---$/,/^---$/{ /^cleanup-branch:/{ s/^cleanup-branch: *//; p; } }' .release-description.md)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "type=$TYPE" >> "$GITHUB_OUTPUT"
+          echo "cleanup_branch=$CLEANUP_BRANCH" >> "$GITHUB_OUTPUT"
+
+          # Extract body (everything after second ---)
+          awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' .release-description.md > /tmp/release-body.md
+
+      - name: Remove signal file
+        if: hashFiles('.release-description.md') != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git pull --rebase origin dev || true
+
+          git rm -f .release-description.md
+          git commit -m "chore: remove release signal file"
+
+          for i in 1 2 3; do
+            if git push origin dev; then
+              break
+            fi
+            echo "Push attempt $i failed, pulling and retrying..."
+            git pull --rebase origin dev || true
+            sleep "$i"
+          done
+
+      - name: Create release PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+
+          EXISTING=$(gh pr list --head dev --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            PR_NUMBER="$EXISTING"
+            gh pr edit "$PR_NUMBER" --title "Release $VERSION" --body-file /tmp/release-body.md
+          else
+            PR_URL=$(gh pr create --base main --head dev --title "Release $VERSION" --body-file /tmp/release-body.md)
+            PR_NUMBER=$(echo "$PR_URL" | grep -oP '/pull/\K[0-9]+')
+          fi
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Merge release PR
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+
+          # Try auto-merge first (handles repos with required status checks)
+          if gh pr merge "$PR_NUMBER" --auto --merge 2>/dev/null; then
+            echo "Release PR #$PR_NUMBER set to auto-merge once checks pass."
+          else
+            # No branch protection, merge immediately with retry
+            for i in 1 2 3 4; do
+              if gh pr merge "$PR_NUMBER" --merge; then
+                echo "Release PR #$PR_NUMBER merged into main."
+                break
+              fi
+              echo "Merge attempt $i failed, retrying in ${i}s..."
+              sleep "$i"
+            done
+          fi
+
+      - name: Back-merge main into dev (sync ahead/behind to 0)
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+
+          for i in $(seq 1 30); do
+            STATE=$(gh pr view "$PR_NUMBER" --json state --jq .state)
+            if [ "$STATE" = "MERGED" ]; then
+              break
+            fi
+            echo "Waiting for PR #$PR_NUMBER to merge before back-merge... ($i/30)"
+            sleep 10
+          done
+
+          if [ "$STATE" != "MERGED" ]; then
+            echo "::warning::PR not merged after 5 minutes. Skipping back-merge; next release will re-sync."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # main's tip is a merge commit whose second parent is dev's tip,
+          # so dev can fast-forward to main. Retry on race with another dev write.
+          for i in 1 2 3 4 5; do
+            git fetch origin main dev
+            if git push origin origin/main:dev; then
+              echo "dev fast-forwarded to main; ahead/behind is now 0/0."
+              exit 0
+            fi
+            echo "Back-merge attempt $i lost a race with another dev write, refetching..."
+            sleep "$((i * 2))"
+          done
+
+          echo "::warning::Could not fast-forward dev to main after 5 attempts."
+          echo "::warning::dev has diverged from main. Next release will re-sync, or run manually:"
+          echo "::warning::  git checkout dev && git merge --no-ff origin/main && git push origin dev"
+          exit 0
+
+      - name: Create git tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+
+          # Wait for PR to actually be merged (handles --auto case)
+          for i in $(seq 1 30); do
+            STATE=$(gh pr view "$PR_NUMBER" --json state --jq .state)
+            if [ "$STATE" = "MERGED" ]; then
+              break
+            fi
+            echo "Waiting for PR #$PR_NUMBER to merge... (attempt $i/30)"
+            sleep 10
+          done
+
+          if [ "$STATE" != "MERGED" ]; then
+            echo "::warning::PR #$PR_NUMBER not yet merged after 5 minutes. Skipping tag. Create tag manually after merge."
+            exit 0
+          fi
+
+          # Tag the merge commit on main
+          git fetch origin main
+          git tag "$VERSION" origin/main
+          git push origin "$VERSION"
+
+          # Create GitHub Release
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file /tmp/release-body.md \
+            --target main
+
+      - name: Clean up orphaned feature branch
+        if: steps.release.outputs.cleanup_branch != ''
+        run: |
+          BRANCH="${{ steps.release.outputs.cleanup_branch }}"
+          echo "Deleting orphaned release branch: $BRANCH"
+          git push origin --delete "$BRANCH" || echo "Branch $BRANCH already deleted or not found."
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}

@@ -1,0 +1,125 @@
+name: Hotfix to production
+
+on:
+  push:
+    branches:
+      - 'hotfix/**'
+    paths:
+      - '.pr-description.md'
+
+concurrency:
+  group: dev-write
+  cancel-in-progress: false
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, 'chore: remove hotfix signal file')"
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Extract hotfix info
+        id: hotfix
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          HOTFIX_NAME="${BRANCH#hotfix/}"
+          echo "name=$HOTFIX_NAME" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          # Parse version from frontmatter
+          VERSION=$(sed -n '/^---$/,/^---$/{ /^version:/{ s/^version: *//; p; } }' .pr-description.md)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Parse PR description
+        id: pr_desc
+        run: |
+          # Parse title from frontmatter
+          TITLE=$(sed -n '/^---$/,/^---$/{ /^title:/{ s/^title: *//; p; } }' .pr-description.md)
+          if [ -z "$TITLE" ]; then
+            TITLE="Hotfix: ${{ steps.hotfix.outputs.name }}"
+          fi
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+
+          # Parse body: everything after the second ---
+          awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' .pr-description.md > /tmp/pr-body.md
+
+      - name: Remove signal file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git rm .pr-description.md
+          git commit -m "chore: remove hotfix signal file"
+          git push origin "${{ steps.hotfix.outputs.branch }}"
+
+      - name: Create hotfix PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          BRANCH="${{ steps.hotfix.outputs.branch }}"
+          TITLE="${{ steps.pr_desc.outputs.title }}"
+
+          EXISTING=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            PR_NUMBER="$EXISTING"
+          else
+            PR_URL=$(gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md)
+            PR_NUMBER=$(echo "$PR_URL" | grep -oP '/pull/\K[0-9]+')
+          fi
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Merge hotfix PR
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+
+          for i in 1 2 3 4; do
+            if gh pr merge "$PR_NUMBER" --merge; then
+              echo "Hotfix PR #$PR_NUMBER merged into main."
+              exit 0
+            fi
+            echo "Merge attempt $i failed, retrying in ${i}s..."
+            sleep "$i"
+          done
+          echo "::error::Hotfix merge failed for PR #$PR_NUMBER. Manual intervention required."
+          exit 1
+
+      - name: Tag release and create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          VERSION="${{ steps.hotfix.outputs.version }}"
+
+          if [ -n "$VERSION" ]; then
+            git fetch origin main
+            git tag "$VERSION" origin/main
+            git push origin "$VERSION"
+
+            gh release create "$VERSION" \
+              --title "$VERSION (hotfix)" \
+              --notes-file /tmp/pr-body.md \
+              --target main
+          fi
+
+      - name: Back-merge main into dev
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main dev
+          git checkout dev
+          git merge origin/main --no-edit || {
+            echo "::warning::Back-merge of main into dev has conflicts. Manual resolution needed."
+            exit 0
+          }
+          git push origin dev
+
+      - name: Delete hotfix branch
+        run: git push origin --delete "${{ steps.hotfix.outputs.branch }}" || true

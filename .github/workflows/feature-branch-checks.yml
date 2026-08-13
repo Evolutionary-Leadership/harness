@@ -1,0 +1,110 @@
+name: Feature branch checks
+
+# Checks run on two triggers:
+# - push to claude/** gives the session CI feedback while the work is in
+#   flight, before any merge PR exists. The trigger is on claude/** and not
+#   feature/**, because feature/** is pushed by claude-to-feature-branch.yml
+#   with the default GITHUB_TOKEN, and events created with GITHUB_TOKEN do
+#   not start workflows. Signal-file-only pushes are skipped; the merge PR
+#   run covers them.
+# - pull_request to dev/main is the merge gate: claude-mergedev.yml waits
+#   for this run's conclusion before merging when a check: command is
+#   configured in .harness-version.
+# The 'check' job id below is a contract with claude-mergedev.yml's merge
+# gate, which polls the run by that name; do not rename it.
+on:
+  push:
+    branches: ['claude/**']
+    paths-ignore:
+      - '.pr-description.md'
+      - '.harness-init'
+      - '.harness-feature'
+      # Feature-context refreshes (see .claude/HARNESS.md) are prose-only
+      # state updates; running the check suite on each would make context
+      # pushes expensive and ration the updates the flow depends on. The
+      # merge PR run still checks the full tree.
+      - '.harness/feature-context/**'
+  pull_request:
+    branches: [dev, main]
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read check command from .harness-version
+        id: config
+        run: |
+          if [ ! -f .harness-version ]; then
+            echo "No .harness-version file found. Skipping checks."
+            echo "cmd=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CHECK_CMD=$(grep '^check:' .harness-version | sed 's/^check: *//' || true)
+          echo "cmd=$CHECK_CMD" >> "$GITHUB_OUTPUT"
+
+      - name: Detect package manager
+        if: steps.config.outputs.cmd != ''
+        id: pm
+        run: |
+          if [ -f bun.lockb ] || [ -f bun.lock ]; then
+            echo "manager=bun" >> "$GITHUB_OUTPUT"
+            echo "install=bun install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+            echo "cache=" >> "$GITHUB_OUTPUT"
+          elif [ -f pnpm-lock.yaml ]; then
+            echo "manager=pnpm" >> "$GITHUB_OUTPUT"
+            echo "install=pnpm install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+            echo "cache=pnpm" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ]; then
+            echo "manager=yarn" >> "$GITHUB_OUTPUT"
+            echo "install=yarn install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+            echo "cache=yarn" >> "$GITHUB_OUTPUT"
+          elif [ -f package-lock.json ]; then
+            echo "manager=npm" >> "$GITHUB_OUTPUT"
+            echo "install=npm ci" >> "$GITHUB_OUTPUT"
+            echo "cache=npm" >> "$GITHUB_OUTPUT"
+          else
+            echo "manager=" >> "$GITHUB_OUTPUT"
+            echo "install=" >> "$GITHUB_OUTPUT"
+            echo "cache=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect Node.js version
+        if: steps.config.outputs.cmd != '' && steps.pm.outputs.manager != ''
+        id: node
+        run: |
+          if [ -f .nvmrc ]; then
+            echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
+          elif [ -f .node-version ]; then
+            echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=22" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pnpm
+        if: steps.pm.outputs.manager == 'pnpm'
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        if: steps.config.outputs.cmd != '' && steps.pm.outputs.manager != '' && steps.pm.outputs.manager != 'bun'
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          cache: ${{ steps.pm.outputs.cache }}
+
+      - name: Setup Bun
+        if: steps.pm.outputs.manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        if: steps.config.outputs.cmd != '' && steps.pm.outputs.install != ''
+        run: ${{ steps.pm.outputs.install }}
+
+      - name: Run checks
+        if: steps.config.outputs.cmd != ''
+        run: ${{ steps.config.outputs.cmd }}

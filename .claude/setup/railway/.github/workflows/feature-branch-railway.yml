@@ -1,0 +1,618 @@
+name: Provision Railway environment for feature branch
+
+on:
+  workflow_run:
+    workflows: ["Create feature branch & merge claude/ into it"]
+    types: [completed]
+
+concurrency:
+  # Queue, do not cancel. Cancelling mid-run can interrupt a Railway
+  # GraphQL mutation between environmentCreate and the .railway-url
+  # commit, leaving a stranded environment with no published URL.
+  group: railway-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  provision-railway:
+    # The head-commit-message clause skips provisioning/heal runs for pushes
+    # that only refresh the feature-context file (see .claude/HARNESS.md):
+    # the skills commit pure context refreshes with the `chore(context):`
+    # prefix, and such a push changes nothing Railway needs to act on.
+    # Note this skips only this workflow; Railway's own deployment trigger
+    # still watches the feature branch and redeploys on any push to it.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'claude/') &&
+      !startsWith(github.event.workflow_run.head_commit.message, 'chore(context):')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RAILWAY_ACCOUNT_TOKEN: ${{ secrets.RAILWAY_ACCOUNT_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+      # Keep in sync with harness-railway.yml. Railway forks default to
+      # US East unless every service-instance carries a region override.
+      SERVICE_REGION: europe-west4-drams3a
+      # Single visible knob for the object-storage bucket region. Feature
+      # buckets are NOT created here: they are inherited from the dev
+      # environment's bucket (which harness-railway.yml creates in this
+      # region), because Object Storage is not addressable via
+      # project.services and a bucket cannot be moved after creation. This
+      # value is surfaced for documentation/parity with harness-railway.yml
+      # and is referenced by the region-pin step's warning output.
+      BUCKET_REGION: ams
+    steps:
+      - name: Extract feature name from triggering branch
+        id: feature
+        run: |
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          WITHOUT_PREFIX="${BRANCH#claude/}"
+          CODENAME="${WITHOUT_PREFIX%-*}"
+          # This is a workflow_run job: the repo is not checked out yet and the
+          # claude/ branch may already be deleted by the bridge workflow. Read
+          # .harness-feature from the triggering commit via the contents API.
+          # Keep this validation identical to
+          # .claude/scripts/resolve-feature-name.sh and the other workflows.
+          HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+          SLUG="$(curl -fsS \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/${{ github.repository }}/contents/.harness-feature?ref=$HEAD_SHA" \
+            2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+          if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
+          echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+          echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Check if Railway environment already exists
+        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        id: check
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          ENVS=$(curl -s -X POST "$API_URL" \
+            -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }\"}")
+
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty" 2>/dev/null) || true
+
+          if [ -n "$ENV_ID" ]; then
+            echo "Railway environment '$FEATURE_NAME' already exists, skipping provisioning."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        with:
+          ref: ${{ steps.feature.outputs.branch }}
+          fetch-depth: 1
+
+      - name: Create Railway environment and connect branch
+        if: steps.check.outputs.exists != 'true' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          # POST a raw JSON payload, retrying when the response is not
+          # valid JSON. Slow mutations (environmentCreate forks the whole
+          # dev environment and can take over a minute) sometimes come
+          # back with a malformed body even though they succeeded
+          # server-side; a single bad response must not be trusted.
+          gql_post() {
+            local payload="$1" resp
+            for _try in 1 2 3; do
+              resp=$(curl -s --max-time 120 -X POST "$API_URL" \
+                -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload") || true
+              if echo "$resp" | jq . >/dev/null 2>&1; then
+                echo "$resp"
+                return 0
+              fi
+              sleep 5
+            done
+            echo '{"data":null}'
+          }
+
+          gql() {
+            gql_post "{\"query\":\"$1\"}"
+          }
+
+          set_service_region() {
+            local svc_id="$1"
+            local env_id="$2"
+            gql_post "$(jq -n \
+              --arg sid "$svc_id" \
+              --arg eid "$env_id" \
+              --arg region "$SERVICE_REGION" \
+              '{query: "mutation($sid: String!, $eid: String!, $region: String!) { serviceInstanceUpdate(serviceId: $sid, environmentId: $eid, input: { region: $region }) }", variables: {sid: $sid, eid: $eid, region: $region}}')" > /dev/null || true
+          }
+
+          # 1. Get the dev environment ID
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          DEV_ENV_ID=$(echo "$ENVS" | jq -r '.data.environments.edges[].node | select(.name == "dev") | .id')
+
+          if [ -z "$DEV_ENV_ID" ]; then
+            echo "Error: Could not find dev environment"
+            exit 1
+          fi
+
+          # 2. Create environment duplicated from dev
+          CREATE_RESPONSE=$(gql "mutation { environmentCreate(input: { name: \\\"$FEATURE_NAME\\\", projectId: \\\"$PROJECT_ID\\\", sourceEnvironmentId: \\\"$DEV_ENV_ID\\\" }) { id deploymentTriggers { edges { node { id branch } } } } }")
+
+          ENV_ID=$(echo "$CREATE_RESPONSE" | jq -r '.data.environmentCreate.id // empty')
+          if [ -z "$ENV_ID" ]; then
+            # The create response can be malformed even though the
+            # environment WAS created server-side (with dev's deployment
+            # trigger still pointing at dev). Exiting 0 here would skip
+            # the trigger update, region pin, and variable wiring, and
+            # the preview would silently serve dev code. Poll for the
+            # environment by name and continue provisioning once found.
+            echo "environmentCreate returned no id; polling for environment '$FEATURE_NAME'..."
+            echo "$CREATE_RESPONSE" | jq . || true
+            for i in 1 2 3 4 5 6; do
+              sleep 10
+              ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+              ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty")
+              if [ -n "$ENV_ID" ]; then
+                echo "Found environment '$FEATURE_NAME' ($ENV_ID) on poll $i/6."
+                break
+              fi
+              echo "Environment '$FEATURE_NAME' not visible yet (poll $i/6)."
+            done
+            if [ -z "$ENV_ID" ]; then
+              echo "::error::Railway environment '$FEATURE_NAME' was not created: environmentCreate returned no id and the environment did not appear after 60s of polling."
+              exit 1
+            fi
+          fi
+
+          # 3. Update each deployment trigger to point to the feature
+          # branch. Query the triggers by environment id instead of
+          # reading them from the create response, which may have been
+          # malformed (see the polling fallback above).
+          TRIGGERS=$(gql "query { environment(id: \\\"$ENV_ID\\\") { deploymentTriggers { edges { node { id branch } } } } }")
+          TRIGGER_IDS=$(echo "$TRIGGERS" | jq -r '.data.environment.deploymentTriggers.edges[].node.id // empty')
+          for TRIGGER_ID in $TRIGGER_IDS; do
+            gql "mutation { deploymentTriggerUpdate(id: \\\"$TRIGGER_ID\\\", input: { branch: \\\"$FEATURE_BRANCH\\\" }) { id } }"
+          done
+
+          # 3b. Wire DATABASE_URL and bucket credentials to app service
+          # environmentCreate *should* inherit variables from dev, but Railway
+          # reference variables sometimes fail to resolve in forked environments.
+          # Explicitly setting them ensures the app works on first deploy.
+          # Build Railway reference variables at runtime so double braces
+          # never appear literally in this YAML file.
+          railref() { printf '\044'; printf '{'; printf '{%s}}' "$1"; }
+          SERVICES_LIST=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { services { edges { node { id name } } } } }")
+          APP_SERVICE_ID=$(echo "$SERVICES_LIST" | jq -r '[.data.project.services.edges[].node | select(.name | test("postgres|db|storage"; "i") | not)][0].id // empty')
+          PG_SVC_NAME=$(echo "$SERVICES_LIST" | jq -r '[.data.project.services.edges[].node | select(.name | test("db|postgres"; "i"))][0].name // empty')
+          PG_SVC_ID=$(echo "$SERVICES_LIST" | jq -r '[.data.project.services.edges[].node | select(.name | test("db|postgres"; "i"))][0].id // empty')
+          PG_REF=$(railref "${PG_SVC_NAME}.DATABASE_URL")
+
+          # Pin region for the forked feature environment. environmentCreate
+          # *should* carry per-instance region from dev, but inheritance is
+          # not guaranteed, so set it explicitly.
+          if [ -n "$APP_SERVICE_ID" ]; then
+            set_service_region "$APP_SERVICE_ID" "$ENV_ID"
+            echo "Pinned app service region to $SERVICE_REGION (feature env)"
+          fi
+          if [ -n "$PG_SVC_ID" ]; then
+            set_service_region "$PG_SVC_ID" "$ENV_ID"
+            echo "Pinned Postgres region to $SERVICE_REGION (feature env)"
+          fi
+
+          # Derive storage service name from Railway project name.
+          # Object Storage doesn't appear in project.services GraphQL query.
+          PROJECT_INFO=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { name } }")
+          PROJECT_NAME_RAIL=$(echo "$PROJECT_INFO" | jq -r '.data.project.name // empty')
+          STORAGE_SVC_NAME=""
+          if [ -n "$PROJECT_NAME_RAIL" ]; then
+            STORAGE_SVC_NAME="${PROJECT_NAME_RAIL}-storage"
+          fi
+
+          if [ -n "$APP_SERVICE_ID" ]; then
+            # Wire DATABASE_URL (Postgres supports cross-service references)
+            gql_post "$(jq -n \
+              --arg pid "$PROJECT_ID" \
+              --arg eid "$ENV_ID" \
+              --arg sid "$APP_SERVICE_ID" \
+              --arg dbref "$PG_REF" \
+              '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: {"DATABASE_URL": $dbref}}}}')" > /dev/null
+            echo "Set DATABASE_URL on app service for feature environment"
+
+            # Wire bucket credentials via reference variables.
+            # The bucket service exposes: BUCKET, ENDPOINT, REGION,
+            # ACCESS_KEY_ID, SECRET_ACCESS_KEY. We set these as references
+            # on the app service (same as Railway's "Add to Service").
+            if [ -n "$STORAGE_SVC_NAME" ]; then
+              BUCKET_REF=$(railref "${STORAGE_SVC_NAME}.BUCKET")
+              ENDPOINT_REF=$(railref "${STORAGE_SVC_NAME}.ENDPOINT")
+              ACCESSKEY_REF=$(railref "${STORAGE_SVC_NAME}.ACCESS_KEY_ID")
+              SECRETKEY_REF=$(railref "${STORAGE_SVC_NAME}.SECRET_ACCESS_KEY")
+              REGION_REF=$(railref "${STORAGE_SVC_NAME}.REGION")
+
+              gql_post "$(jq -n \
+                --arg pid "$PROJECT_ID" \
+                --arg eid "$ENV_ID" \
+                --arg sid "$APP_SERVICE_ID" \
+                --arg bucket "$BUCKET_REF" \
+                --arg endpoint "$ENDPOINT_REF" \
+                --arg accesskey "$ACCESSKEY_REF" \
+                --arg secretkey "$SECRETKEY_REF" \
+                --arg region "$REGION_REF" \
+                '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: {"AWS_S3_BUCKET_NAME": $bucket, "AWS_ENDPOINT_URL": $endpoint, "AWS_ACCESS_KEY_ID": $accesskey, "AWS_SECRET_ACCESS_KEY": $secretkey, "AWS_DEFAULT_REGION": $region}}}}')" > /dev/null
+              echo "Set bucket credentials on app service for feature environment"
+            fi
+          fi
+
+          # 3c. Redeploy the app service from the feature branch
+          # environmentCreate duplicates the dev environment and immediately
+          # queues a deployment using the *old* (dev) triggers. By the time
+          # we update the triggers above, that first deployment is already
+          # in flight with dev code. Explicitly redeploying ensures the
+          # feature branch code is what actually runs.
+          # Only the app service needs redeployment. Postgres and storage
+          # are managed services that don't pull from git branches.
+          if [ -n "$APP_SERVICE_ID" ]; then
+            echo "Triggering redeploy for app service $APP_SERVICE_ID in environment $ENV_ID"
+            gql "mutation { serviceInstanceRedeploy(environmentId: \\\"$ENV_ID\\\", serviceId: \\\"$APP_SERVICE_ID\\\") }" || true
+          fi
+
+          # 4. Eagerly ensure a service domain exists. The publish step
+          # below also does get-or-create, but seeding it here means the
+          # domain is reachable as soon as the deployment finishes.
+          # environmentCreate duplicates dev's domain, so we check for an
+          # inherited domain before creating a new one to avoid duplicates.
+          if [ -n "$APP_SERVICE_ID" ]; then
+            EXISTING_DOMAIN=$(gql "query { domains(projectId: \\\"$PROJECT_ID\\\", environmentId: \\\"$ENV_ID\\\", serviceId: \\\"$APP_SERVICE_ID\\\") { serviceDomains { domain } } }" \
+              | jq -r '.data.domains.serviceDomains[0].domain // empty' 2>/dev/null) || true
+
+            if [ -n "$EXISTING_DOMAIN" ]; then
+              echo "Using existing domain inherited from dev: $EXISTING_DOMAIN"
+            else
+              gql "mutation { serviceDomainCreate(input: { serviceId: \\\"$APP_SERVICE_ID\\\", environmentId: \\\"$ENV_ID\\\" }) { domain } }" >/dev/null || true
+            fi
+          fi
+
+      - name: Repoint deployment triggers to feature branch (heal)
+        # Always runs when secrets are present, regardless of whether the
+        # create step ran or was skipped (exists=true), analogous to the
+        # URL publish heal below. environmentCreate forks dev's deployment
+        # trigger, so a half-provisioned environment (older harness
+        # versions, or a create run that died between environmentCreate
+        # and deploymentTriggerUpdate) keeps serving dev code while
+        # looking healthy. Any trigger not pointing at feature/<name> is
+        # repointed here, followed by a redeploy of the app service so
+        # the running deployment matches the connected branch. Idempotent:
+        # no-op when all triggers already point at the feature branch.
+        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          # Same retry-hardened helper as the create step: never trust a
+          # single malformed response from a slow Railway mutation.
+          gql_post() {
+            local payload="$1" resp
+            for _try in 1 2 3; do
+              resp=$(curl -s --max-time 120 -X POST "$API_URL" \
+                -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload") || true
+              if echo "$resp" | jq . >/dev/null 2>&1; then
+                echo "$resp"
+                return 0
+              fi
+              sleep 5
+            done
+            echo '{"data":null}'
+          }
+
+          gql() {
+            gql_post "{\"query\":\"$1\"}"
+          }
+
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty" 2>/dev/null) || true
+          if [ -z "$ENV_ID" ]; then
+            echo "::warning::No Railway environment found for '$FEATURE_NAME'; nothing to heal."
+            exit 0
+          fi
+
+          TRIGGERS=$(gql "query { environment(id: \\\"$ENV_ID\\\") { deploymentTriggers { edges { node { id branch } } } } }")
+          STALE_IDS=$(echo "$TRIGGERS" | jq -r --arg b "$FEATURE_BRANCH" '.data.environment.deploymentTriggers.edges[].node | select(.branch != $b) | .id' 2>/dev/null) || true
+          if [ -z "$STALE_IDS" ]; then
+            echo "All deployment triggers already point at $FEATURE_BRANCH."
+            exit 0
+          fi
+
+          for TRIGGER_ID in $STALE_IDS; do
+            gql "mutation { deploymentTriggerUpdate(id: \\\"$TRIGGER_ID\\\", input: { branch: \\\"$FEATURE_BRANCH\\\" }) { id } }" > /dev/null
+            echo "Repointed deployment trigger $TRIGGER_ID to $FEATURE_BRANCH"
+          done
+
+          # The stale trigger means the current deployment was built from
+          # the wrong branch; redeploy the app service so the running code
+          # matches. Postgres and storage are managed services that do not
+          # pull from git, so only the app service needs it.
+          SERVICES=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { services { edges { node { id name } } } } }")
+          APP_SERVICE_ID=$(echo "$SERVICES" | jq -r '[.data.project.services.edges[].node | select(.name | test("postgres|db|storage"; "i") | not)][0].id // empty' 2>/dev/null) || true
+          if [ -n "$APP_SERVICE_ID" ]; then
+            gql "mutation { serviceInstanceRedeploy(environmentId: \\\"$ENV_ID\\\", serviceId: \\\"$APP_SERVICE_ID\\\") }" > /dev/null || true
+            echo "Redeployed app service from $FEATURE_BRANCH"
+          fi
+
+      - name: Pin service region to Europe and redeploy
+        # Always runs when secrets are present, regardless of whether the
+        # create step ran or was skipped (exists=true), analogous to the
+        # trigger-repoint and URL-publish heal steps. The create step pins
+        # the region only on first provision; an environment that already
+        # existed (older harness, or a create run that died before its
+        # region pin) would otherwise keep whatever region it was forked
+        # with. serviceInstanceUpdate is an idempotent config write, so
+        # re-pinning an already-correct service is a no-op; the app is
+        # redeployed only when its region actually had to change.
+        #
+        # Bucket note: Railway Object Storage is NOT addressable via
+        # project.services, so a feature bucket's region cannot be read or
+        # re-pinned here. Feature buckets inherit their region from the dev
+        # environment's bucket, which harness-railway.yml creates in
+        # BUCKET_REGION (ams). A bucket cannot be moved after creation, so
+        # the dev bucket is the durable control for bucket region; this
+        # step governs only the app + Postgres services. We deliberately
+        # ship no untested storage-region mutation here. See
+        # claude/HARNESS.md "Region default".
+        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          # Same retry-hardened helper as the create step: never trust a
+          # single malformed response from a slow Railway mutation.
+          gql_post() {
+            local payload="$1" resp
+            for _try in 1 2 3; do
+              resp=$(curl -s --max-time 120 -X POST "$API_URL" \
+                -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload") || true
+              if echo "$resp" | jq . >/dev/null 2>&1; then
+                echo "$resp"
+                return 0
+              fi
+              sleep 5
+            done
+            echo '{"data":null}'
+          }
+
+          gql() {
+            gql_post "{\"query\":\"$1\"}"
+          }
+
+          set_service_region() {
+            local svc_id="$1"
+            local env_id="$2"
+            gql_post "$(jq -n \
+              --arg sid "$svc_id" \
+              --arg eid "$env_id" \
+              --arg region "$SERVICE_REGION" \
+              '{query: "mutation($sid: String!, $eid: String!, $region: String!) { serviceInstanceUpdate(serviceId: $sid, environmentId: $eid, input: { region: $region }) }", variables: {sid: $sid, eid: $eid, region: $region}}')" > /dev/null || true
+          }
+
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty" 2>/dev/null) || true
+          if [ -z "$ENV_ID" ]; then
+            echo "::warning::No Railway environment found for '$FEATURE_NAME'; cannot pin region."
+            exit 0
+          fi
+
+          SERVICES=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { services { edges { node { id name } } } } }")
+          APP_SERVICE_ID=$(echo "$SERVICES" | jq -r '[.data.project.services.edges[].node | select(.name | test("postgres|db|storage"; "i") | not)][0].id // empty' 2>/dev/null) || true
+          PG_SVC_ID=$(echo "$SERVICES" | jq -r '[.data.project.services.edges[].node | select(.name | test("db|postgres"; "i"))][0].id // empty' 2>/dev/null) || true
+
+          # Read the current per-instance region so we only redeploy the app
+          # when the region actually has to change. If the query field is
+          # unavailable (schema drift) the read returns empty, and we fall
+          # back to pinning + redeploying, which is the safe default.
+          INSTANCES=$(gql "query { environment(id: \\\"$ENV_ID\\\") { serviceInstances { edges { node { serviceId region } } } } }")
+          APP_REGION=$(echo "$INSTANCES" | jq -r --arg sid "$APP_SERVICE_ID" '.data.environment.serviceInstances.edges[].node | select(.serviceId == $sid) | .region // empty' 2>/dev/null) || true
+          PG_REGION=$(echo "$INSTANCES" | jq -r --arg sid "$PG_SVC_ID" '.data.environment.serviceInstances.edges[].node | select(.serviceId == $sid) | .region // empty' 2>/dev/null) || true
+
+          APP_CHANGED=false
+          if [ -n "$APP_SERVICE_ID" ] && [ "$APP_REGION" != "$SERVICE_REGION" ]; then
+            set_service_region "$APP_SERVICE_ID" "$ENV_ID"
+            echo "Pinned app service region to $SERVICE_REGION (feature env '$FEATURE_NAME', was '${APP_REGION:-unknown}')"
+            APP_CHANGED=true
+          elif [ -n "$APP_SERVICE_ID" ]; then
+            echo "App service already in $SERVICE_REGION (feature env '$FEATURE_NAME'); no change."
+          fi
+
+          if [ -n "$PG_SVC_ID" ] && [ "$PG_REGION" != "$SERVICE_REGION" ]; then
+            set_service_region "$PG_SVC_ID" "$ENV_ID"
+            echo "Pinned Postgres region to $SERVICE_REGION (feature env '$FEATURE_NAME', was '${PG_REGION:-unknown}')"
+          elif [ -n "$PG_SVC_ID" ]; then
+            echo "Postgres already in $SERVICE_REGION (feature env '$FEATURE_NAME'); no change."
+          fi
+
+          # Object Storage is not in project.services, so the feature
+          # bucket's region cannot be verified or re-pinned here. It is
+          # inherited from the dev bucket (created in BUCKET_REGION=$BUCKET_REGION)
+          # and cannot be moved after creation.
+          echo "Bucket region inherited from dev (BUCKET_REGION=$BUCKET_REGION); not re-pinnable per feature."
+
+          # A region change only takes effect on the next deployment, so
+          # redeploy the app when its region changed. Postgres and storage
+          # are managed services that do not pull from git.
+          if [ "$APP_CHANGED" = true ] && [ -n "$APP_SERVICE_ID" ]; then
+            gql "mutation { serviceInstanceRedeploy(environmentId: \\\"$ENV_ID\\\", serviceId: \\\"$APP_SERVICE_ID\\\") }" > /dev/null || true
+            echo "Redeployed app service so the new region takes effect."
+          fi
+
+      - name: Publish Railway preview URL to feature branch
+        # Always runs when secrets are present, regardless of whether the
+        # create step ran or was skipped (exists=true). Idempotent: no-op
+        # when .railway-url is already on the feature branch. This heals
+        # stranded environments left behind when an earlier run was
+        # cancelled mid-mutation or had its push rejected.
+        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          # Fast-path idempotency: file already on the checked-out branch.
+          if [ -f .railway-url ] && [ -s .railway-url ]; then
+            echo "Already published: $(cat .railway-url)"
+            exit 0
+          fi
+
+          # Same retry-hardened helper as the create step: never trust a
+          # single malformed response from a slow Railway mutation.
+          gql() {
+            local resp
+            for _try in 1 2 3; do
+              resp=$(curl -s --max-time 120 -X POST "$API_URL" \
+                -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"query\":\"$1\"}") || true
+              if echo "$resp" | jq . >/dev/null 2>&1; then
+                echo "$resp"
+                return 0
+              fi
+              sleep 5
+            done
+            echo '{"data":null}'
+          }
+
+          # Look up the env id by feature name.
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty" 2>/dev/null) || true
+          if [ -z "$ENV_ID" ]; then
+            echo "::warning::No Railway environment found for '$FEATURE_NAME'; create step likely failed. Skipping publish."
+            exit 0
+          fi
+
+          # Find the app service (filter out managed Postgres/storage).
+          SERVICES=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { services { edges { node { id name } } } } }")
+          APP_SERVICE_ID=$(echo "$SERVICES" | jq -r '[.data.project.services.edges[].node | select(.name | test("postgres|db|storage"; "i") | not)][0].id // empty' 2>/dev/null) || true
+          if [ -z "$APP_SERVICE_ID" ]; then
+            echo "::warning::No app service found in project; skipping publish."
+            exit 0
+          fi
+
+          # Get-or-create the service domain. environmentCreate inherits
+          # dev's domain, so check first to avoid duplicates.
+          EXISTING_DOMAIN=$(gql "query { domains(projectId: \\\"$PROJECT_ID\\\", environmentId: \\\"$ENV_ID\\\", serviceId: \\\"$APP_SERVICE_ID\\\") { serviceDomains { domain } } }" \
+            | jq -r '.data.domains.serviceDomains[0].domain // empty' 2>/dev/null) || true
+          if [ -n "$EXISTING_DOMAIN" ]; then
+            DOMAIN="$EXISTING_DOMAIN"
+          else
+            DOMAIN_RESPONSE=$(gql "mutation { serviceDomainCreate(input: { serviceId: \\\"$APP_SERVICE_ID\\\", environmentId: \\\"$ENV_ID\\\" }) { domain } }") || true
+            DOMAIN=$(echo "$DOMAIN_RESPONSE" | jq -r '.data.serviceDomainCreate.domain // empty' 2>/dev/null) || true
+          fi
+          if [ -z "$DOMAIN" ]; then
+            echo "::warning::Could not get or create a Railway domain; skipping publish."
+            exit 0
+          fi
+          DEPLOY_URL="https://$DOMAIN"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "$DEPLOY_URL" > .railway-url
+          git add -f .railway-url
+          git commit -m "chore: add Railway preview URL"
+
+          # Retry-with-rebase loop. Survives concurrent Claude pushes and
+          # races with a queued earlier run that may publish first.
+          for attempt in 1 2 3 4 5; do
+            git fetch origin "$FEATURE_BRANCH" || true
+            if git show "origin/$FEATURE_BRANCH:.railway-url" >/dev/null 2>&1; then
+              echo "Branch already has .railway-url (queued earlier run won the race)."
+              exit 0
+            fi
+            if git rebase "origin/$FEATURE_BRANCH"; then
+              if git push origin "HEAD:$FEATURE_BRANCH"; then
+                echo "Published $DEPLOY_URL"
+                exit 0
+              fi
+            else
+              git rebase --abort || true
+            fi
+            sleep $((attempt * 2))
+          done
+
+          echo "::warning::Could not push .railway-url after 5 attempts. Fetch it manually: git fetch origin $FEATURE_BRANCH && git show origin/$FEATURE_BRANCH:.railway-url"
+
+      - name: Wait for Railway deployment
+        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+
+          # Same retry-hardened helper as the create step: never trust a
+          # single malformed response from a slow Railway mutation.
+          gql() {
+            local resp
+            for _try in 1 2 3; do
+              resp=$(curl -s --max-time 120 -X POST "$API_URL" \
+                -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"query\":\"$1\"}") || true
+              if echo "$resp" | jq . >/dev/null 2>&1; then
+                echo "$resp"
+                return 0
+              fi
+              sleep 5
+            done
+            echo '{"data":null}'
+          }
+
+          # Find the environment ID for this feature
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id" 2>/dev/null) || true
+
+          if [ -z "$ENV_ID" ]; then
+            echo "Could not find Railway environment for '$FEATURE_NAME', skipping deployment wait"
+            exit 0
+          fi
+
+          # Find the app service ID (filter out managed services like Postgres/storage)
+          SERVICES=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { services { edges { node { id name } } } } }")
+          SERVICE_ID=$(echo "$SERVICES" | jq -r '[.data.project.services.edges[].node | select(.name | test("postgres|db|storage"; "i") | not)][0].id // empty' 2>/dev/null) || true
+
+          if [ -z "$SERVICE_ID" ]; then
+            echo "Could not find any services, skipping deployment wait"
+            exit 0
+          fi
+
+          # Poll for deployment status (max 3 minutes)
+          echo "Waiting for Railway deployment to complete..."
+          for i in $(seq 1 18); do
+            sleep 10
+            RESULT=$(gql "query { deployments(input: { projectId: \\\"$PROJECT_ID\\\", serviceId: \\\"$SERVICE_ID\\\", environmentId: \\\"$ENV_ID\\\" }, first: 1) { edges { node { id status } } } }")
+            STATUS=$(echo "$RESULT" | jq -r '.data.deployments.edges[0].node.status // empty' 2>/dev/null) || true
+            echo "  Status: $STATUS (check $i/18)"
+
+            if [ "$STATUS" = "SUCCESS" ]; then
+              echo "Railway deployment succeeded!"
+              exit 0
+            fi
+
+            if [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CRASHED" ]; then
+              echo "::warning::Railway deployment $STATUS"
+              exit 0
+            fi
+          done
+
+          echo "::warning::Timed out waiting for Railway deployment (3 minutes)"
