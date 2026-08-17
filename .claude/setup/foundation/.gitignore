@@ -1,0 +1,29 @@
+node_modules/
+.pnpm-store/
+
+# Next build output. next-env.d.ts is NOT ignored: CI typechecks without
+# building, so nothing regenerates it there.
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+
+# Secrets. .env.example is the only env file that is committed.
+.env
+.env.*
+!.env.example
+
+# Harness signal file. Written by /mergedev to trigger the auto-merge workflow,
+# force-added onto the claude/ branch, and stripped from feature/<name> by the
+# workflow's own cleanup before the PR merges. It must never reach dev or main.
+.pr-description.md
+
+# Test output
+playwright-report/
+test-results/
+blob-report/
+coverage/
+
+*.log
+.DS_Store

@@ -178,9 +178,12 @@ entry, determine its relevance to this project:
 - `scope: docs` where `VARIANT` appears in `affects.variants`
 
 Exception: changes whose files live under `templates/harness/setup/`
-describe the one-shot `/setup` and `/foundation` skills. In a configured
-repository those have already run and deleted themselves, so treat these
-changes as **INFORMATIONAL** regardless of scope.
+describe the one-shot `/setup` skill and the pre-built foundation
+payload it materializes. In a configured repository the skill has
+already run and deleted itself (taking the quarantine with it), and any
+materialized foundation files are user-owned application code, so treat
+these changes as **INFORMATIONAL** regardless of scope. Never write
+`setup/` payload files into a configured repository.
 
 **STARTER (skip-if-exists)**: write-once scaffold files for this variant:
 - `scope: starter` where `VARIANT` appears in `affects.variants`

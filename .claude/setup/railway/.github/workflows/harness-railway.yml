@@ -4,10 +4,11 @@ on:
   workflow_dispatch:
   # Sentinel-file trigger: lets a fresh Claude Code session bootstrap
   # provisioning via the GitHub MCP server (which has create_or_update_file
-  # but no workflow_dispatch tool). Claude writes a one-line
-  # .harness-bootstrap to dev; this push fires the workflow. The cleanup
-  # step at the end deletes both this workflow file and .harness-bootstrap,
-  # so the trigger can never re-fire after a successful run.
+  # but no workflow_dispatch tool). Claude writes a two-line
+  # .harness-bootstrap to dev (timestamp, then the /setup foundation
+  # answer); this push fires the workflow. The cleanup step at the end
+  # deletes both this workflow file and .harness-bootstrap, so the trigger
+  # can never re-fire after a successful run.
   push:
     branches: [dev]
     paths:
@@ -102,6 +103,92 @@ jobs:
             return 0
           }
 
+          # Generate a signing key into the named global variable given as $1.
+          # The mask is emitted on the line after generation and BEFORE the
+          # value is returned, so nothing downstream (jq payloads, curl, error
+          # dumps) can put it in the run log. The result is assigned via
+          # printf -v rather than echoed, because a command substitution would
+          # swallow the ::add-mask:: line along with the value and Actions
+          # would never see it. check-template-overlay.mjs enforces the
+          # generate-then-mask pairing. See the forge's decision record 0007.
+          gen_masked_secret() {
+            local __out_var="$1"
+            local __value
+            __value=$(openssl rand -base64 32 | tr -d '\n')
+            echo "::add-mask::$__value"
+            printf -v "$__out_var" '%s' "$__value"
+          }
+
+          # Read one variable's value from an environment's app service into the
+          # named global variable given as $4, masking it on the way past so a
+          # value that already exists cannot reach the log either. Sets the
+          # target to the empty string when the variable is absent.
+          #
+          # Returns non-zero when the response could not be read at all, which
+          # callers treat as "no usable value". A single jq test covers every
+          # unreadable shape at once: a non-JSON body, a 502 HTML page, a curl
+          # failure, and a GraphQL error response (where .data is null) all
+          # fail `(.data.variables | type) == "object"`.
+          #
+          # Failing this way round is deliberate. This workflow self-deletes
+          # after a successful bootstrap, so it only ever re-runs when the
+          # bootstrap has NOT succeeded: there are no live sessions to protect,
+          # and shipping production without BETTER_AUTH_SECRET is the crash
+          # loop this whole feature exists to remove. A regenerated key at
+          # bootstrap time costs nothing. See the forge's decision record 0007.
+          read_env_var() {
+            local env_id="$1"
+            local svc_id="$2"
+            local key="$3"
+            local __out_var="$4"
+            local resp value
+            resp=$(curl -s -X POST "$API_URL" \
+              -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg pid "$PROJECT_ID" \
+                --arg eid "$env_id" \
+                --arg sid "$svc_id" \
+                '{query: "query($pid: String!, $eid: String!, $sid: String!) { variables(projectId: $pid, environmentId: $eid, serviceId: $sid) }", variables: {pid: $pid, eid: $eid, sid: $sid}}')")
+            if ! echo "$resp" | jq -e '(.data.variables | type) == "object"' > /dev/null 2>&1; then
+              printf -v "$__out_var" '%s'
+              return 1
+            fi
+            value=$(echo "$resp" | jq -r --arg k "$key" '.data.variables[$k] // ""')
+            if [ -n "$value" ]; then
+              echo "::add-mask::$value"
+            fi
+            printf -v "$__out_var" '%s' "$value"
+            return 0
+          }
+
+          echo "=== Step 0: Read the bootstrap sentinel ==="
+          # /setup writes .harness-bootstrap with the timestamp on line 1 and
+          # its foundation answer on line 2. That marker is a PARSED CONTRACT
+          # between the skill and this workflow (forge decision record
+          # 0007): if the two sides stop naming the same literal, a fresh
+          # scaffold silently comes up with no application variables and
+          # nothing errors. The forge's
+          # scripts/check-template-overlay.mjs fails the merge gate on that
+          # drift, so keep the string below and the one in
+          # templates/harness/setup/SKILL.md identical.
+          #
+          # Fails closed. A missing sentinel (workflow_dispatch run), a
+          # missing marker (older scaffold), or anything that is not exactly
+          # this line all mean "no".
+          FOUNDATION_MARKER="foundation: yes"
+          PROVISION_APP_VARS=false
+          if [ -f .harness-bootstrap ] && grep -qxF "$FOUNDATION_MARKER" .harness-bootstrap; then
+            PROVISION_APP_VARS=true
+          fi
+          if [ "$PROVISION_APP_VARS" = true ]; then
+            echo "Sentinel says foundation=yes: will provision application variables (BETTER_AUTH_SECRET, SEED_DATA, SHOW_DEMO_LOGIN)."
+          else
+            echo "Sentinel says foundation=no (or carries no marker): skipping application variables."
+            echo "Production still gets SEED_DATA=false, which is unconditional."
+          fi
+
+          echo ""
           echo "=== Step 1: Get workspace ID ==="
           # CRITICAL: me.workspaces is a FLAT ARRAY, NOT relay edges.
           # Do NOT use { edges { node { id name } } }. It will fail with
@@ -532,7 +619,31 @@ jobs:
           # Build variables map. Each ref is included only if its backing
           # service exists, so a partial bootstrap (e.g. Postgres failed)
           # doesn't leave the app referring to a non-existent service.
+          #
+          # SEED_DATA=false is UNCONDITIONAL, outside the foundation gate. It
+          # is a safety default that costs nothing on a project with no seed
+          # script, and gating it would take the never-seed guard away from
+          # scaffolds that declined the foundation. Forge decision record 0007.
           VARS_JSON=$(jq -n '{ "SEED_DATA": "false" }')
+
+          # BETTER_AUTH_SECRET, only for a foundation scaffold, and only when
+          # production does not already have one. SHOW_DEMO_LOGIN is never set
+          # here: production must never offer the demo login.
+          PROD_AUTH_SECRET=""
+          if [ "$PROVISION_APP_VARS" = true ]; then
+            if [ -n "$SERVICE_ID" ]; then
+              read_env_var "$PROD_ENV_ID" "$SERVICE_ID" BETTER_AUTH_SECRET PROD_AUTH_SECRET \
+                || echo "::warning::Could not read production variables; generating a BETTER_AUTH_SECRET. If production already had one, this run replaces it."
+            fi
+            if [ -n "$PROD_AUTH_SECRET" ]; then
+              echo "Production already has BETTER_AUTH_SECRET; preserving it."
+            else
+              gen_masked_secret PROD_AUTH_SECRET
+              VARS_JSON=$(echo "$VARS_JSON" | jq --arg v "$PROD_AUTH_SECRET" '. + { "BETTER_AUTH_SECRET": $v }')
+              echo "Generated BETTER_AUTH_SECRET for production."
+            fi
+          fi
+
           if [ "$PG_DEPLOYED" = true ]; then
             VARS_JSON=$(echo "$VARS_JSON" | jq --arg v "$PG_REF" '. + { "DATABASE_URL": $v }')
           fi
@@ -581,6 +692,9 @@ jobs:
             fi
             echo "Created app service: $SERVICE_ID (source=$REPO, branch=main, variables wired)"
           fi
+
+          # Names only. Never the values.
+          echo "Set on app service (production): $(echo "$VARS_JSON" | jq -r 'keys | join(", ")')"
 
           if set_service_region "$SERVICE_ID" "$PROD_ENV_ID"; then
             echo "Pinned app service region to $SERVICE_REGION (production)"
@@ -682,6 +796,58 @@ jobs:
             echo "$WIRE_BUCKET_DEV" | jq '.errors'
           else
             echo "Set bucket credentials on app service (dev)"
+          fi
+
+          echo ""
+          echo "=== Step 6d: Wire application variables to app service (dev) ==="
+          # This step runs AFTER the fork in Step 6, and that position is the
+          # whole guarantee that SHOW_DEMO_LOGIN never reaches production.
+          # Production is built first and dev is duplicated from it, so a value
+          # written here cannot travel upward. Do not move this above Step 6.
+          # Forge decision record 0007.
+          if [ "$PROVISION_APP_VARS" != true ]; then
+            echo "Skipping application variables for dev (sentinel says foundation=no)."
+          else
+            # Seeding and the demo login are literal values, safe to re-assert
+            # on every run.
+            DEV_VARS_JSON=$(jq -n '{ "SEED_DATA": "true", "SHOW_DEMO_LOGIN": "true" }')
+
+            # Dev's secret is correct exactly when it DIFFERS from production's.
+            #
+            # "Does dev already have the key" is the wrong question, and asking
+            # it is a trap: environmentCreate copies production's variables as
+            # literals, so a forked dev always has the key, and the answer is
+            # yes even when the value is production's. A run that forked dev
+            # and then failed before this step would, on re-fire, see the key
+            # present and preserve production's own signing key on dev forever.
+            # Comparing the values covers the fresh fork and the resumed fork
+            # alike, and needs no bookkeeping variable in the user's dashboard.
+            DEV_AUTH_SECRET=""
+            read_env_var "$DEV_ENV_ID" "$SERVICE_ID" BETTER_AUTH_SECRET DEV_AUTH_SECRET || true
+            if [ -n "$DEV_AUTH_SECRET" ] && [ "$DEV_AUTH_SECRET" != "$PROD_AUTH_SECRET" ]; then
+              echo "Dev already has its own BETTER_AUTH_SECRET; preserving it."
+            else
+              gen_masked_secret DEV_AUTH_SECRET
+              DEV_VARS_JSON=$(echo "$DEV_VARS_JSON" | jq --arg v "$DEV_AUTH_SECRET" '. + { "BETTER_AUTH_SECRET": $v }')
+              echo "Set BETTER_AUTH_SECRET for dev (a fresh value, distinct from production's)."
+            fi
+
+            WIRE_APP_DEV=$(curl -s -X POST "$API_URL" \
+              -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg pid "$PROJECT_ID" \
+                --arg eid "$DEV_ENV_ID" \
+                --arg sid "$SERVICE_ID" \
+                --argjson vars "$DEV_VARS_JSON" \
+                '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: $vars}}}')")
+            if echo "$WIRE_APP_DEV" | jq -e '.errors' > /dev/null 2>&1; then
+              echo "::warning::Failed to wire application variables to dev app service:"
+              echo "$WIRE_APP_DEV" | jq '.errors'
+            else
+              # Names only. Never the values.
+              echo "Set on app service (dev): $(echo "$DEV_VARS_JSON" | jq -r 'keys | join(", ")')"
+            fi
           fi
 
           echo ""

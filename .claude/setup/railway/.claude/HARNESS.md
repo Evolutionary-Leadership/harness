@@ -267,11 +267,26 @@ overwrite these harness-managed workflows and reset the region defaults.
 **Database migrations:** Each feature environment starts with an empty
 database. Your migration tooling must handle creating tables from scratch.
 
+**Application variables:** A scaffold that took the standard technical
+foundation gets `BETTER_AUTH_SECRET` (generated separately per
+environment), `SEED_DATA`, and `SHOW_DEMO_LOGIN` provisioned during
+bootstrap, so a fresh repo needs no Railway dashboard visit. Production
+gets a secret and `SEED_DATA=false` and never `SHOW_DEMO_LOGIN`; dev gets
+its own secret plus `SEED_DATA=true` and `SHOW_DEMO_LOGIN=true`; each
+feature preview gets its own secret on first provision and inherits the
+rest from dev. Secrets are masked in the workflow, so read them from the
+Railway dashboard, not the run log. Because dev and previews carry a
+seeded demo account and a public URL, **dev must never hold real data**.
+See `docs/architecture/railway-environments.md`.
+
 **Seed data:** Production has `SEED_DATA=false` set automatically by the
-harness setup workflow. Dev does NOT have this variable, and feature
-environments inherit from dev, so they seed normally. Projects should
-check `process.env.SEED_DATA === "false"` at the top of their seed script
-to bail out early on production.
+harness setup workflow, so it is never seeded. Dev gets `SEED_DATA=true`
+on a foundation scaffold, and feature environments inherit from dev, so
+they seed normally. Projects should check
+`process.env.SEED_DATA === "false"` at the top of their seed script to
+bail out early on production. Prefer that form over `!== "true"`: a repo
+provisioned before the harness set the dev value has it unset there, and
+the strict form would silently stop seeding dev.
 
 **Bucket environment variables:**
 
@@ -477,14 +492,29 @@ These files are maintained by the harness and replaced on
 | `.harness-version` | Version tracking |
 | `.claude/traits/*.md` | Stack best practices (managed per `traits:` in `.harness-version`) |
 
+**Materialized foundation files are user-owned.** A project that chose
+the technical foundation got its application tree (`src/`, `tests/`,
+`drizzle/`, `package.json`, `CLAUDE.md`, the `docs/` content, and the
+rest of the payload) copied out of the `.claude/setup/foundation/`
+quarantine by `/setup`, which then deleted the quarantine. Those files
+belong to this project from that moment on: `/harness-upgrade` never
+touches them, and they must never be added to the harness-managed list
+above.
+
 **Note:** `harness-railway.yml` is a one-time setup workflow that
 self-destructs after its first run. It is not part of ongoing upgrades.
 It can be triggered two ways: manually via the Actions tab ("Run
-workflow"), or by writing a one-line `.harness-bootstrap` file to the
+workflow"), or by writing a two-line `.harness-bootstrap` file to the
 `dev` branch (used by the harnesscompanion.com wizard via the GitHub
-MCP server, which can write files but not dispatch workflows). The
-final cleanup step removes both `.github/workflows/harness-railway.yml`
-and `.harness-bootstrap`, so the trigger can never re-fire.
+MCP server, which can write files but not dispatch workflows). Line 1 is
+a timestamp, and any change to it re-fires the workflow, which is the
+documented recovery after a failed provision. Line 2 is `foundation: yes`
+or `foundation: no`, recording whether the project took the standard
+technical foundation; the workflow matches that line exactly to decide
+whether to provision application variables, and treats anything else as
+no. The final cleanup step removes both
+`.github/workflows/harness-railway.yml` and `.harness-bootstrap`, so the
+trigger can never re-fire.
 
 The cleanup commit (titled `chore: remove harness bootstrap files
 (one-time use)`) carries the provisioned Railway URLs in its body in a

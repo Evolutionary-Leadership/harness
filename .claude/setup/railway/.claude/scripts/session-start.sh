@@ -44,8 +44,9 @@ if [[ "$BRANCH" == claude/* ]]; then
 fi
 
 # Unconfigured-template nag. /setup deletes itself on success, so its
-# presence IS the unconfigured state; the staged /foundation skill
-# self-deletes the same way after it runs. No flag files.
+# presence IS the unconfigured state. No flag files. The technical
+# foundation, when chosen, is materialized by /setup itself, so there is
+# no staged-but-unbuilt state to nag about.
 if [ -d .claude/skills/setup ]; then
   cat <<'SETUP'
 ==========================================================
@@ -55,13 +56,6 @@ if [ -d .claude/skills/setup ]; then
   this repository is ready to use.
 ==========================================================
 SETUP
-elif [ -d .claude/skills/foundation ]; then
-  cat <<'FOUNDATION'
-==========================================================
-  Technical foundation is staged but not built: run
-  /foundation in this session before feature work.
-==========================================================
-FOUNDATION
 fi
 
 cat <<'HARNESS'

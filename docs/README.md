@@ -54,9 +54,9 @@ front-matter naming the files it describes, so a diff touching those files
 mechanically implicates the doc. Start from
 [TEMPLATE.md](./architecture/TEMPLATE.md).
 
-| Doc | Subsystem | `sources:` |
-|---|---|---|
-| _(none yet)_ | | |
+| Doc | Subsystem |
+|---|---|
+| _(none yet)_ | |
 
 ### Decisions (ADRs)
 

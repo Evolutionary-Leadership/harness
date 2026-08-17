@@ -31,7 +31,7 @@
  * subtrees whose markdown describes some other repo's layout.
  */
 
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, relative, dirname, resolve, sep, extname, basename } from "node:path";
 
 const ROOT = process.cwd();
@@ -362,7 +362,9 @@ for (const f of adrFiles) {
 //   <!-- surface-count: glob=src/routes/**/*.ts pattern=app\.(get|post)\( -->
 //
 // The checker counts regex matches across the glob and compares against the
-// number of body rows in the next markdown table.
+// number of body rows in the next markdown table. Patterns compile with the
+// "m" flag so ^ and $ anchor per line; without it a ^-anchored directive
+// silently matches nothing and reports zero instead of failing loudly.
 
 for (const f of markdownFiles) {
   if (TEMPLATE_BASENAMES.has(basename(f))) continue;
@@ -373,7 +375,7 @@ for (const f of markdownFiles) {
     const [, glob, patternSrc] = directive;
     let re;
     try {
-      re = new RegExp(patternSrc, "g");
+      re = new RegExp(patternSrc, "gm");
     } catch {
       error(f, `surface-count directive has an invalid pattern: ${patternSrc}`);
       continue;

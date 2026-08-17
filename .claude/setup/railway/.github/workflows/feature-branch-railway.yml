@@ -134,6 +134,35 @@ jobs:
               '{query: "mutation($sid: String!, $eid: String!, $region: String!) { serviceInstanceUpdate(serviceId: $sid, environmentId: $eid, input: { region: $region }) }", variables: {sid: $sid, eid: $eid, region: $region}}')" > /dev/null || true
           }
 
+          # Generate a signing key into the named global variable given as $1.
+          # The mask is emitted on the line after generation and BEFORE the
+          # value is returned, so it cannot reach the run log through a later
+          # jq payload. The result is assigned via printf -v rather than
+          # echoed, because a command substitution would swallow the
+          # ::add-mask:: line along with the value and Actions would never see
+          # it. check-template-overlay.mjs enforces the generate-then-mask
+          # pairing. See the forge's decision record 0007.
+          gen_masked_secret() {
+            local __out_var="$1"
+            local __value
+            __value=$(openssl rand -base64 32 | tr -d '\n')
+            echo "::add-mask::$__value"
+            printf -v "$__out_var" '%s' "$__value"
+          }
+
+          # Does an environment's app service carry a variable? Answers "no"
+          # on any unreadable response, so the caller does nothing rather than
+          # acting on an environment it could not inspect.
+          env_has_var() {
+            local env_id="$1" svc_id="$2" key="$3" resp
+            resp=$(gql_post "$(jq -n \
+              --arg pid "$PROJECT_ID" \
+              --arg eid "$env_id" \
+              --arg sid "$svc_id" \
+              '{query: "query($pid: String!, $eid: String!, $sid: String!) { variables(projectId: $pid, environmentId: $eid, serviceId: $sid) }", variables: {pid: $pid, eid: $eid, sid: $sid}}')")
+            echo "$resp" | jq -e --arg k "$key" '((.data.variables | type) == "object") and (.data.variables | has($k))' > /dev/null 2>&1
+          }
+
           # 1. Get the dev environment ID
           ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
           DEV_ENV_ID=$(echo "$ENVS" | jq -r '.data.environments.edges[].node | select(.name == "dev") | .id')
@@ -248,6 +277,41 @@ jobs:
                 --arg region "$REGION_REF" \
                 '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: {"AWS_S3_BUCKET_NAME": $bucket, "AWS_ENDPOINT_URL": $endpoint, "AWS_ACCESS_KEY_ID": $accesskey, "AWS_SECRET_ACCESS_KEY": $secretkey, "AWS_DEFAULT_REGION": $region}}}}')" > /dev/null
               echo "Set bucket credentials on app service for feature environment"
+            fi
+
+            # 3b-ii. Give this preview its own auth secret.
+            # environmentCreate copies dev's variables as literals, so a fresh
+            # preview arrives holding dev's BETTER_AUTH_SECRET. Replace it, so
+            # the "unique per environment" rule the foundation states is
+            # actually true, and a leaked preview key cannot forge dev sessions.
+            #
+            # Gated on the key already being present. A project without the
+            # standard technical foundation has no BETTER_AUTH_SECRET on dev,
+            # so its previews have nothing to rotate and this does nothing.
+            # That presence check is why the /setup foundation marker never has
+            # to reach this workflow.
+            #
+            # This whole step runs only on the create path (see the step's
+            # `if:`), so a preview's secret is set once and later pushes to the
+            # same branch leave it alone. Rotating on every push would log a
+            # reviewer out mid review. Forge decision record 0007.
+            # Unlike the bootstrap workflow's read, this one fails towards
+            # doing NOTHING: an unreadable response leaves the preview with
+            # dev's inherited secret, which is degraded but harmless, whereas
+            # rotating on a bad read could disturb an environment we could not
+            # actually inspect.
+            if env_has_var "$ENV_ID" "$APP_SERVICE_ID" BETTER_AUTH_SECRET; then
+              gen_masked_secret FEATURE_AUTH_SECRET
+              gql_post "$(jq -n \
+                --arg pid "$PROJECT_ID" \
+                --arg eid "$ENV_ID" \
+                --arg sid "$APP_SERVICE_ID" \
+                --arg secret "$FEATURE_AUTH_SECRET" \
+                '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: {"BETTER_AUTH_SECRET": $secret}}}}')" > /dev/null
+              # Name only. Never the value.
+              echo "Set BETTER_AUTH_SECRET on app service for feature environment (fresh value, not dev's)"
+            else
+              echo "No BETTER_AUTH_SECRET inherited from dev; nothing to rotate for this feature environment."
             fi
           fi
 

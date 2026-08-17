@@ -54,9 +54,9 @@ front-matter naming the files it describes, so a diff touching those files
 mechanically implicates the doc. Start from
 [TEMPLATE.md](./architecture/TEMPLATE.md).
 
-| Doc | Subsystem | `sources:` |
-|---|---|---|
-| [railway-environments.md](./architecture/railway-environments.md) | Per-environment Postgres, object-storage bucket, app service, and the preview-URL contract | the two `*railway*.yml` workflows, `railway.json` |
+| Doc | Subsystem |
+|---|---|
+| [railway-environments.md](./architecture/railway-environments.md) | Per-environment Postgres, object-storage bucket, app service, and the preview-URL contract |
 
 ### Decisions (ADRs)
 

@@ -1,8 +1,8 @@
 ---
 name: setup
-description: "Configure this fresh template: choose Railway or code-only, optionally stage the technical foundation. Runs once and deletes itself."
+description: "Configure this fresh template: choose Railway or code-only, optionally materialize the pre-built technical foundation. Runs once and deletes itself."
 argument-hint: "[railway=yes|no] [foundation=yes|no] [secrets=confirmed]"
-allowed-tools: Bash(git *), Bash(ls *), Bash(cp *), Bash(chmod *), Bash(date *), Read, Write, Glob, Grep
+allowed-tools: Bash(git *), Bash(ls *), Bash(cp *), Bash(rm *), Bash(chmod *), Bash(date *), Bash(pnpm *), Read, Write, Glob, Grep
 ---
 
 # Configure this template
@@ -22,9 +22,11 @@ The variants:
 | `harness-plain` | Code-only: the full branch-and-release flow, no deploy target |
 
 The Railway machinery ships quarantined under `.claude/setup/railway/`,
-holding final repo-relative paths. Applying it is one copy; declining it
-is doing nothing. Nothing in the quarantine can trigger or fail until it
-is copied out.
+and the pre-built technical foundation (a complete, verified Next.js
+application) ships quarantined under `.claude/setup/foundation/`. Both
+hold final repo-relative paths, so applying either is one copy and
+declining it is doing nothing. Nothing in the quarantine can trigger or
+fail until it is copied out.
 
 ## Steps
 
@@ -38,9 +40,9 @@ example Railway workflow files already at `.github/workflows/`, a
 rewritten `.harness-version`, or an unpushed configuration commit),
 a previous `/setup` was interrupted. Do not start over and do not
 re-ask questions the working tree already answers: infer the answers
-from the applied state (Railway files at the root mean railway=yes; a
-staged `.claude/skills/foundation/` means foundation=yes), then continue
-from the first incomplete step below.
+from the applied state (Railway files at the root mean railway=yes;
+`next.config.ts` at the repo root means the foundation was already
+materialized), then continue from the first incomplete step below.
 
 ### 2. Arguments
 
@@ -62,7 +64,7 @@ template sync delivered the tree. Key base files:
 And the quarantine:
 
 - `.claude/setup/railway/.github/workflows/harness-railway.yml`
-- `.claude/setup/foundation/`
+- `.claude/setup/foundation/package.json`
 
 Report anything missing as an upstream sync bug and stop. Never recreate
 missing files by hand; they come from the template sync or not at all.
@@ -83,8 +85,11 @@ If Q1 was yes and `foundation=` was not passed, ask via AskUserQuestion:
 > Start from the standard technical foundation (Next.js 16, Drizzle,
 > Better Auth, TanStack Query, optimistic UI)?
 
-- **Yes**: stage the one-shot `/foundation` skill; the user runs it in
-  their next chat, before any feature work.
+- **Yes**: the complete, pre-built application lands NOW, in this
+  session. It is copied out of the quarantine as finished, verified
+  files; there is no follow-up skill, no second session, and no code
+  generation. It ships with a working notes app as an illustrative
+  reference domain, replaced later through the normal `/feature` flow.
 - **No**: the minimal Express starter stays in place until the first
   feature replaces it.
 
@@ -122,12 +127,39 @@ Railway hooks, scripts, and skill overrides land in `.claude/`, and the
 starter app files land at the root. The chmod restores executable bits
 in the working tree; git tracks them from the quarantine already.
 
-For foundation = yes (only possible when railway = yes):
+For foundation = yes (only possible when railway = yes), AFTER the
+railway copy, in this order:
 
-    cp -R .claude/setup/foundation/. .
+1. Materialize the payload:
 
-This stages `.claude/skills/foundation/SKILL.md`, making `/foundation`
-invocable in the next session.
+       cp -R .claude/setup/foundation/. .
+
+   The payload deliberately overwrites the overlay's `package.json`,
+   `.gitignore`, `.env.example`, `railway.json`, and `docs/README.md`;
+   that is the design, not a conflict.
+
+2. Remove the two starter artifacts the payload replaces:
+
+       rm server.js claude-md-snippet.md
+
+   The payload ships a full `CLAUDE.md`, so the snippet has no job.
+   The code-only and railway-without-foundation paths keep both files.
+
+3. Exactly ONE substitution: set the `"name"` field in `package.json`
+   to this repository's name (from `git remote get-url origin`,
+   lowercased; npm names must be lowercase). Everything else in the
+   payload stays byte-for-byte as shipped.
+
+4. Verify the materialized app with the same chain CI will run:
+
+       pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm check:docs
+
+   This chain needs no database and no Docker. Do NOT run the test
+   suite (integration tests need Postgres) and do NOT run `next build`.
+   `node_modules/` is created here; the payload's `.gitignore` already
+   keeps it out of the commit. If Node 22.11+ or pnpm is unavailable in
+   this session, materialize anyway, skip this verification, and say so
+   plainly in the handoff. Never imply a check ran when it did not.
 
 For railway = no: copy nothing.
 
@@ -141,7 +173,12 @@ or
 
     harness: harness-plain
 
-Leave every other line untouched. This line is the variant's identity;
+On the foundation path, also append this line (the CI gate
+`feature-branch-checks.yml` reads it; it is the same chain step 7 ran):
+
+    check: pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm check:docs
+
+Leave every other line untouched. Line 1 is the variant's identity;
 `/harness-upgrade` filters migrations by it.
 
 ### 9. Self-delete
@@ -155,7 +192,27 @@ already in context.
 
 ### 10. Sentinel (only when railway = yes)
 
-    date -u +%Y-%m-%dT%H:%M:%SZ > .harness-bootstrap
+Get a timestamp:
+
+    date -u +%Y-%m-%dT%H:%M:%SZ
+
+Then Write `.harness-bootstrap` with exactly two lines, the timestamp
+followed by the Q2 answer:
+
+    2026-04-20T17:00:00Z
+    foundation: yes
+
+Record `foundation: no` just as explicitly when Q2 was no. The workflow
+matches the whole line, so a declined foundation and a half-written
+sentinel are different states, and only an exact `foundation: yes`
+provisions application variables.
+
+**That second line is a parsed contract**, in the same sense as the
+cleanup commit body (ADR 0004). `harness-railway.yml` matches the
+literal, and `scripts/check-template-overlay.mjs` in the forge fails the
+merge gate when this skill and that workflow stop naming the same string.
+ADR 0007 records why the answer travels here rather than in the commit
+message. Line 1 stays the timestamp and keeps its existing job.
 
 `harness-railway.yml` triggers on a `dev` push touching
 `.harness-bootstrap`. Keep the sentinel in the SAME push as the workflow
@@ -227,8 +284,21 @@ the sentinel-path trigger fires the workflow again.
 
 Close with:
 
-- A one-line configuration summary (variant, foundation staged or not).
+- A one-line configuration summary (variant, foundation materialized or
+  not, and whether the verify chain ran).
 - The production and dev URLs, when railway = yes.
-- Next steps: start a fresh chat and describe the first feature. If the
-  foundation was staged, run `/foundation` in that fresh chat BEFORE any
-  feature work; it replaces the Express starter with the standard stack.
+- When foundation = yes: the application is already in place and
+  verified in this session (or materialized unverified, if step 7 had
+  to skip the chain; say which, honestly). Provisioning migrates the
+  database, runs the idempotent seed, and serves the app at the dev URL
+  with the demo login, with zero manually set variables: the bootstrap
+  set `BETTER_AUTH_SECRET` (generated separately per environment),
+  `SEED_DATA` (`false` on production, `true` on dev), and
+  `SHOW_DEMO_LOGIN` (`true` on dev, never on production). Name the
+  variables, never their values; the secrets are masked in the workflow
+  and this session never sees them. Mention that dev and every feature
+  preview therefore offer a publicly reachable one-click demo login, so
+  dev must hold no real data.
+- Next steps: start a fresh chat and describe the first feature. There
+  is no follow-up setup step; the foundation, when chosen, is already
+  built.

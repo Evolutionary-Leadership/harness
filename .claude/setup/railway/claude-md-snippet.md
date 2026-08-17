@@ -148,6 +148,11 @@ the preview URL. What you need in every session:
   run pending migrations. Use expand-and-contract for breaking schema changes.
 - Production is never seeded: honour `SEED_DATA=false` at the top of any seed
   script.
+- `BETTER_AUTH_SECRET`, `SEED_DATA`, and `SHOW_DEMO_LOGIN` are set for you at
+  provision time, per environment. Read them; do not set them by hand.
+- **Dev and every preview are publicly loginable**: they carry a seeded demo
+  account, `SHOW_DEMO_LOGIN=true`, and a public URL. Dev must never hold real
+  data. Production never gets that flag.
 - **After your final push, fetch and include the Railway preview URL in your
   summary:** `bash .claude/scripts/get-railway-url.sh`. Hook output is not
   always visible in your context.

@@ -1,9 +1,11 @@
 ---
-# Every environment (production, dev, and one per feature branch) is
-# provisioned by these workflows. A diff touching them implicates this doc.
+# Per-environment infrastructure is created and destroyed by these files.
+# A diff touching them implicates this doc. harness-railway.yml also shaped
+# production and dev, but it self-deletes after the one bootstrap run, so
+# naming it here would fail check-docs in every bootstrapped project.
 sources:
-  - .github/workflows/harness-railway.yml
   - .github/workflows/feature-branch-railway.yml
+  - .github/workflows/feature-merge-cleanup.yml
   - railway.json
 ---
 
@@ -21,6 +23,15 @@ environment, all isolated.
   not build a connection string.
 - **Production is never seeded.** `SEED_DATA=false` is set on production by
   the harness setup workflow, and seed scripts must honour it.
+- **Non-production environments are publicly loginable.** Dev and every
+  feature preview ship `SHOW_DEMO_LOGIN=true` and a seeded demo account,
+  and Railway domains are public and unauthenticated. Anyone with the URL
+  can sign in. That is deliberate, so a reviewer needs no credentials, and
+  it makes **dev must never hold real data** a rule rather than a
+  suggestion.
+- **Every environment has its own signing key.** `BETTER_AUTH_SECRET` is
+  generated per environment, so a leak in a preview cannot forge sessions
+  anywhere else.
 - **Buckets cannot be moved after creation.** A feature bucket inherits its
   region from the dev bucket it forked. Region is a create-time decision.
 - **Preview-URL publishing is idempotent and self-healing.** A cancelled or
@@ -94,14 +105,38 @@ after creation). To use a different region, change **both** values in
 after a `/harness-upgrade` re-check the values, since an upgrade can
 reset these harness-managed workflows back to the defaults.
 
-## Seed data
+## Application variables set by the harness
 
-Seed data runs by default on all environments. Production has
-`SEED_DATA=false` set automatically by the harness setup workflow, so it
-never gets seeded with demo data. Dev and feature environments do not have
-this variable, so they seed normally.
+A project scaffolded with the standard technical foundation gets these set
+during bootstrap, so a fresh repository needs no Railway dashboard visit.
+Which variables you get depends on the `foundation:` answer recorded in
+`.harness-bootstrap` during `/setup`: a project that declined the
+foundation gets only `SEED_DATA=false` on production, since the minimal
+Express starter has neither Better Auth nor a seed script.
 
-Projects should check for this at the top of their seed script:
+| Variable | production | dev | feature |
+|---|---|---|---|
+| `BETTER_AUTH_SECRET` | generated | generated, a different value | generated on first provision |
+| `SEED_DATA` | `false` | `true` | inherited from dev, so `true` |
+| `SHOW_DEMO_LOGIN` | unset | `true` | inherited from dev, so `true` |
+
+Secrets are generated inside GitHub Actions and masked, so they never
+appear in a workflow log. To read one, open the Railway dashboard.
+
+**These are set once, at provision time.** The bootstrap workflow deletes
+itself after a successful run, so re-running it is not a way to rotate a
+key, and a project provisioned before this behaviour existed keeps
+whatever was set by hand. Changing a value later is a dashboard edit.
+
+A feature environment is forked from dev and therefore inherits dev's
+values, except for `BETTER_AUTH_SECRET`, which is replaced with a fresh
+one the first time the environment is provisioned. Later pushes to the
+same branch leave it alone, so a reviewer's session survives your pushes.
+
+### Seed data
+
+Production is the only environment where the harness sets `false`. Guard
+the seed script on that value:
 
 ```js
 if (process.env.SEED_DATA === "false") {
@@ -109,6 +144,12 @@ if (process.env.SEED_DATA === "false") {
   process.exit(0);
 }
 ```
+
+The stricter `!== "true"` form looks equivalent and is not. A project
+provisioned before the harness started setting `SEED_DATA=true` on dev has
+that variable unset there, and the strict form would silently stop seeding
+its dev environment. If you prefer the strict form, set `SEED_DATA=true`
+on dev in the Railway dashboard first.
 
 ## Railway preview URL
 

@@ -1,4 +1,4 @@
-> Generated from `evolutionary-leadership/harness-forge@10f34f1`. Do not edit here. Edit in the source repo.
+> Generated from `evolutionary-leadership/harness-forge@335bcc7`. Do not edit here. Edit in the source repo.
 
 # Harness
 
@@ -22,8 +22,8 @@ feature branch to its own isolated Railway preview environment.
    installation.
 
 After `/setup` finishes, start a fresh chat and describe your first
-feature. If you staged the technical foundation, run `/foundation` in
-that fresh chat first.
+feature. There is no follow-up setup step: if you chose the technical
+foundation, `/setup` already put it in place.
 
 ## What `/setup` decides
 
@@ -34,13 +34,16 @@ that fresh chat first.
   get the code-only variant: the full branch-and-release flow with no
   deploy target.
 - **The technical foundation (Railway projects only).** Answer yes and
-  `/setup` stages a one-shot `/foundation` skill that builds the
-  standard stack (Next.js 16, Drizzle, Better Auth, TanStack Query,
-  optimistic UI) in place of the minimal Express starter.
+  `/setup` copies a complete, pre-built, verified application (Next.js
+  16, Drizzle, Better Auth, TanStack Query, optimistic UI) into place
+  in the same session, replacing the minimal Express starter. No code
+  is generated; every scaffold gets byte-identical, test-covered files,
+  with a working notes app as the illustrative reference domain your
+  first features replace.
 
-Until `/setup` runs, the unconfigured Railway machinery lives inert
-under `.claude/setup/`. Nothing in there can trigger or fail; `/setup`
-either activates it or deletes it.
+Until `/setup` runs, the unconfigured Railway machinery and the
+foundation payload live inert under `.claude/setup/`. Nothing in there
+can trigger or fail; `/setup` either activates them or deletes them.
 
 ## The workflow you end up with
 
