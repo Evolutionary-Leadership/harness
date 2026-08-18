@@ -3,6 +3,17 @@ import express from 'express';
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Harness markers: /setup's post-provisioning check looks for x-harness
+// to tell the real app from any placeholder page that also answers 200,
+// and /feature's deploy verification compares x-harness-sha against the
+// feature branch tip to confirm the running code is the pushed code.
+// Keep both headers when you replace this starter with your real app.
+app.use((_req, res, next) => {
+  res.set('x-harness', 'live');
+  res.set('x-harness-sha', process.env.RAILWAY_GIT_COMMIT_SHA || 'local');
+  next();
+});
+
 const branch = process.env.RAILWAY_GIT_BRANCH || 'local';
 const sha = (process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown').slice(0, 7);
 const envName = process.env.RAILWAY_ENVIRONMENT_NAME || 'local';

@@ -142,9 +142,11 @@ reviewers: teammate1, teammate2
   session. On a `claude/` branch, it resolves the feature name and, if a
   matching `feature/<name>` branch already exists, merges previous work and
   shows the Railway URL. It no longer pushes an init commit: a fresh
-  session just prints naming guidance. Provisioning happens on Claude's
-  first push, ideally the `set-feature-name.sh` slug commit (see "Feature
-  naming"). You do not need `/feature` to start; just describe what you
+  session just prints naming guidance (skipped while the one-shot
+  `/setup` skill is still present, since the only sane first move then
+  is `/setup`, which pushes to `dev`, never to this branch).
+  Provisioning happens on Claude's first push, ideally the
+  `set-feature-name.sh` slug commit (see "Feature naming"). You do not need `/feature` to start; just describe what you
   want to build and Claude names the session before its first push.
 - **PreToolUse (Write/Edit/Bash)**: Runs
   `.claude/hooks/prevent-em-dash.sh`, which blocks any write that contains
@@ -459,6 +461,7 @@ These files are maintained by the harness and replaced on
 | `.claude/scripts/resolve-feature-name.sh` | Resolves the feature name (slug from `.harness-feature`, else session codename); shared by the hooks, scripts, and workflows |
 | `.claude/scripts/set-feature-name.sh` | Names the session's feature: sanitizes a slug, writes `.harness-feature`, commits, and pushes to trigger provisioning |
 | `.claude/scripts/get-railway-url.sh` | On-demand Railway preview URL fetcher (polls; usable both from the post-push hook and as a manual recovery command) |
+| `.claude/scripts/verify-deploy.sh` | Confirms an environment serves the pushed code: polls the URL for the `x-harness-sha` header and matches it against the `feature/<name>` tip |
 | `.claude/hooks/post-push-railway-url.sh` | Runs after `git push`; delegates to `get-railway-url.sh` to fetch the Railway preview URL |
 | `.claude/hooks/prevent-em-dash.sh` | Blocks writes containing U+2014 em dashes |
 | `.claude/skills/getting-started/SKILL.md` | Orientation skill: the session-opening flavor question, the skill catalog, the two-review pair |

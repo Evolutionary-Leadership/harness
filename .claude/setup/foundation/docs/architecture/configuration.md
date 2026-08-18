@@ -110,6 +110,7 @@ provides are unused and undeclared. `.env.example` says so.
 |---|---|
 | `agentRules: false` | Next 16 otherwise writes its own agent-rules block into `CLAUDE.md` on `next dev`, and that file is hand written under a 300-line budget |
 | `serverExternalPackages: ["@node-rs/argon2", "pino", "pino-pretty"]` | argon2 is a native addon and pino resolves transports at runtime; both break if the server bundler traces and inlines them |
+| `headers()` sending `x-harness: live` and `x-harness-sha` | Harness markers on every route: `/setup`'s one-time check polls the first to tell the app from a placeholder page that also answers 200, and `/feature`'s `verify-deploy.sh` matches the second (`RAILWAY_GIT_COMMIT_SHA`, baked at build time) against the feature branch tip to confirm the deploy serves the pushed code. Dropping them only disables those checks |
 | `typescript.ignoreBuildErrors: false` | A type error must fail the build |
 
 Next 16 removed the `eslint` config key along with `next lint`. Linting is

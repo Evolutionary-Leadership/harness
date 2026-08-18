@@ -8,6 +8,11 @@ import nextTypescript from "eslint-config-next/typescript";
 const config = [
   {
     ignores: [
+      // The harness quarantine: /setup verifies the materialized tree while
+      // .claude/setup/ still holds byte-identical twins of scripts/*.ts, and
+      // the root-anchored override below does not reach them. The base
+      // check-docs checker ignores .claude for the same reason.
+      ".claude/**",
       ".next/**",
       "node_modules/**",
       "drizzle/**",

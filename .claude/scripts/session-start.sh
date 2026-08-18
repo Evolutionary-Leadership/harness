@@ -25,12 +25,17 @@ if [[ "$BRANCH" == claude/* ]]; then
     # No feature branch yet: fresh session. Do NOT push here.
     # Provisioning happens on the first push (see getting-started Step 0).
     echo "Fresh session on $BRANCH (no feature branch yet)."
-    echo "Name this feature before your first push so the branch is created"
-    echo "with a meaningful name:"
-    echo "  bash .claude/scripts/set-feature-name.sh <slug>"
-    echo "If you skip it, the first push falls back to the random codename"
-    echo "($FEATURE_NAME). Skip naming entirely for read-only or question-only"
-    echo "sessions."
+    # On an unconfigured template the only sane first move is /setup, which
+    # pushes to dev, never to this branch; naming advice would nudge the
+    # session toward exactly the push /setup forbids.
+    if [ ! -d .claude/skills/setup ]; then
+      echo "Name this feature before your first push so the branch is created"
+      echo "with a meaningful name:"
+      echo "  bash .claude/scripts/set-feature-name.sh <slug>"
+      echo "If you skip it, the first push falls back to the random codename"
+      echo "($FEATURE_NAME). Skip naming entirely for read-only or question-only"
+      echo "sessions."
+    fi
   fi
 fi
 

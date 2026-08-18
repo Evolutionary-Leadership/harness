@@ -155,7 +155,10 @@ the preview URL. What you need in every session:
   data. Production never gets that flag.
 - **After your final push, fetch and include the Railway preview URL in your
   summary:** `bash .claude/scripts/get-railway-url.sh`. Hook output is not
-  always visible in your context.
+  always visible in your context. Then confirm the deploy with
+  `bash .claude/scripts/verify-deploy.sh`, telling the user first that the
+  session stays open to watch the deploy and will report here when their
+  changes are live.
 - Provisioning is self-healing. If an environment looks half-created, push
   again rather than repairing it by hand.
 
@@ -189,8 +192,9 @@ with a stop-and-ask gate between each one:
 4. `/implement`: build the frontier ticket by ticket, `/tdd` at agreed
    seams, full check and `/code-review` at the end
 5. push, report the Railway preview URL
-   (`bash .claude/scripts/get-railway-url.sh`), then choose the exit:
-   `/mergedev` or `/review`
+   (`bash .claude/scripts/get-railway-url.sh`), verify the deploy is
+   live (`bash .claude/scripts/verify-deploy.sh`), then choose the
+   exit: `/mergedev` or `/review`
 
 Never advance a gate on silence, and never skip phases 1 to 3 on your own
 judgement. Quick mode (straight to phase 4) requires an explicit

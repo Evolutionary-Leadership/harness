@@ -15,6 +15,26 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: false,
   },
 
+  // Harness markers, baked at build time (Railway builds once per deploy,
+  // so the sha is the deployed commit). /setup's post-provisioning check
+  // reads x-harness to tell the app from a placeholder page that also
+  // answers 200; /feature's deploy verification compares x-harness-sha
+  // against the feature branch tip. Keep both headers.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "x-harness", value: "live" },
+          {
+            key: "x-harness-sha",
+            value: process.env.RAILWAY_GIT_COMMIT_SHA ?? "local",
+          },
+        ],
+      },
+    ];
+  },
+
   // Next 16 removed the `eslint` config key along with `next lint`. Linting is
   // `pnpm lint` (eslint.config.mjs) and runs in CI, not during `next build`.
 };

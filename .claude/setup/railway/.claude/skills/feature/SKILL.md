@@ -256,9 +256,36 @@ This is the primary way the user sees their preview URL. The post-push
 hook is unreliable. Always run the helper and include the URL in your
 summary.
 
+Having the URL is not the same as the deploy being live: Railway still
+has to build and deploy the pushed code, which takes a minute or two
+(several on a first push, which provisions the whole environment). So
+verify it, and tell the user WHY the session is staying open before the
+wait starts, in roughly these words: "Your push is in and Railway is
+building the preview. I'm staying in this session and checking
+continuously; I'll tell you here the moment your changes are live."
+Then run:
+
+```
+bash .claude/scripts/verify-deploy.sh
+```
+
+It compares the `x-harness-sha` response header (the deployed commit,
+baked in by the app) against the tip of `feature/<name>`, which is what
+actually deploys (the Action merges your push into it), and polls for
+up to 8 minutes. Report its verdict:
+
+- `deploy-verified:`: tell the user their changes are confirmed live at
+  the URL, naming the short sha, so they can open it and see the work
+  of this session running.
+- `deploy-pending:`: be honest: the environment answered (or not) but
+  is not yet serving this push; give the URL, say the deploy is likely
+  still rolling, and that re-running
+  `bash .claude/scripts/verify-deploy.sh` any time will re-check. If
+  `serving:` names an older sha, say the previous version is still up.
+
 Summarize: what was built, which files changed, the spec and ticket issue
 numbers, the `/code-review` findings summary, any ticket left open, and
-the Railway preview URL.
+the Railway preview URL with its verification verdict.
 
 Then ask the user which exit they want, using `AskUserQuestion`:
 

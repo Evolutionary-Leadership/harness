@@ -131,7 +131,10 @@ reviewers: teammate1, teammate2
   session. On a `claude/` branch, it resolves the feature name and, if a
   matching `feature/<name>` branch already exists, merges previous work. It
   no longer pushes an init commit: a fresh session just prints naming
-  guidance. The feature branch is created on Claude's first push, ideally
+  guidance (skipped while the one-shot `/setup` skill is still present,
+  since the only sane first move then is `/setup`, which pushes to `dev`,
+  never to this branch). The feature branch is created on Claude's first
+  push, ideally
   the `set-feature-name.sh` slug commit (see "Feature naming"). You do not
   need `/feature` to start; just describe what you want to build and Claude
   names the session before its first push.

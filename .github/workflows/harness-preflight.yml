@@ -1,0 +1,143 @@
+name: "0. Harness preflight (verifies tokens before /setup mutates anything)"
+
+# Probes the two repository secrets for real validity, not mere presence,
+# BEFORE /setup commits anything. Secret values are unreadable from outside
+# Actions (and the gh CLI does not exist on claude.ai/code, where scaffold
+# sessions run), so the only honest check is a workflow that uses the
+# tokens: Railway's API for RAILWAY_ACCOUNT_TOKEN, and a create-then-delete
+# probe of a throwaway secret and variable for PAT_TOKEN. The result comes
+# back as a commit on dev whose body /setup parses, the same git-poll
+# pattern as the bootstrap cleanup commit (ADR 0004, ADR 0009).
+#
+# This file ships LIVE in base (not in the railway quarantine) because it
+# must be able to fire before /setup applies anything. It is inert until
+# dispatched or until .harness-preflight is pushed. On a passing run it
+# deletes itself in the result commit, which doubles as the workflow-file
+# write probe; on railway=no, /setup's configuration commit removes it.
+#
+# The result commit is a PARSED CONTRACT with the /setup skill: the
+# subject "chore: harness preflight result" and the "preflight:" body key
+# must match what the skill greps for. scripts/check-template-overlay.mjs
+# fails the forge merge gate when the two sides drift.
+
+on:
+  workflow_dispatch:
+  # Sentinel fallback for sessions without the GitHub MCP dispatch tool:
+  # /setup pushes a one-line .harness-preflight to dev and this fires.
+  push:
+    branches: [dev]
+    paths:
+      - .harness-preflight
+
+concurrency:
+  group: harness-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: dev
+
+      - name: Probe tokens
+        env:
+          RAILWAY_ACCOUNT_TOKEN: ${{ secrets.RAILWAY_ACCOUNT_TOKEN }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          RAILWAY_WORKSPACE_ID: ${{ vars.RAILWAY_WORKSPACE_ID }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # Deliberately NOT set -e: every probe runs and reports, so one
+          # result commit names everything wrong at once instead of the
+          # first thing only.
+
+          RAILWAY_RESULT="ok"
+          PAT_SECRETS="ok"
+          PAT_VARIABLES="ok"
+          WORKSPACES="unknown"
+          DETAIL=""
+
+          if [ -z "$RAILWAY_ACCOUNT_TOKEN" ]; then
+            RAILWAY_RESULT="missing"
+          else
+            ME=$(curl -sf -X POST "https://backboard.railway.com/graphql/v2" \
+              -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"query":"{ me { workspaces { id name } } }"}' || true)
+            if [ -z "$ME" ] || ! echo "$ME" | jq -e '.data.me.workspaces' > /dev/null 2>&1; then
+              RAILWAY_RESULT="invalid"
+            else
+              WORKSPACES=$(echo "$ME" | jq '.data.me.workspaces | length')
+              if [ "$WORKSPACES" -gt 1 ] && [ -z "${RAILWAY_WORKSPACE_ID:-}" ]; then
+                DETAIL="${DETAIL}workspace-hint: multiple workspaces and no RAILWAY_WORKSPACE_ID repository variable; bootstrap will default to the first one\n"
+              fi
+            fi
+          fi
+
+          if [ -z "$PAT_TOKEN" ]; then
+            PAT_SECRETS="missing"
+            PAT_VARIABLES="missing"
+          else
+            if gh secret set HARNESS_PREFLIGHT_PROBE --repo "$REPO" --body ok 2>/dev/null; then
+              gh secret delete HARNESS_PREFLIGHT_PROBE --repo "$REPO" 2>/dev/null || true
+            else
+              PAT_SECRETS="denied"
+            fi
+            if gh variable set HARNESS_PREFLIGHT_PROBE --repo "$REPO" --body ok 2>/dev/null; then
+              gh variable delete HARNESS_PREFLIGHT_PROBE --repo "$REPO" 2>/dev/null || true
+            else
+              PAT_VARIABLES="denied"
+            fi
+          fi
+
+          VERDICT="pass"
+          if [ "$RAILWAY_RESULT" != "ok" ] || [ "$PAT_SECRETS" != "ok" ] || [ "$PAT_VARIABLES" != "ok" ]; then
+            VERDICT="fail"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # The sentinel is single-fire either way: a rerun rewrites it with
+          # a fresh timestamp. On pass the workflow file goes too; deleting
+          # a workflow file over the PAT is itself the probe for the PAT's
+          # workflows permission, exercised here as the real operation
+          # harness-railway.yml's cleanup will perform later.
+          git rm -q --ignore-unmatch .harness-preflight
+          if [ "$VERDICT" = "pass" ]; then
+            git rm -q --ignore-unmatch .github/workflows/harness-preflight.yml
+          fi
+
+          compose_body() {
+            printf 'preflight: %s\nrailway-token: %s\npat-secrets: %s\npat-variables: %s\nworkspaces: %s\n%b' \
+              "$1" "$RAILWAY_RESULT" "$PAT_SECRETS" "$PAT_VARIABLES" "$WORKSPACES" "$DETAIL"
+          }
+
+          git commit -q --allow-empty -m "chore: harness preflight result" -m "$(compose_body "$VERDICT")"
+
+          if ! git push origin dev; then
+            # A rejected pass-push most likely means the PAT cannot write
+            # workflow files. Rebuild the commit without the self-delete and
+            # report that instead of timing out silently.
+            git reset -q --hard origin/dev
+            git rm -q --ignore-unmatch .harness-preflight
+            DETAIL="${DETAIL}pat-workflows: denied (push deleting this workflow file was rejected)\n"
+            git commit -q --allow-empty -m "chore: harness preflight result" -m "$(compose_body fail)"
+            git push origin dev || {
+              echo "::error::Preflight could not push its result commit to dev. PAT_TOKEN likely lacks Contents: Read and write."
+              exit 1
+            }
+            VERDICT="fail"
+          fi
+
+          if [ "$VERDICT" = "fail" ]; then
+            echo "::error::Preflight failed: railway-token=$RAILWAY_RESULT pat-secrets=$PAT_SECRETS pat-variables=$PAT_VARIABLES. Fix the token under Settings > Secrets and variables > Actions, then rerun /setup."
+            exit 1
+          fi
+          echo "Preflight passed: both tokens verified."

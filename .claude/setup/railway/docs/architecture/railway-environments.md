@@ -172,6 +172,22 @@ longer than the hook's ~80s budget. If you need the lower-level form
 git fetch origin feature/<name> && git show origin/feature/<name>:.railway-url
 ```
 
+Having the URL does not mean the deploy is live yet. To confirm the
+environment is serving the pushed code, run:
+
+```
+bash .claude/scripts/verify-deploy.sh
+```
+
+It polls the URL for the `x-harness: live` and `x-harness-sha` response
+headers and matches the sha against the tip of `feature/<name>` (the
+Action's merge commit is what deploys, never your local HEAD), for up
+to 8 minutes. It prints `deploy-verified:` or `deploy-pending:` and
+always exits 0. The headers come from the app itself (starter:
+`server.js` middleware; foundation: `next.config.ts` `headers()`);
+**keep them when you replace the starter with your real app**, or
+deploy verification degrades to "could not confirm".
+
 The publishing step is idempotent and self-healing: even if an earlier
 run was cancelled mid-mutation, a later workflow trigger on the same
 branch will look up the existing Railway environment and commit the
