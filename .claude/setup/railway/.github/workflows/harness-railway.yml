@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
   # Sentinel-file trigger: lets a fresh Claude Code session bootstrap
   # provisioning via the GitHub MCP server (which has create_or_update_file
-  # but no workflow_dispatch tool). Claude writes a two-line
-  # .harness-bootstrap to dev (timestamp, then the /setup foundation
-  # answer); this push fires the workflow. The cleanup step at the end
+  # but no workflow_dispatch tool). Claude writes .harness-bootstrap to dev
+  # (timestamp, the /setup foundation answer, and on a multi-workspace
+  # Railway account the workspace the user picked); this push fires the
+  # workflow. The cleanup step at the end
   # deletes both this workflow file and .harness-bootstrap, so the trigger
   # can never re-fire after a successful run.
   push:
@@ -53,7 +54,6 @@ jobs:
         env:
           RAILWAY_ACCOUNT_TOKEN: ${{ secrets.RAILWAY_ACCOUNT_TOKEN }}
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-          RAILWAY_WORKSPACE_ID: ${{ vars.RAILWAY_WORKSPACE_ID }}
           PROJECT_NAME: ${{ github.event.repository.name }}
           REPO: ${{ github.repository }}
           BUCKET_REGION: ams
@@ -181,6 +181,32 @@ jobs:
           if [ -f .harness-bootstrap ] && grep -qxF "$FOUNDATION_MARKER" .harness-bootstrap; then
             PROVISION_APP_VARS=true
           fi
+
+          # The workspace the user picked in /setup step 7b, on line 3 of the
+          # same sentinel. PARSED CONTRACT, guarded by the forge's
+          # scripts/check-template-overlay.mjs exactly as the foundation
+          # marker above is.
+          #
+          # It rides this file rather than a repository variable because a
+          # Claude session cannot write repository variables at all (no MCP
+          # tool for them, and no gh CLI on claude.ai/code), so a push is the
+          # only channel /setup has into a workflow. Do not "improve" this
+          # into a vars.* read; that is the mechanism this replaced.
+          #
+          # Absent by design when the account has exactly one workspace.
+          WORKSPACE_MARKER="workspace: "
+          SENTINEL_WORKSPACE_ID=""
+          if [ -f .harness-bootstrap ]; then
+            # Take the FIRST whitespace-delimited field after the key, not
+            # "everything with spaces stripped". The preflight publishes
+            # "workspace: <id> <name>" and /setup shows that shape as an
+            # example, so a hand-rewritten sentinel plausibly carries the
+            # name too. Stripping whitespace would glue id and name into a
+            # value no workspace matches, failing with a message about an
+            # unreachable workspace when the id was right all along.
+            SENTINEL_WORKSPACE_ID=$(grep -m1 "^${WORKSPACE_MARKER}" .harness-bootstrap \
+              | sed "s/^${WORKSPACE_MARKER}//" | awk '{print $1}' || true)
+          fi
           if [ "$PROVISION_APP_VARS" = true ]; then
             echo "Sentinel says foundation=yes: will provision application variables (BETTER_AUTH_SECRET, SEED_DATA, SHOW_DEMO_LOGIN)."
           else
@@ -195,23 +221,38 @@ jobs:
           # "Cannot query field edges on type Workspace"
           ME=$(gql "{ me { workspaces { id name } } }")
           WORKSPACE_COUNT=$(echo "$ME" | jq '.data.me.workspaces | length')
-          if [ -n "${RAILWAY_WORKSPACE_ID:-}" ]; then
-            WORKSPACE_NAME=$(echo "$ME" | jq -r --arg id "$RAILWAY_WORKSPACE_ID" \
+
+          list_workspaces() {
+            echo "$ME" | jq -r '.data.me.workspaces[] | "  - \(.id)  \(.name)"'
+          }
+
+          if [ "$WORKSPACE_COUNT" -eq 0 ]; then
+            echo "::error::This RAILWAY_ACCOUNT_TOKEN reaches no Railway workspace, so there is nowhere to create the project. Check the token under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          if [ -n "$SENTINEL_WORKSPACE_ID" ]; then
+            WORKSPACE_NAME=$(echo "$ME" | jq -r --arg id "$SENTINEL_WORKSPACE_ID" \
               '.data.me.workspaces[] | select(.id == $id) | .name')
             if [ -z "$WORKSPACE_NAME" ]; then
-              echo "::error::RAILWAY_WORKSPACE_ID '$RAILWAY_WORKSPACE_ID' not found. Available workspaces:"
-              echo "$ME" | jq -r '.data.me.workspaces[] | "  - \(.id)  \(.name)"'
+              echo "::error::Workspace '$SENTINEL_WORKSPACE_ID' from .harness-bootstrap is not reachable with this RAILWAY_ACCOUNT_TOKEN. Available workspaces:"
+              list_workspaces
               exit 1
             fi
-            WORKSPACE_ID="$RAILWAY_WORKSPACE_ID"
+            WORKSPACE_ID="$SENTINEL_WORKSPACE_ID"
           elif [ "$WORKSPACE_COUNT" = "1" ]; then
             WORKSPACE_ID=$(echo "$ME" | jq -r '.data.me.workspaces[0].id')
             WORKSPACE_NAME=$(echo "$ME" | jq -r '.data.me.workspaces[0].name')
           else
-            WORKSPACE_ID=$(echo "$ME" | jq -r '.data.me.workspaces[0].id')
-            WORKSPACE_NAME=$(echo "$ME" | jq -r '.data.me.workspaces[0].name')
-            echo "::warning::Multiple Railway workspaces found and RAILWAY_WORKSPACE_ID is not set. Defaulting to the first workspace returned by the API ($WORKSPACE_NAME). To pick explicitly, set the RAILWAY_WORKSPACE_ID repo variable under Settings > Secrets and variables > Actions > Variables and re-trigger the bootstrap. Available workspaces:"
-            echo "$ME" | jq -r '.data.me.workspaces[] | "  - \(.id)  \(.name)"'
+            # Fails rather than guessing. /setup asks the user which workspace
+            # whenever there is more than one, so reaching here means the
+            # sentinel was written without that answer or the run was
+            # dispatched by hand. Provisioning into "whichever the API listed
+            # first" is exactly the wrong-workspace mistake the picker exists
+            # to prevent, and it is expensive to unwind.
+            echo "::error::Several Railway workspaces are reachable and .harness-bootstrap carries no '${WORKSPACE_MARKER}<id>' line, so there is no way to tell which one to use. Add that line with the id you want and push the sentinel again (or re-run /setup). Available workspaces:"
+            list_workspaces
+            exit 1
           fi
           echo "Workspace: $WORKSPACE_NAME ($WORKSPACE_ID)"
 
@@ -881,7 +922,7 @@ jobs:
             echo "Stored RAILWAY_PROJECT_ID as GitHub secret."
           else
             echo "::warning::Could not store RAILWAY_PROJECT_ID as a secret."
-            echo "Check that PAT_TOKEN has 'Secrets: Read and write' (for storing RAILWAY_PROJECT_ID) and 'Variables: Read and write' (for cleaning up RAILWAY_WORKSPACE_ID)."
+            echo "Check that PAT_TOKEN has 'Secrets: Read and write' (needed to store RAILWAY_PROJECT_ID)."
             echo "You can set it manually: go to repo Settings > Secrets > New secret"
             echo "  Name:  RAILWAY_PROJECT_ID"
             echo "  Value: $PROJECT_ID"
@@ -974,11 +1015,6 @@ jobs:
             git commit -m "$COMMIT_MSG"
             if git push origin dev && git push origin dev:main; then
               export GH_TOKEN="$PAT_TOKEN"
-              if gh variable delete RAILWAY_WORKSPACE_ID --repo "$REPO" 2>/dev/null; then
-                echo "Removed RAILWAY_WORKSPACE_ID variable (no longer needed)."
-              else
-                echo "::warning::Could not delete RAILWAY_WORKSPACE_ID variable. Remove it manually under Settings > Secrets and variables > Actions > Variables. (Variable may simply not exist, which is fine.)"
-              fi
 
               # Delete any claude/* and feature/* branches left over from
               # the bootstrap session. The first session does not call

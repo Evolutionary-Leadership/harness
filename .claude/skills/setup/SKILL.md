@@ -104,9 +104,10 @@ has seen the guide, and a wizard user is the most likely first-timer):
    www.harnesscompanion.com/firsttime (a web page) before anything
    else. It covers the one-time setup end to end.
 3. A short orientation so the page has context: this skill runs once,
-   asks one or two questions, pushes a single commit, and deletes
-   itself; a Railway project additionally needs the two repository
-   secrets the guide explains.
+   asks a handful of short questions (how many depends on the answers,
+   at most four), pushes a single commit, and deletes itself; a Railway
+   project additionally needs the two repository secrets the guide
+   explains.
 4. End by asking them to prompt exactly this when done reading:
    **"I've read it"**.
 
@@ -127,13 +128,10 @@ If `railway=` was not passed, ask via AskUserQuestion:
 - **Yes**: this becomes a `harness-railway` repository.
 - **No**: this becomes a `harness-plain` repository.
 
-When the answer is yes (asked or passed), add one short note before
-moving on: a Railway account with **more than one workspace** should
-set the repository **variable** `RAILWAY_WORKSPACE_ID` now, under
-Settings > Secrets and variables > Actions > Variables, so provisioning
-lands in the right workspace; a single-workspace account needs nothing.
-Do not wait for an answer, it is a heads-up, not a question; the
-preflight will flag it again if it actually applies.
+Nothing else is needed here. A multi-workspace Railway account is
+handled by the question in step 7b, once the preflight has read the
+account's actual workspaces; never send the user to a settings screen
+to pick one by hand.
 
 ### 6. Q2: technical foundation (only when Q1 = yes)
 
@@ -158,18 +156,19 @@ the rest of `.claude/setup/` in step 10.
 Railway provisioning runs in GitHub Actions and needs two repository
 secrets, normally planted by the setup wizard before this session:
 
-- `PAT_TOKEN`, which needs **contents, pull requests, workflows,
-  secrets and variables, all set to Read and write**: contents and pull
-  requests for auto-merge, workflows so the bootstrap can push workflow
-  files, secrets so provisioning can store `RAILWAY_PROJECT_ID`, and
-  variables so it can manage `RAILWAY_WORKSPACE_ID`. The preflight
-  below probes four of the five (contents, workflows, secrets and
-  variables; pull requests is first exercised by auto-merge, after
-  setup); a token missing any probed permission fails it.
+- `PAT_TOKEN`, which needs **contents, pull requests, workflows and
+  secrets, all set to Read and write**: contents and pull requests for
+  auto-merge, workflows so the bootstrap can push workflow files, and
+  secrets so provisioning can store `RAILWAY_PROJECT_ID`. The preflight
+  below probes three of the four (contents, workflows and secrets;
+  pull requests is first exercised by auto-merge, after setup); a token
+  missing any probed permission fails it. Variables is deliberately not
+  required: nothing in the harness reads or writes a repository
+  variable.
 - `RAILWAY_ACCOUNT_TOKEN`
 
-Multi-workspace Railway accounts may also need the repository
-**variable** (not secret) `RAILWAY_WORKSPACE_ID`.
+Nothing else needs planting. Multi-workspace accounts are handled by
+the question in step 7b, not by a variable set ahead of time.
 
 Before firing anything, print the timeline once, so the coming quiet
 stretches read as normal instead of broken. Adapt it to the answers:
@@ -188,10 +187,11 @@ Do not ask the user whether these are set; verify them. Secret values
 are unreadable from outside Actions, so the check is a workflow run:
 `harness-preflight.yml` ships live in the template and probes both
 tokens for real (Railway's API for `RAILWAY_ACCOUNT_TOKEN`; a
-create-then-delete probe of a throwaway secret and variable for
-`PAT_TOKEN`), then reports by pushing a result commit to `dev`
-(ADR 0009). Tell the user in one line that the preflight is running
-and takes about a minute, then fire it:
+create-then-delete probe of a throwaway secret for `PAT_TOKEN`), then
+reports by pushing a result commit to `dev` (ADR 0009). The same
+Railway call collects every workspace the account can reach, which is
+what step 7b then offers as a choice. Tell the user in one line that
+the preflight is running and takes about a minute, then fire it:
 
 1. Preferred: dispatch via the GitHub MCP server, tool
    `actions_run_trigger`, method `run_workflow`,
@@ -208,11 +208,19 @@ Poll with git, the same pattern as step 13; cap at 20 attempts
 
     for i in $(seq 1 20); do
       git fetch -q origin dev
-      BODY=$(git log origin/dev -3 --format='%s%n%b' \
-        | grep -A8 '^chore: harness preflight result$' || true)
+      BODY=$(git log origin/dev -1 --format='%b' \
+        --grep='^chore: harness preflight result$' || true)
       if [ -n "$BODY" ]; then break; fi
       [ "$i" -lt 20 ] && sleep 10
     done
+
+`--grep` with `-1` selects the newest matching commit and `%b` prints
+only its body, so `$BODY` is exactly one result and nothing else. Do not
+replace this with a `git log -N | grep -A<n>` window: the body now
+carries one `workspace:` line per Railway workspace, so a window wide
+enough to hold them all also reaches into neighbouring commits, and a
+rerun (which leaves two result commits on `dev`) would mix a stale
+verdict and stale workspaces into the current one.
 
 The body's `preflight:` line is the verdict (that subject line and key
 are a parsed contract with `harness-preflight.yml`; the forge's overlay
@@ -224,19 +232,61 @@ checker guards the pair):
 
       git fetch origin dev && git merge origin/dev --no-edit
 
-  Report any `workspace-hint:` line to the user, then continue to
-  step 8.
-- **`preflight: fail`**: print the `railway-token:`, `pat-secrets:`,
-  `pat-variables:` and any `pat-workflows:` or `workspace-hint:` lines
-  verbatim, point at Settings > Secrets and variables > Actions and the
-  guide (www.harnesscompanion.com/firsttime), and STOP before any
-  mutation. The user fixes the token and reruns `/setup`; the guard in
-  step 1 finds a clean tree, and the preflight simply runs again.
+  Then pull the workspace list out of the body:
+
+      WORKSPACES=$(echo "$BODY" | grep '^workspace: ' || true)
+
+  Each line is the key, the workspace id, and the workspace name, which
+  may itself contain spaces. Split on the first space after the id:
+
+      workspace: 0f3b1c9a-1234-5678-9abc-def012345678 Acme Production
+                 |_____________ id _____________| |____ name ____|
+
+  Keep that list; step 7b uses it. Report it to the user by name (one
+  short line, not a table), then continue to step 7b.
+- **`preflight: fail`**: print the `railway-token:`, `pat-secrets:` and
+  any `pat-workflows:` lines verbatim, point at Settings > Secrets and
+  variables > Actions and the guide
+  (www.harnesscompanion.com/firsttime), and STOP before any mutation.
+  The user fixes the token and reruns `/setup`; the guard in step 1
+  finds a clean tree, and the preflight simply runs again. Never ask
+  the workspace question on this path.
 - **Timeout**: surface the Actions run URL
   (`https://github.com/<owner>/<repo>/actions/workflows/harness-preflight.yml`)
   and the two known causes: `PAT_TOKEN` lacking Contents: Read and
   write (the workflow cannot push its result), or Actions disabled on
   the repository. STOP before any mutation.
+
+### 7b. Q3: which Railway workspace (only when there is a choice)
+
+Count the `workspace:` lines collected in step 7.
+
+**Exactly one**: ask nothing. Say in one line which workspace the
+project will land in, and go to step 8. This is the common case and it
+must stay silent; a token scoped to a single workspace lands here too.
+
+**More than one**: ask via AskUserQuestion, one option per workspace:
+
+> Which Railway workspace should this project be created in?
+
+Label each option with the workspace **name** and put the id in the
+option's description, so the choice reads in human terms while staying
+unambiguous between two similarly named workspaces. Keep the ids
+verbatim; they are what provisioning uses.
+
+Three rules on this question:
+
+- **Pre-select nothing.** Do not highlight a default, do not order the
+  list to imply one, and do not guess from the repository name or any
+  other similarity. A wrong guess the user clicks through provisions a
+  real project into the wrong workspace, which is the entire failure
+  this question exists to prevent.
+- **Wait for the answer.** Never infer it, never proceed on silence.
+- **Record the chosen id.** Step 11 writes it to the sentinel; it is
+  the only way the choice reaches provisioning.
+
+This question is never reached on a failing preflight, because step 7
+stops there.
 
 ### 8. Apply
 
@@ -328,8 +378,8 @@ Get a timestamp:
 
     date -u +%Y-%m-%dT%H:%M:%SZ
 
-Then Write `.harness-bootstrap` with exactly two lines, the timestamp
-followed by the Q2 answer:
+Then Write `.harness-bootstrap`, the timestamp followed by the Q2
+answer:
 
     2026-04-20T17:00:00Z
     foundation: yes
@@ -339,12 +389,27 @@ matches the whole line, so a declined foundation and a half-written
 sentinel are different states, and only an exact `foundation: yes`
 provisions application variables.
 
-**That second line is a parsed contract**, in the same sense as the
-cleanup commit body (ADR 0004). `harness-railway.yml` matches the
-literal, and `scripts/check-template-overlay.mjs` in the forge fails the
-merge gate when this skill and that workflow stop naming the same string.
-ADR 0007 records why the answer travels here rather than in the commit
-message. Line 1 stays the timestamp and keeps its existing job.
+**When step 7b asked the workspace question**, add the chosen id as a
+third line:
+
+    2026-04-20T17:00:00Z
+    foundation: yes
+    workspace: 0f3b1c9a-1234-5678-9abc-def012345678
+
+Write that line ONLY when there was a choice to make. A
+single-workspace account produces no third line, and the bootstrap
+resolves that case by itself.
+
+**Lines 2 and 3 are parsed contracts**, in the same sense as the
+cleanup commit body (ADR 0004). `harness-railway.yml` matches both
+literals, and `scripts/check-template-overlay.mjs` in the forge fails
+the merge gate when this skill and that workflow stop naming the same
+strings. ADR 0007 records why the foundation answer travels here rather
+than in the commit message; the workspace id travels the same way for a
+sharper reason, that this session cannot write a GitHub repository
+variable at all (no MCP tool exists for them and `gh` is absent here),
+so a push is the only channel it has to reach a workflow. Line 1 stays
+the timestamp and keeps its existing job.
 
 `harness-railway.yml` triggers on a `dev` push touching
 `.harness-bootstrap`. Keep the sentinel in the SAME push as the workflow
@@ -443,17 +508,19 @@ On a visible failure or on timeout, surface the Actions run URL
 owner/repo from `git remote get-url origin`) and the three known causes:
 
 1. `RAILWAY_ACCOUNT_TOKEN` scoped to the wrong workspace.
-2. Multiple Railway workspaces with no `RAILWAY_WORKSPACE_ID` repository
-   variable set; check for a `::warning::` in the Step 1 logs listing
-   the workspaces.
-3. `PAT_TOKEN` missing Secrets or Variables: Read and write (needed to
-   store `RAILWAY_PROJECT_ID` and clean up `RAILWAY_WORKSPACE_ID`);
-   rare after a passed preflight, which probes both, but a secret
-   rotated between preflight and bootstrap lands here.
+2. Several Railway workspaces and no `workspace:` line on the sentinel;
+   Step 1 fails with the available workspaces listed. This means the
+   sentinel was written without the answer from step 7b, or the run was
+   dispatched by hand rather than by the sentinel push.
+3. `PAT_TOKEN` missing Secrets: Read and write (needed to store
+   `RAILWAY_PROJECT_ID`); rare after a passed preflight, which probes
+   it, but a secret rotated between preflight and bootstrap lands here.
 
 Explain the re-fire procedure: after fixing the cause, commit
 `.harness-bootstrap` again with a fresh timestamp and push to `dev`;
-the sentinel-path trigger fires the workflow again.
+the sentinel-path trigger fires the workflow again. Keep the
+`workspace:` line when rewriting it on a multi-workspace account, or
+Step 1 refuses again.
 
 ### 14. Hand off
 
@@ -491,8 +558,20 @@ in the same warm register the welcome opened with:
 2. The first feature: start a fresh chat, type `/feature`, and describe
    one small idea in a sentence; the harness drives it from there,
    including the questions. Nothing else to install or configure.
-3. One pointer, not a catalog: `/getting-started` lists every skill
-   when they want the map.
+3. The send-off, and it is the last thing on the screen. They have
+   just watched a project go from nothing to live; close on that, not
+   on another instruction. Set it off from the paragraph above with a
+   horizontal rule, keep it to a line or two, and lean into emoji
+   (three or four, placed deliberately, not sprinkled). Something in
+   the spirit of "Now go build something great" said in your own
+   words: celebratory, a little bold, never smug and never a slogan
+   you would be embarrassed to read twice. Write it fresh each time;
+   do not reuse a fixed sentence. Nothing follows it, no pointers, no
+   next steps, no offers to help. The catalog is one `/getting-started`
+   away whenever they want it, and they will find it.
+
+Never use em dashes anywhere in the handoff; commas, colons and
+parentheses do the same work.
 
 **Returning-user ending (Q0 = no, or a retry)**: one line: fresh chat,
 `/feature`, done. They know the drill; do not tour them.

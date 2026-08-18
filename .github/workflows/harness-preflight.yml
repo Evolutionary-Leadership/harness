@@ -5,9 +5,21 @@ name: "0. Harness preflight (verifies tokens before /setup mutates anything)"
 # Actions (and the gh CLI does not exist on claude.ai/code, where scaffold
 # sessions run), so the only honest check is a workflow that uses the
 # tokens: Railway's API for RAILWAY_ACCOUNT_TOKEN, and a create-then-delete
-# probe of a throwaway secret and variable for PAT_TOKEN. The result comes
-# back as a commit on dev whose body /setup parses, the same git-poll
-# pattern as the bootstrap cleanup commit (ADR 0004, ADR 0009).
+# probe of a throwaway secret for PAT_TOKEN. The result comes back as a
+# commit on dev whose body /setup parses, the same git-poll pattern as the
+# bootstrap cleanup commit (forge decision records 0004 and 0009).
+#
+# Those ids are spelled "forge decision record NNNN" on purpose: this file
+# lands at .github/workflows/ downstream, where check-docs walks, and a
+# bare "ADR NNNN" would resolve against a scaffold's decisions directory
+# that holds only its seed record. See docs/README.md in the forge.
+#
+# The Railway call doubles as the workspace picker's data source. It asks
+# for every workspace the account can reach and publishes them, one line
+# each, so /setup can put a real choice in front of the user instead of
+# sending them to the repository settings screen. The forge's decision
+# record on workspace selection covers why the pick travels the way it
+# does.
 #
 # This file ships LIVE in base (not in the railway quarantine) because it
 # must be able to fire before /setup applies anything. It is inert until
@@ -16,9 +28,10 @@ name: "0. Harness preflight (verifies tokens before /setup mutates anything)"
 # write probe; on railway=no, /setup's configuration commit removes it.
 #
 # The result commit is a PARSED CONTRACT with the /setup skill: the
-# subject "chore: harness preflight result" and the "preflight:" body key
-# must match what the skill greps for. scripts/check-template-overlay.mjs
-# fails the forge merge gate when the two sides drift.
+# subject "chore: harness preflight result", the "preflight:" body key,
+# and the workspace key below must match what the skill greps for.
+# scripts/check-template-overlay.mjs fails the forge merge gate when the
+# two sides drift.
 
 on:
   workflow_dispatch:
@@ -49,7 +62,6 @@ jobs:
           RAILWAY_ACCOUNT_TOKEN: ${{ secrets.RAILWAY_ACCOUNT_TOKEN }}
           PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-          RAILWAY_WORKSPACE_ID: ${{ vars.RAILWAY_WORKSPACE_ID }}
           REPO: ${{ github.repository }}
         run: |
           set -uo pipefail
@@ -57,10 +69,15 @@ jobs:
           # result commit names everything wrong at once instead of the
           # first thing only.
 
+          # The body key /setup greps the workspace list out of. PARSED
+          # CONTRACT: the forge's scripts/check-template-overlay.mjs reads
+          # this assignment and fails the merge gate if the skill stops
+          # looking for the same key.
+          WORKSPACE_KEY="workspace:"
+
           RAILWAY_RESULT="ok"
           PAT_SECRETS="ok"
-          PAT_VARIABLES="ok"
-          WORKSPACES="unknown"
+          WORKSPACE_LINES=""
           DETAIL=""
 
           if [ -z "$RAILWAY_ACCOUNT_TOKEN" ]; then
@@ -72,32 +89,35 @@ jobs:
               -d '{"query":"{ me { workspaces { id name } } }"}' || true)
             if [ -z "$ME" ] || ! echo "$ME" | jq -e '.data.me.workspaces' > /dev/null 2>&1; then
               RAILWAY_RESULT="invalid"
+            elif [ "$(echo "$ME" | jq '.data.me.workspaces | length')" -eq 0 ]; then
+              # jq -e passes an empty array, so this needs its own test.
+              # A token that reaches no workspace cannot provision anything,
+              # and reporting it here beats letting /setup ask a question
+              # with no options or the bootstrap fail much later.
+              RAILWAY_RESULT="no-workspaces"
             else
-              WORKSPACES=$(echo "$ME" | jq '.data.me.workspaces | length')
-              if [ "$WORKSPACES" -gt 1 ] && [ -z "${RAILWAY_WORKSPACE_ID:-}" ]; then
-                DETAIL="${DETAIL}workspace-hint: multiple workspaces and no RAILWAY_WORKSPACE_ID repository variable; bootstrap will default to the first one\n"
-              fi
+              # One line per workspace: the key, the id, then the name.
+              # Railway ids are UUIDs and hold no whitespace, so /setup
+              # splits on the first space after the id and treats the whole
+              # remainder as the name, which may itself contain spaces.
+              # A token scoped to a single workspace simply reports one.
+              WORKSPACE_LINES=$(echo "$ME" | jq -r --arg k "$WORKSPACE_KEY" \
+                '.data.me.workspaces[] | "\($k) \(.id) \(.name)"')
             fi
           fi
 
           if [ -z "$PAT_TOKEN" ]; then
             PAT_SECRETS="missing"
-            PAT_VARIABLES="missing"
           else
             if gh secret set HARNESS_PREFLIGHT_PROBE --repo "$REPO" --body ok 2>/dev/null; then
               gh secret delete HARNESS_PREFLIGHT_PROBE --repo "$REPO" 2>/dev/null || true
             else
               PAT_SECRETS="denied"
             fi
-            if gh variable set HARNESS_PREFLIGHT_PROBE --repo "$REPO" --body ok 2>/dev/null; then
-              gh variable delete HARNESS_PREFLIGHT_PROBE --repo "$REPO" 2>/dev/null || true
-            else
-              PAT_VARIABLES="denied"
-            fi
           fi
 
           VERDICT="pass"
-          if [ "$RAILWAY_RESULT" != "ok" ] || [ "$PAT_SECRETS" != "ok" ] || [ "$PAT_VARIABLES" != "ok" ]; then
+          if [ "$RAILWAY_RESULT" != "ok" ] || [ "$PAT_SECRETS" != "ok" ]; then
             VERDICT="fail"
           fi
 
@@ -114,9 +134,15 @@ jobs:
             git rm -q --ignore-unmatch .github/workflows/harness-preflight.yml
           fi
 
+          # Workspace lines come last: the fixed keys stay at a predictable
+          # offset from the subject however many workspaces the account has.
           compose_body() {
-            printf 'preflight: %s\nrailway-token: %s\npat-secrets: %s\npat-variables: %s\nworkspaces: %s\n%b' \
-              "$1" "$RAILWAY_RESULT" "$PAT_SECRETS" "$PAT_VARIABLES" "$WORKSPACES" "$DETAIL"
+            printf 'preflight: %s\nrailway-token: %s\npat-secrets: %s\n%b' \
+              "$1" "$RAILWAY_RESULT" "$PAT_SECRETS" "$DETAIL"
+            if [ -n "$WORKSPACE_LINES" ]; then
+              printf '%s\n' "$WORKSPACE_LINES"
+            fi
+            return 0
           }
 
           git commit -q --allow-empty -m "chore: harness preflight result" -m "$(compose_body "$VERDICT")"
@@ -137,7 +163,7 @@ jobs:
           fi
 
           if [ "$VERDICT" = "fail" ]; then
-            echo "::error::Preflight failed: railway-token=$RAILWAY_RESULT pat-secrets=$PAT_SECRETS pat-variables=$PAT_VARIABLES. Fix the token under Settings > Secrets and variables > Actions, then rerun /setup."
+            echo "::error::Preflight failed: railway-token=$RAILWAY_RESULT pat-secrets=$PAT_SECRETS. Fix the token under Settings > Secrets and variables > Actions, then rerun /setup."
             exit 1
           fi
           echo "Preflight passed: both tokens verified."

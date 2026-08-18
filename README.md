@@ -1,4 +1,4 @@
-> Generated from `evolutionary-leadership/harness-forge@4cedcc0`. Do not edit here. Edit in the source repo.
+> Generated from `evolutionary-leadership/harness-forge@9888925`. Do not edit here. Edit in the source repo.
 
 # Harness
 
@@ -16,10 +16,11 @@ feature branch to its own isolated Railway preview environment.
 1. **Click "Use this template"** and create your repository. Make sure
    `dev` is the default branch (it is, unless you changed it).
 2. **Open the new repository in Claude Code.**
-3. **Run `/setup`.** It asks at most two questions (deploy to Railway?
-   start from the standard technical foundation?), configures the
-   repository, pushes one commit, and deletes itself. That is the whole
-   installation.
+3. **Run `/setup`.** It asks a few short questions (first time here?
+   deploy to Railway? start from the standard technical foundation? and,
+   if your Railway account has more than one workspace, which one), then
+   configures the repository, pushes one commit, and deletes itself. That
+   is the whole installation.
 
 After `/setup` finishes, start a fresh chat and describe your first
 feature. There is no follow-up setup step: if you chose the technical

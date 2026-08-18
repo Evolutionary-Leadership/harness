@@ -533,10 +533,9 @@ wizard) can fetch those URLs via `list_commits` on `dev` instead of
 asking the user to copy them out of the workflow's Job Summary. Treat
 this commit body shape as a contract: tooling parses it by line key.
 
-After pushing the cleanup commit, the same step also retires the
-one-time-use `RAILWAY_WORKSPACE_ID` repo variable (if it was set) and
-deletes any stray `claude/*` and `feature/*` branches left over from
-the bootstrap session. The bootstrap session does not run `/mergedev`,
+After pushing the cleanup commit, the same step also deletes any stray
+`claude/*` and `feature/*` branches left over from the bootstrap
+session. The bootstrap session does not run `/mergedev`,
 so if it named a feature (via `set-feature-name.sh`) or pushed any
 code, the resulting `feature/<name>` branch would leak with nothing
 else to clean it up; doing it here keeps a freshly bootstrapped repo
