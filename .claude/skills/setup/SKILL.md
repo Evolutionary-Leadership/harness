@@ -1,7 +1,7 @@
 ---
 name: setup
-description: "Configure this fresh template: choose Railway or code-only, optionally materialize the pre-built technical foundation. Runs once and deletes itself."
-argument-hint: "[railway=yes|no] [foundation=yes|no]"
+description: "Configure this fresh template: choose Railway or code-only, optionally materialize the pre-built technical foundation, and optionally let agents work inside it over MCP. Runs once and deletes itself."
+argument-hint: "[railway=yes|no] [foundation=yes|no] [mcp=yes|no]"
 allowed-tools: Bash(git *), Bash(ls *), Bash(cp *), Bash(rm *), Bash(chmod *), Bash(date *), Bash(pnpm *), Bash(curl *), Read, Write, Glob, Grep, mcp__github__actions_run_trigger
 ---
 
@@ -22,11 +22,12 @@ The variants:
 | `harness-plain` | Code-only: the full branch-and-release flow, no deploy target |
 
 The Railway machinery ships quarantined under `.claude/setup/railway/`,
-and the pre-built technical foundation (a complete, verified Next.js
-application) ships quarantined under `.claude/setup/foundation/`. Both
-hold final repo-relative paths, so applying either is one copy and
-declining it is doing nothing. Nothing in the quarantine can trigger or
-fail until it is copied out.
+the pre-built technical foundation (a complete, verified Next.js
+application) under `.claude/setup/foundation/`, and the opt-in MCP layer
+(everything that lets agents call the application's tools) under
+`.claude/setup/mcp/`. All three hold final repo-relative paths, so
+applying any of them is one copy and declining one is doing nothing.
+Nothing in the quarantine can trigger or fail until it is copied out.
 
 ## Steps
 
@@ -42,7 +43,9 @@ a previous `/setup` was interrupted. Do not start over and do not
 re-ask questions the working tree already answers: infer the answers
 from the applied state (Railway files at the root mean railway=yes;
 `next.config.ts` at the repo root means the foundation was already
-materialized), then continue from the first incomplete step below.
+materialized; `src/app/api/mcp/route.ts` at the repo root means the MCP
+payload was applied too), then continue from the first incomplete step
+below.
 
 Third guard: a retry after a failed preflight. If the working tree is
 clean but `git log origin/dev -5 --format='%s%n%b'` shows a
@@ -52,14 +55,15 @@ secrets check and stopped there. Open by saying so, quoting the failed
 probe lines from that commit body, and asking whether the token has
 been fixed. On a retry: skip Q0 (the first-time question was answered
 last time), treat railway = yes as settled (a preflight only ever runs
-on that path), still run step 3, ask Q2 only if `foundation=` was not
-passed, and go straight to the preflight in step 7.
+on that path), still run step 3, ask Q2 and Q2b only if `foundation=`
+and `mcp=` were not passed, and go straight to the preflight in step 7.
 
 ### 2. Arguments
 
-Parse `$ARGUMENTS` for `railway=yes|no` and `foundation=yes|no`. The
-harnesscompanion.com wizard passes both so its users answer nothing
-twice. Whatever is missing gets asked interactively in the steps below.
+Parse `$ARGUMENTS` for `railway=yes|no`, `foundation=yes|no` and
+`mcp=yes|no`. The harnesscompanion.com wizard passes them so its users
+answer nothing twice. Whatever is missing gets asked interactively in the
+steps below.
 
 Accept `secrets=confirmed` silently if present (older wizard hand-offs
 still pass it) but never act on it: the secrets preflight in step 7
@@ -80,6 +84,7 @@ And the quarantine:
 
 - `.claude/setup/railway/.github/workflows/harness-railway.yml`
 - `.claude/setup/foundation/package.json`
+- `.claude/setup/mcp/src/app/api/mcp/route.ts`
 
 Report anything missing as an upstream sync bug and stop. Never recreate
 missing files by hand; they come from the template sync or not at all.
@@ -105,7 +110,7 @@ has seen the guide, and a wizard user is the most likely first-timer):
    else. It covers the one-time setup end to end.
 3. A short orientation so the page has context: this skill runs once,
    asks a handful of short questions (how many depends on the answers,
-   at most four), pushes a single commit, and deletes itself; a Railway
+   at most five), pushes a single commit, and deletes itself; a Railway
    project additionally needs the two repository secrets the guide
    explains.
 4. End by asking them to prompt exactly this when done reading:
@@ -150,6 +155,34 @@ If Q1 was yes and `foundation=` was not passed, ask via AskUserQuestion:
 
 When Q1 = no, never ask Q2; the foundation quarantine is deleted with
 the rest of `.claude/setup/` in step 10.
+
+### 6b. Q2b: agents calling the app (only when Q2 = yes)
+
+If Q2 was yes and `mcp=` was not passed, ask via AskUserQuestion:
+
+> Should AI agents be able to work inside this app, using its features
+> on a user's behalf?
+
+Phrase it in those terms, not as "do you want MCP". The person answering
+is deciding whether agents get to act in their product; the protocol is
+how, not what. Mention the acronym once, in the option text, so someone
+who already knows the term recognises it.
+
+- **Yes**: the app ships an MCP endpoint at `/api/mcp`, authorized with
+  the same accounts the UI uses. Every agent connects as one signed-in
+  user and reaches only that user's data. It arrives working, with a
+  consent screen, a first tool, tests, and a `/mcp-tool` skill for
+  adding the next one.
+- **No**: no endpoint, no extra dependencies, no OAuth tables.
+
+**Say plainly that no is final**, in the question itself: this skill
+deletes its own payloads when it finishes, so a later change of mind
+means wiring MCP by hand from the docs. That is the whole reason the
+question is asked here rather than left for later.
+
+Never ask Q2b when Q1 or Q2 was no. The MCP payload overlays the
+foundation, so without the foundation there is nothing for it to attach
+to, and its quarantine is deleted in step 10 like the rest.
 
 ### 7. Secrets preflight (only when Q1 = yes)
 
@@ -319,14 +352,32 @@ railway copy, in this order:
    The payload ships a full `CLAUDE.md`, so the snippet has no job.
    The code-only and railway-without-foundation paths keep both files.
 
-3. Exactly ONE substitution: set the `"name"` field in `package.json`
+3. For mcp = yes only, overlay the MCP payload:
+
+       cp -R .claude/setup/mcp/. .
+
+   Order matters: this runs AFTER the foundation copy, because it
+   deliberately overrides several of the foundation's files whole
+   (`package.json` and `pnpm-lock.yaml` with the MCP dependency set,
+   `src/lib/auth.ts` with the OAuth plugins, the Drizzle journal with a
+   second migration, and the docs that describe them). Copying it first
+   would let the foundation overwrite all of it. It also adds the
+   `/mcp-tool` skill at `.claude/skills/`, which `list-skills.sh` picks
+   up with no further wiring. ADR 0011.
+
+   For mcp = no, copy nothing. The payload is deleted with the rest of
+   the quarantine in step 10 and is not recoverable afterwards.
+
+4. Exactly ONE substitution: set the `"name"` field in `package.json`
    to this repository's name (from `git remote get-url origin`), made
    npm-safe: lowercase it, strip any leading `.` or `_` characters, and
    truncate to 214 characters. npm rejects names that violate any of
    the three, and a bad name fails later at an unrelated moment, not
-   here. Everything else in the payload stays byte-for-byte as shipped.
+   here. Apply it to whichever `package.json` is now on disk, which on
+   the mcp = yes path is the MCP payload's copy. Everything else in
+   both payloads stays byte-for-byte as shipped.
 
-4. Verify the materialized app with the same chain CI will run:
+5. Verify the materialized app with the same chain CI will run:
 
        pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm check:docs
 
@@ -423,7 +474,7 @@ commit first, then a second commit adding only the sentinel.)
 Stage everything and commit once, with the real answers in the message:
 
     git add -A
-    git commit -m "chore: configure harness (railway=yes, foundation=no)"
+    git commit -m "chore: configure harness (railway=yes, foundation=yes, mcp=yes)"
     git push origin HEAD:dev
 
 `dev` is the scaffold's default and only branch at this point. Push to
@@ -533,6 +584,15 @@ Shared core, for everyone:
   not, and whether the verify chain ran).
 - The production and dev URLs, when railway = yes, and whether the
   liveness check confirmed production serving.
+- When mcp = yes: the MCP endpoint is live at `<production-url>/api/mcp`
+  and at the dev URL too. Print it. Say in one line that a client
+  authorizes with the same accounts the app uses, so the first
+  connection walks a normal sign in and a consent screen, and that the
+  client must speak MCP revision **2026-07-28**: an older client is
+  refused with a version error rather than a broken session, which is a
+  version mismatch and not a fault in the app. Point at
+  `docs/architecture/mcp-server.md` for connecting a client and at
+  `/mcp-tool` for adding the next tool.
 - When foundation = yes: the application is already in place and
   verified in this session (or materialized unverified, if step 8 had
   to skip the chain; say which, honestly). Provisioning migrates the
@@ -551,7 +611,9 @@ in the same warm register the welcome opened with:
 
 1. The see-it-work moment, concrete for their configuration:
    foundation = yes means "open your dev URL and click the demo login;
-   that is your app, seeded and running"; railway without foundation
+   that is your app, seeded and running", and with mcp = yes add that
+   the same app is already reachable by an agent at `/api/mcp`;
+   railway without foundation
    means "open your production URL; that page is your pipeline working
    end to end"; plain means a one-line tour of what now exists
    (workflows, skills, the docs skeleton).

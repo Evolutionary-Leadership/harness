@@ -504,6 +504,13 @@ belong to this project from that moment on: `/harness-upgrade` never
 touches them, and they must never be added to the harness-managed list
 above.
 
+**So are the MCP layer's files**, if `/setup` was answered `mcp=yes`:
+they were copied out of `.claude/setup/mcp/` on top of the foundation
+and are user-owned on the same terms. The one that looks out of place is
+`.claude/skills/mcp-tool/`, since the harness's own skills sit beside
+it. It is not one of them: it arrived with the payload, it
+is absent from the list above, and `/harness-upgrade` leaves it alone.
+
 **Note:** `harness-railway.yml` is a one-time setup workflow that
 self-destructs after its first run. It is not part of ongoing upgrades.
 It can be triggered two ways: manually via the Actions tab ("Run
