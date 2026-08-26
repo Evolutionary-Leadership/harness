@@ -30,12 +30,48 @@ Offer to scaffold it: `docs/README.md`, `docs/GLOSSARY.md`,
 
 ## Mode A: scaffold an ADR
 
-1. Find the next number:
+1. Claim the number before you write anything. Two sessions cut from the
+   same `dev` tip otherwise compute the same number, and because the
+   filenames differ git merges both without a conflict (ADR 0015).
 
-       ls docs/decisions/ | grep -E '^[0-9]{4}-' | sort | tail -1
+   Read both views and take the successor of the higher one:
 
-   Increment it and zero-pad to four digits. Numbers are never reused, even
-   if an ADR was rejected or superseded.
+       ON_DEV=$(bash .claude/scripts/coordination.sh adr-numbers-on-dev)
+       CLAIMED=$(bash .claude/scripts/coordination.sh list adr)
+       NUMBER=$(bash .claude/scripts/coordination.sh next-adr "$ON_DEV" "$CLAIMED")
+
+   `dev` is the source of truth and the coordination branch is a cache over
+   it, so a lost branch can never re-issue a number that already landed.
+
+   Then write `claims/adr/<NUMBER>.md` on the `coordination` branch with the
+   GitHub contents API (`mcp__github__create_or_update_file`, branch
+   `coordination`, **no `sha` argument**). Omitting the sha is what makes
+   this a reservation: the call fails when the path already exists, and that
+   failure is the compare-and-swap.
+
+   Body:
+
+       ---
+       number: "<NUMBER>"
+       title: <the ADR title>
+       claimed_by: <feature slug from .harness-feature, or "none">
+       branch: <the feature branch, or "none">
+       author: <git config user.email>
+       claimed_at: <ISO 8601 UTC>
+       state: claimed
+       ---
+
+   The title is written once and never refreshed. `claimed_by` is provenance:
+   it is what says where the reservation came from.
+
+   **On a failed write, re-read and retry with the next number, at most five
+   times.** Report which numbers were taken and by which feature.
+
+   **If the branch cannot be read or written at all** (no network, no branch,
+   no MCP tool), do not stop. Take `next-adr`'s answer, warn the user in one
+   clear line that the number is unclaimed and may collide, and carry on. The
+   guarantee does not live here: `check-docs.mjs` fails the merge gate on a
+   duplicated number, and it runs against the merged tree.
 
 2. Slugify the title: lowercase, kebab-case, no stop words to pad it. The
    filename is `docs/decisions/NNNN-<slug>.md`.

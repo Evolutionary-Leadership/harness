@@ -244,5 +244,84 @@ jobs:
             gh pr comment "$PR_NUMBER" --body "**Auto-merge did not complete**, likely due to merge conflicts with dev. Check out the feature branch locally, merge dev into it, resolve conflicts, push, and merge this PR manually."
           fi
 
+      # A claimed ADR number becomes permanently reserved once its record is
+      # on dev. Until then it is only a reservation, which a reaper may
+      # release again if the feature dies without ever writing the file.
+      # See the forge decision record on claiming ADR numbers.
+      #
+      # That id is spelled in words on purpose: this file lands at
+      # .github/workflows/ downstream, where check-docs walks, and a bare
+      # "ADR NNNN" would resolve against a scaffold's decisions directory
+      # that holds only its seed record. Same rule as harness-preflight.yml.
+      #
+      # Runs inside the dev-write concurrency group this job already holds,
+      # so it cannot race another writer, and it is deliberately non-fatal:
+      # the merge is the important part, the register is advisory.
+      - name: Promote this feature's ADR claims to landed
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          # Each step is its own shell, so both of these are re-derived here
+          # rather than inherited. PR_NUMBER is read back from the API because
+          # the step that created the PR keeps it in a local variable.
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          FEATURE_NAME="${FEATURE_BRANCH#feature/}"
+          REPO="${{ github.repository }}"
+
+          PR_NUMBER=$(gh pr list --head "$FEATURE_BRANCH" --base dev --state all \
+            --json number,state --jq 'map(select(.state=="MERGED")) | .[0].number // empty' 2>/dev/null || true)
+          # The merge step warns rather than failing when a merge does not
+          # complete, so an unmerged PR reaches this point too. A claim must
+          # only land when its ADR actually did.
+          if [ -z "$PR_NUMBER" ]; then
+            echo "PR for $FEATURE_BRANCH is not merged; leaving claims as they are."
+            exit 0
+          fi
+
+          if ! git fetch --quiet origin coordination 2>/dev/null; then
+            echo "No coordination branch; nothing to promote."
+            exit 0
+          fi
+
+          CLAIMS=$(git ls-tree -r --name-only origin/coordination claims/adr/ 2>/dev/null \
+            | grep -E 'claims/adr/[0-9]{4}\.md$' || true)
+          [ -n "$CLAIMS" ] || { echo "No ADR claims; nothing to promote."; exit 0; }
+
+          for path in $CLAIMS; do
+            body=$(git show "origin/coordination:$path" 2>/dev/null || true)
+            case "$body" in
+              *"claimed_by: $FEATURE_NAME"*) ;;
+              *) continue ;;
+            esac
+            case "$body" in
+              *"state: landed"*) echo "$path already landed"; continue ;;
+            esac
+
+            # Insert landed_in directly after the state line. Appending it
+            # instead would put the key after the closing --- and outside the
+            # front matter, where nothing would ever read it.
+            updated=$(printf '%s\n' "$body" \
+              | sed "s/^state: claimed$/state: landed\\nlanded_in: \"$PR_NUMBER\"/")
+            if [ "$updated" = "$body" ]; then
+              echo "$path did not carry 'state: claimed'; left untouched"
+              continue
+            fi
+
+            sha=$(gh api "repos/$REPO/contents/$path?ref=coordination" --jq .sha 2>/dev/null || true)
+            [ -n "$sha" ] || { echo "::warning::could not read $path"; continue; }
+
+            gh api -X PUT "repos/$REPO/contents/$path" \
+              -f message="chore: ADR claim $path landed in #$PR_NUMBER" \
+              -f branch=coordination \
+              -f sha="$sha" \
+              -f content="$(printf '%s' "$updated" | base64 -w0)" \
+              >/dev/null 2>&1 \
+              && echo "promoted $path to landed" \
+              || echo "::warning::could not promote $path"
+          done
+
       - name: Delete source claude/ branch
         run: git push origin --delete ${{ github.ref_name }} || true

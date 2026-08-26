@@ -216,10 +216,23 @@ if (!fileSet.has(INDEX)) {
 const adrFiles = docFiles.filter(
   (f) => f.startsWith("docs/decisions/") && /\/\d{4}-/.test(f)
 );
+// ADR 0015: a number is claimed on the coordination branch before the ADR
+// is written, which prevents most collisions. This check refuses the ones
+// that get through anyway, including a hand-written ADR that never claimed.
+// Keying a Map by number without this guard silently drops the first entry.
 const adrNumbers = new Map(); // "0007" -> path
 for (const f of adrFiles) {
   const m = basename(f).match(/^(\d{4})-/);
-  if (m) adrNumbers.set(m[1], f);
+  if (!m) continue;
+  const claimed = adrNumbers.get(m[1]);
+  if (claimed) {
+    error(
+      f,
+      `shares ADR number ${m[1]} with ${claimed}; ADR numbers are never reused`
+    );
+    continue;
+  }
+  adrNumbers.set(m[1], f);
 }
 
 const headingsByFile = new Map();

@@ -277,6 +277,7 @@ These files are maintained by the harness and replaced on
 
 | File | Purpose |
 |------|---------|
+| `.github/workflows/harness-bootstrap.yml` | Guarantees the three branches (`main`, `dev`, and the orphan `coordination`). Idempotent; dispatch it if a branch goes missing |
 | `.github/workflows/claude-to-feature-branch.yml` | Merges `claude/` branches into `feature/` branches |
 | `.github/workflows/claude-mergedev.yml` | Creates PR from `feature/` to `dev` and auto-merges (or opens for review) |
 | `.github/workflows/feature-branch-checks.yml` | Runs CI checks on PRs to dev (reads `check:` from `.harness-version`) |

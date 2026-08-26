@@ -149,6 +149,9 @@ If reality has moved past an ADR, the fix is a **new** ADR. Propose it (step
 Do check, and fix, the mechanics around ADRs:
 
 - every `ADR NNNN` mention in source or docs resolves to a real file
+- no two ADRs share a number. The checker fails on this and names both
+  paths; the fix is a new number for the later record, never a merge of
+  the two
 - every ADR has `Status:` and `Date:` lines
 - the ADR table in `docs/README.md` matches the files on disk
 - an ADR that governs a module has a back-reference comment there; if it does

@@ -1,0 +1,198 @@
+name: "0. Harness bootstrap (guarantees the three branches)"
+
+# Every harness repository runs on three branches. main and dev carry code.
+# coordination is an orphan branch that carries no code, is never merged,
+# and holds only state that exists nowhere else yet: a claimed but unwritten
+# ADR number, and (later) the touched-set of a branch that has not merged.
+# See the forge's decision record on shipping a coordination branch.
+#
+# Two reasons this is a workflow and not something a session does:
+#
+#   1. A true orphan branch cannot be created through the GitHub contents
+#      API. It needs a commit with no parents, and create-or-update-file
+#      refuses a branch that does not exist yet. In Actions, plain git does
+#      it in one line.
+#   2. Sessions on claude.ai/code get a 403 from the git proxy on any push
+#      that is not to their own claude/<branch>.
+#
+# It also repairs something older: release.yml opens its release PR with
+# --base main, but nothing in a scaffold ever created main, and /setup
+# states that dev is the scaffold's default and only branch. A fresh
+# scaffold could not run its first release. Guaranteeing three branches
+# fixes that as a side effect, which is why main is handled here.
+#
+# Idempotent by construction: every step checks before it creates, so a
+# repository that already has all three branches passes through untouched.
+# /setup dispatches it before its own configuration commit.
+#
+# The steps run in a deliberate order. The sentinel is cleared FIRST, while
+# the working tree still holds it: the orphan checkout further down empties
+# the tree, so anything that tested for the file afterwards would always
+# come back false and the sentinel would linger and re-fire this workflow.
+
+on:
+  workflow_dispatch:
+  # Sentinel fallback for sessions without the GitHub MCP dispatch tool:
+  # push a one-line .harness-bootstrap to the default branch and this fires.
+  # Mirrors the shape harness-preflight.yml uses for the same reason.
+  push:
+    paths:
+      - .harness-bootstrap
+
+concurrency:
+  group: harness-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  branches:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Guarantee main, dev and coordination
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          DEFAULT="${{ github.event.repository.default_branch }}"
+          echo "Default branch: $DEFAULT"
+
+          exists() { git ls-remote --exit-code --heads origin "$1" >/dev/null 2>&1; }
+
+          # 0. Clear the sentinel while the tree still has it. See the note
+          #    in the header for why this cannot wait until the end.
+          if [ -f .harness-bootstrap ]; then
+            git rm -f .harness-bootstrap >/dev/null
+            git commit -q -m "chore: remove bootstrap sentinel"
+            git push origin "HEAD:$DEFAULT"
+            echo "sentinel: removed"
+          fi
+
+          # 1. main, so release.yml has a base for its release PR.
+          if exists main; then
+            echo "main: already exists"
+          else
+            echo "main: creating from $DEFAULT"
+            git push origin "origin/$DEFAULT:refs/heads/main"
+          fi
+
+          # 2. dev, the integration branch every feature merges into.
+          if exists dev; then
+            echo "dev: already exists"
+          else
+            echo "dev: creating from main"
+            git fetch origin main
+            git push origin "origin/main:refs/heads/dev"
+          fi
+
+          # 3. coordination. Everything below runs only when it is absent,
+          #    so the heredocs sit at one indentation level and their
+          #    terminators stay where the shell expects them.
+          if exists coordination; then
+            echo "coordination: already exists"
+            exit 0
+          fi
+
+          echo "coordination: creating as an orphan branch"
+          git checkout --orphan coordination
+          git rm -rf . >/dev/null 2>&1 || true
+          git clean -fdx >/dev/null 2>&1 || true
+          mkdir -p claims/adr features
+
+          cat > README.md <<'EOF'
+          # coordination
+
+          This branch carries no code. It is never merged into `main` or `dev`,
+          and it shares no history with them.
+
+          ## The one rule
+
+          **This branch carries only what exists nowhere else.**
+
+          A claimed but unwritten ADR number exists nowhere else. The touched-set
+          of a branch that has not merged exists nowhere else. The moment
+          something lands there is a pull request, a commit and a tag, and GitHub
+          owns it from then on: this branch must not keep a second copy.
+
+          That rule answers every "could this live here too" question. If the
+          fact is derivable from GitHub, it does not belong here.
+
+          ## Layout
+
+          | Directory | Holds |
+          |---|---|
+          | `claims/adr/` | One file per reserved ADR number |
+          | `features/` | One file per in-flight feature (not yet populated) |
+
+          ## Reading and writing it
+
+          Everything here is advisory. No workflow reads this branch to block
+          anything, and no session should ever stall because it is missing or
+          unreachable.
+
+          Read it without checking it out:
+
+              git fetch origin coordination
+              git show origin/coordination:claims/adr/0023.md
+
+          Write it through the GitHub contents API, where a path that already
+          exists fails the call. That failure is the compare-and-swap that makes
+          a reservation safe.
+          EOF
+
+          cat > claims/adr/README.md <<'EOF'
+          # ADR number claims
+
+          One file per reserved ADR number, named for the number itself, because
+          the filename is what makes the reservation atomic: writing a path that
+          already exists fails, and the loser takes the next number and retries.
+
+          The candidate number is always:
+
+              max(numbers already on dev, numbers claimed here) + 1
+
+          That keeps `dev` the source of truth and this branch a cache over it.
+          Losing this branch can therefore never re-issue a number that already
+          landed.
+
+          ## States
+
+          | State | Means |
+          |---|---|
+          | `claimed` | Reserved, written nowhere yet |
+          | `landed` | The ADR is on `dev`. Never modified again |
+          | `released` | Returned to the pool, only when provably never used |
+
+          A number is released only when its feature branch is gone from the
+          remote AND no ADR carrying that number exists on `dev`. Both true means
+          nothing ever referenced it.
+
+          This branch prevents collisions. It does not guarantee their absence:
+          the docs checker in CI refuses a duplicate that got here another way.
+          EOF
+
+          cat > features/README.md <<'EOF'
+          # In-flight features
+
+          Reserved. One file per feature slug will record what that branch
+          touches relative to `dev`: capabilities, interfaces and requirements.
+
+          Nothing writes here yet. The directory exists so the layout does not
+          shift when that capability is wired.
+
+          One file per slug means one writer per file, so no reservation or
+          locking is needed here. Only `claims/` needs compare-and-swap.
+          EOF
+
+          git add -A
+          git commit -q -m "chore: initialise the coordination branch"
+          git push origin coordination
+          echo "coordination: created"

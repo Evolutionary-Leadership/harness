@@ -127,6 +127,25 @@ habits that keep any single turn from going quiet for too long:
 If a timeout still fires, the next prompt usually completes the work;
 check status.claude.com if it persists across sessions.
 
+## The three branches
+
+This repository runs on three branches. `main` and `dev` carry code.
+`coordination` is an orphan branch that carries none, is never merged, and
+shares no history with the other two.
+
+It holds only what exists nowhere else yet. Today that is one thing:
+reserved ADR numbers. `/document adr` claims a number there before writing
+the file, so two sessions cut from the same `dev` tip cannot pick the same
+one; the candidate is always `max(numbers on dev, numbers claimed) + 1`, so
+`dev` stays the source of truth and the branch is a cache over it.
+
+Everything on the branch is advisory and nothing blocks on it. If it is
+missing or unreachable, a session carries on with a warning. The guarantee
+lives in CI, where the docs checker fails on a duplicated number.
+
+You do not need to touch this branch by hand. `harness-bootstrap.yml`
+creates whatever is missing and is safe to re-run.
+
 ## Feature development workflow
 
 The full lifecycle from idea to merged feature is automated. Railway

@@ -89,6 +89,45 @@ And the quarantine:
 Report anything missing as an upstream sync bug and stop. Never recreate
 missing files by hand; they come from the template sync or not at all.
 
+### 3b. Branches
+
+A harness repository runs on three branches: `main` and `dev` carry code,
+and `coordination` is an orphan branch holding only what exists nowhere
+else yet (forge decision records 0014 and 0015). A scaffold arrives with
+`dev` as its default and only branch, so the other two have to be made.
+
+They cannot be made from here. An orphan branch needs a commit with no
+parents, which the contents API cannot produce, and this session cannot
+push outside its own `claude/` branch. So fire the workflow, the same two
+paths as the preflight in step 7:
+
+1. Preferred: dispatch via the GitHub MCP server, tool
+   `actions_run_trigger`, method `run_workflow`,
+   `workflow_id: harness-bootstrap.yml`, `ref: dev` (owner/repo from
+   `git remote get-url origin`).
+2. Fallback, when that tool is unavailable or errors: write a
+   `.harness-bootstrap` file containing only a timestamp
+   (`date -u +%Y-%m-%dT%H:%M:%SZ`), commit it, and
+   `git push origin HEAD:dev`. The push path-trigger fires the same
+   workflow, which removes the sentinel again. Use exactly one of the two
+   paths, never both.
+
+Then wait for the branches, capped at 12 attempts (about a minute):
+
+    for i in $(seq 1 12); do
+      if git ls-remote --exit-code --heads origin coordination >/dev/null 2>&1 \
+        && git ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+        echo "branches ready"; break
+      fi
+      sleep 5
+    done
+
+The workflow is idempotent, so a repository that already has all three
+passes through untouched and this returns at once.
+
+If the branches never appear, say so in one line and continue anyway.
+Setup does not depend on them; the first ADR and the first release do.
+
 ### 4. Q0: first time? (always asked, except on a retry)
 
 Skipped only when step 1 detected a retry after a failed preflight.
