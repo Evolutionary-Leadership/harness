@@ -201,8 +201,32 @@ jobs:
             exit 0
           fi
 
-          # Tag the merge commit on main
+          # --- Refuse to publish an incoherent tag -------------------------
+          # Where a version bump workflow maintains a VERSION file, the tag
+          # publishes that number rather than carrying one of its own, so
+          # v + VERSION IS the tag. This is the only place that can compare a
+          # tag against main before the tag exists, so it is where the
+          # invariant is enforced rather than merely intended.
+          #
+          # Repos without a VERSION file skip the first check and keep the
+          # second: a duplicate tag is wrong everywhere.
+          #
+          # Forge decision record 0018.
           git fetch origin main
+          if git cat-file -e origin/main:VERSION 2>/dev/null; then
+            MAIN_VERSION=$(git show origin/main:VERSION | tr -d '[:space:]')
+            if [ "$VERSION" != "v${MAIN_VERSION}" ]; then
+              echo "::error::Refusing to tag ${VERSION}: VERSION on main is ${MAIN_VERSION}, so the tag should be v${MAIN_VERSION}. The tag publishes the version; it does not carry one of its own."
+              exit 1
+            fi
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Refusing to tag ${VERSION}: that tag already exists and points at other content. Releasing it again would give one number two meanings."
+            exit 1
+          fi
+
+          # Tag the merge commit on main
           git tag "$VERSION" origin/main
           git push origin "$VERSION"
 

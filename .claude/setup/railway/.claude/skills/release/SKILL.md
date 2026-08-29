@@ -72,16 +72,38 @@ if it does not.
 
     git fetch origin dev main --tags
 
-Get the last release tag:
+Get the last release tag, which step 3 needs either way:
 
     LAST_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo "v0.0.0")
 
-Parse the version type from `$ARGUMENTS` (default: `patch`):
+**Which rule applies depends on whether something else already owns the
+version.** Check once:
+
+    test -f .github/workflows/harness-version-bump.yml && test -f VERSION
+
+**If both exist, read the version; do not calculate one.** A version bump
+workflow moves `VERSION` on every merge, and the tag publishes that number
+rather than carrying one of its own, so `v` + `VERSION` **is** the tag. Two
+rules for one number is what makes a release page and a project's own
+version file disagree.
+
+    NEW_VERSION="v$(git show origin/dev:VERSION | tr -d '[:space:]')"
+
+`--minor` or `--major` raises it first, because the judgement that a batch
+adds up to a minor is one you can only make here, looking at step 3's blast
+radius. Compute the raised number from `VERSION`, not from `$LAST_TAG`, and
+carry the `VERSION` file itself in step 9 so the tag and the file stay equal.
+Without an argument, publish `VERSION` as it stands.
+
+**If either is missing, calculate as before.** Parse the version type from
+`$ARGUMENTS` (default: `patch`):
 - `major` to bump major (e.g., v1.2.3 to v2.0.0)
 - `minor` to bump minor (e.g., v1.2.3 to v1.3.0)
 - `patch` to bump patch (e.g., v1.2.3 to v1.2.4)
 
-Calculate the new version accordingly. Store it as `$NEW_VERSION`.
+Calculate the new version from `$LAST_TAG` accordingly.
+
+Either way, store the result as `$NEW_VERSION`.
 
 ### 3. Compute the blast radius
 
@@ -172,13 +194,11 @@ Poll that until the merge is an ancestor of `origin/dev`. Then keep
 fetching until `origin/dev`'s tip has stopped moving for about a minute.
 Cap the whole wait at about ten minutes.
 
-The settle window is the point, and it is not padding. In this authoring
-repo `harness-version-bump.yml` fires on the same merge and rewrites
-`CHANGELOG.md` on `dev` a moment later; downstream scaffolds ship no
-version bump (`templates/harness/base/workflows/` has none), so their
-settle ends at once. One rule covers both. Skipping it is not a cosmetic
-risk: step 9 pushes a `CHANGELOG.md` composed from whatever tip you read,
-so composing before the bump lands overwrites the bump's entry.
+The settle window is the point, and it is not padding. Where a version bump
+workflow exists it fires on the same merge and moves `VERSION` a moment
+later, so a version read before it lands is the *previous* release's number
+and step 2 would tag a value that is already stale. Repos without a version
+bump settle at once. One rule covers both.
 
 **On timeout, stop.** Say plainly which of these happened, and that no
 release was cut either way:
@@ -209,8 +229,16 @@ Keep notes concise. Use commit subject lines only.
 
 ### 7. Build the new CHANGELOG.md content
 
-Read the current CHANGELOG.md from dev (in case the working tree is
-stale or the file does not exist locally):
+**Skip this whole step when the version bump owns the changelog**, which is
+the same condition as step 2: a `harness-version-bump.yml` plus a `VERSION`
+file. Such a workflow writes one entry per merge, in the commit that moves
+`VERSION`, so the entries are already on `dev` and there is nothing to
+compose. Composing one here would mean holding the entire changelog inline
+in step 9's call, which is how three consecutive releases shipped without an
+entry when nobody noticed the step had been skipped.
+
+Otherwise, read the current CHANGELOG.md from dev (in case the working tree
+is stale or the file does not exist locally):
 
     git show origin/dev:CHANGELOG.md 2>/dev/null || echo ""
 
@@ -281,17 +309,25 @@ Call `mcp__github__push_files` with:
 - `repo`: the repo parsed in step 1
 - `branch`: `dev`
 - `message`: `chore: release $NEW_VERSION`
-- `files`: an array with exactly these two entries:
-  - `{ path: "CHANGELOG.md", content: <CHANGELOG_CONTENT from step 7> }`
-  - `{ path: ".release-description.md", content: <RELEASE_DESC_CONTENT from step 8> }`
+- `files`: always
+  `{ path: ".release-description.md", content: <RELEASE_DESC_CONTENT from step 8> }`,
+  plus **exactly one** of:
+  - `{ path: "CHANGELOG.md", content: <CHANGELOG_CONTENT from step 7> }` when
+    step 7 composed one.
+  - `{ path: "VERSION", content: <the raised number, no leading v> }` when the
+    version bump owns the changelog **and** `--minor` or `--major` raised the
+    version in step 2. A few bytes, so this never revives the inline-size
+    problem that step 7 avoids.
+  - Neither, when the bump owns the changelog and the version was published
+    as it stands. The signal file alone is the whole commit.
 
-The MCP call creates a single commit on origin/dev with both files. It
-does not modify the local working tree or local refs.
+The MCP call creates a single commit on origin/dev. It does not modify the
+local working tree or local refs.
 
 After the call succeeds, leave the working tree clean:
 
     # Discard any local edits made while composing the files in steps 7 and 8
-    git checkout -- CHANGELOG.md 2>/dev/null || true
+    git checkout -- CHANGELOG.md VERSION 2>/dev/null || true
     rm -f .release-description.md
 
 Then fetch so the new commit is visible locally:
@@ -363,5 +399,5 @@ push.
 The working tree must be clean when the skill exits. If anything was
 left modified by step 7 or step 8, revert it now:
 
-    git checkout -- CHANGELOG.md 2>/dev/null || true
+    git checkout -- CHANGELOG.md VERSION 2>/dev/null || true
     rm -f .release-description.md

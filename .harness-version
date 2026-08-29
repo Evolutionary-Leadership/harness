@@ -1,5 +1,5 @@
 harness: unconfigured
-version: 0.4.19
+version: 0.6.0
 repo: Evolutionary-Leadership/harness-forge
 companion_url:
 traits:
