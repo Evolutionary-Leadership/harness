@@ -14,16 +14,41 @@ concurrency:
 
 jobs:
   provision-railway:
-    # The head-commit-message clause skips provisioning/heal runs for pushes
-    # that only refresh the feature-context file (see .claude/HARNESS.md):
-    # the skills commit pure context refreshes with the `chore(context):`
-    # prefix, and such a push changes nothing Railway needs to act on.
-    # Note this skips only this workflow; Railway's own deployment trigger
-    # still watches the feature branch and redeploys on any push to it.
+    # Two head-commit-message clauses skip provisioning/heal runs, both for
+    # pushes that change nothing Railway needs to act on. Note they skip only
+    # this workflow; Railway's own deployment trigger still watches the
+    # feature branch and redeploys on any push to it.
+    #
+    # 1. `chore(context):` is the prefix the skills use for pure
+    #    feature-context refreshes (see .claude/HARNESS.md).
+    #
+    # 2. MERGE_SIGNAL is the subject /mergedev commits when it asks for the
+    #    auto-merge to dev. Such a push is a teardown, not a provisioning
+    #    event: claude-mergedev.yml is concurrently deleting the environment,
+    #    stripping the signal files and merging the PR. Running anyway raced
+    #    that cleanup and committed .railway-url back onto the PR head, which
+    #    is how the file reached dev and then main; and because the teardown
+    #    deletes the environment first, a run whose existence check landed
+    #    after the delete forked dev into an environment nobody asked for.
+    #
+    #    /review's subject is deliberately NOT skipped. A review PR keeps its
+    #    environment (claude-mergedev.yml gates the teardown on the review
+    #    flag), so it still wants provisioning and healing to run.
+    #
+    #    The literal is a contract between the /mergedev skill that writes it
+    #    and this guard that matches it, like the bootstrap foundation marker
+    #    and the preflight result subject. It is spelled out inline rather
+    #    than held in a variable because a job-level `if:` cannot read the
+    #    `env` context, and a second copy for the checker to read would be a
+    #    second thing to drift. scripts/check-template-overlay.mjs reads the
+    #    prefixes straight out of this expression and fails the merge gate
+    #    when the skill stops committing one of them.
+    #    Forge decision record 0016.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.head_branch, 'claude/') &&
-      !startsWith(github.event.workflow_run.head_commit.message, 'chore(context):')
+      !startsWith(github.event.workflow_run.head_commit.message, 'chore(context):') &&
+      !startsWith(github.event.workflow_run.head_commit.message, 'chore: trigger auto-merge to dev')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -523,10 +548,20 @@ jobs:
 
       - name: Publish Railway preview URL to feature branch
         # Always runs when secrets are present, regardless of whether the
-        # create step ran or was skipped (exists=true). Idempotent: no-op
-        # when .railway-url is already on the feature branch. This heals
-        # stranded environments left behind when an earlier run was
-        # cancelled mid-mutation or had its push rejected.
+        # create step ran or was skipped (exists=true).
+        #
+        # Idempotent by CONTENT, not by presence. "Published" means the file
+        # names the environment THIS run resolved, not merely that a file is
+        # there. A presence check cannot tell a URL this branch published from
+        # one it inherited: a branch cut from a dev that wrongly carries
+        # .railway-url would keep the previous feature's URL forever, and every
+        # reader would silently target an environment that no longer exists.
+        # Comparing content is what repairs such a branch on its first run.
+        #
+        # Self-healing: a stranded environment left by a cancelled or
+        # half-provisioned run recovers on the next trigger for the same branch.
+        #
+        # Forge decision record 0016.
         if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
         run: |
           FEATURE_NAME="${{ steps.feature.outputs.name }}"
@@ -534,11 +569,8 @@ jobs:
           PROJECT_ID="$RAILWAY_PROJECT_ID"
           API_URL="https://backboard.railway.com/graphql/v2"
 
-          # Fast-path idempotency: file already on the checked-out branch.
-          if [ -f .railway-url ] && [ -s .railway-url ]; then
-            echo "Already published: $(cat .railway-url)"
-            exit 0
-          fi
+          # What the branch currently claims, for the comparisons below.
+          CURRENT_URL=$(head -n1 .railway-url 2>/dev/null | tr -d '[:space:]' || true)
 
           # Same retry-hardened helper as the create step: never trust a
           # single malformed response from a slow Railway mutation.
@@ -561,8 +593,14 @@ jobs:
           # Look up the env id by feature name.
           ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
           ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty" 2>/dev/null) || true
+          # An unresolvable lookup leaves whatever is on the branch untouched
+          # and warns: never delete a URL we merely failed to confirm. A
+          # transient API blip must not cost a working link. This is the same
+          # fail-toward-doing-nothing direction env_has_var takes, and
+          # deliberately the opposite of harness-railway.yml's, for the reason
+          # that workflow documents.
           if [ -z "$ENV_ID" ]; then
-            echo "::warning::No Railway environment found for '$FEATURE_NAME'; create step likely failed. Skipping publish."
+            echo "::warning::No Railway environment found for '$FEATURE_NAME'; create step likely failed. Leaving any existing .railway-url alone."
             exit 0
           fi
 
@@ -570,7 +608,7 @@ jobs:
           SERVICES=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { services { edges { node { id name } } } } }")
           APP_SERVICE_ID=$(echo "$SERVICES" | jq -r '[.data.project.services.edges[].node | select(.name | test("postgres|db|storage"; "i") | not)][0].id // empty' 2>/dev/null) || true
           if [ -z "$APP_SERVICE_ID" ]; then
-            echo "::warning::No app service found in project; skipping publish."
+            echo "::warning::No app service found in project; leaving any existing .railway-url alone."
             exit 0
           fi
 
@@ -585,32 +623,59 @@ jobs:
             DOMAIN=$(echo "$DOMAIN_RESPONSE" | jq -r '.data.serviceDomainCreate.domain // empty' 2>/dev/null) || true
           fi
           if [ -z "$DOMAIN" ]; then
-            echo "::warning::Could not get or create a Railway domain; skipping publish."
+            echo "::warning::Could not get or create a Railway domain; leaving any existing .railway-url alone."
             exit 0
           fi
           DEPLOY_URL="https://$DOMAIN"
 
+          # The resolved URL is now known, so "already published" can finally
+          # be asked properly. Equal means nothing to do; different or absent
+          # means this branch is carrying an inherited or stale URL and must
+          # be corrected.
+          if [ "$CURRENT_URL" = "$DEPLOY_URL" ]; then
+            echo "Already published: $DEPLOY_URL"
+            exit 0
+          fi
+          if [ -n "$CURRENT_URL" ]; then
+            echo "::warning::.railway-url named $CURRENT_URL, which is not this environment's domain. Republishing as $DEPLOY_URL."
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo "$DEPLOY_URL" > .railway-url
-          git add -f .railway-url
-          git commit -m "chore: add Railway preview URL"
 
-          # Retry-with-rebase loop. Survives concurrent Claude pushes and
-          # races with a queued earlier run that may publish first.
+          # Refetch-reset-retry, the same shape claude-mergedev.yml's cleanup
+          # uses, and deliberately not a rebase. Rebasing a "set the URL to X"
+          # commit onto a branch whose file says Y conflicts, and the case
+          # where the branch says Y is exactly the one this step now exists to
+          # repair: the old loop could only abort and give up on it. Rewriting
+          # the file on top of whatever the branch currently holds cannot
+          # conflict, and the value is authoritative because it came from the
+          # live API moments ago.
           for attempt in 1 2 3 4 5; do
             git fetch origin "$FEATURE_BRANCH" || true
-            if git show "origin/$FEATURE_BRANCH:.railway-url" >/dev/null 2>&1; then
-              echo "Branch already has .railway-url (queued earlier run won the race)."
+
+            # Concede only to a run that published THIS url. Conceding to any
+            # file at all is how a stale value survived: a queued earlier run
+            # holding the previous feature's URL would win the race and this
+            # run would walk away leaving the lie in place.
+            REMOTE_URL=$(git show "origin/$FEATURE_BRANCH:.railway-url" 2>/dev/null \
+              | head -n1 | tr -d '[:space:]' || true)
+            if [ "$REMOTE_URL" = "$DEPLOY_URL" ]; then
+              echo "Branch already has $DEPLOY_URL (queued earlier run won the race)."
               exit 0
             fi
-            if git rebase "origin/$FEATURE_BRANCH"; then
-              if git push origin "HEAD:$FEATURE_BRANCH"; then
-                echo "Published $DEPLOY_URL"
-                exit 0
-              fi
-            else
-              git rebase --abort || true
+
+            # Not `|| true`: pushing from a HEAD that was never reset onto
+            # the branch tip would carry this run's checkout onto the feature
+            # branch. The replaced rebase failed safe via --abort; this must
+            # too, by retrying rather than pushing.
+            git reset --hard "origin/$FEATURE_BRANCH" > /dev/null 2>&1 || { sleep "$attempt"; continue; }
+            echo "$DEPLOY_URL" > .railway-url
+            git add -f .railway-url
+            git commit -m "chore: add Railway preview URL" > /dev/null 2>&1 || true
+            if git push origin "HEAD:$FEATURE_BRANCH"; then
+              echo "Published $DEPLOY_URL"
+              exit 0
             fi
             sleep $((attempt * 2))
           done

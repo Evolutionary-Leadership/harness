@@ -194,6 +194,10 @@ Tell the user:
 - They can stay in this chat and chain `/release` once the merge lands. The
   release skill works on `dev` and never re-pushes the `claude/` branch, so
   it will not re-trigger feature branch creation.
+- Next time, `/release` on its own would have done both: run from an
+  unmerged `claude/` branch it asks one confirmation, follows this
+  procedure, waits for `dev` to settle, and then ships. Mention it once,
+  as an option; it is a bigger act than a merge and stays the user's call.
 
 ### 8. If the workflow fails
 

@@ -68,7 +68,28 @@ jobs:
 
           git pull --rebase origin dev || true
 
+          # This commit is what keeps main clean. It already had to remove the
+          # release signal file; sweeping the rest of the class in the same
+          # commit costs nothing and is the last point before dev's tree
+          # becomes main's. A signal file on main is inherited by every
+          # scaffold and every branch cut from it afterwards.
+          #
+          # The subject below is a parsed literal: this job's own if: guard
+          # skips runs whose head commit carries it, which is what stops this
+          # push from re-triggering the release. Widening what the step removes
+          # must not change what the commit says.
+          #
+          # Forge decision record 0016.
           git rm -f .release-description.md
+          git rm -f --ignore-unmatch \
+            .pr-description.md .railway-url .harness-init .harness-feature > /dev/null 2>&1 || true
+          # Exclude via git's pathspec rather than piping through grep: a grep
+          # that matches nothing exits 1, and under a shell with pipefail (any
+          # step declaring `shell: bash`, or a repo setting defaults.run.shell)
+          # that aborts the step before the commit below, failing every release
+          # in the normal case where nothing leaked.
+          LEAKED=$(git diff --cached --name-only -- ':!.release-description.md' | tr '\n' ' ')
+          [ -z "$LEAKED" ] || echo "::warning::Signal files reached dev and were removed before the release: $LEAKED"
           git commit -m "chore: remove release signal file"
 
           for i in 1 2 3; do

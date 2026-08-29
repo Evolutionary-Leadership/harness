@@ -178,8 +178,10 @@ the preview URL. What you need in every session:
   `bash .claude/scripts/verify-deploy.sh`, telling the user first that the
   session stays open to watch the deploy and will report here when their
   changes are live.
-- Provisioning is self-healing. If an environment looks half-created, push
-  again rather than repairing it by hand.
+- Provisioning is self-healing. If an environment looks half-created, or
+  the preview URL names an environment that no longer exists, push again
+  rather than repairing it by hand: the workflow republishes
+  `.railway-url` whenever it does not name the environment it resolved.
 
 ### 0. Say what kind of session this is
 
@@ -213,7 +215,16 @@ with a stop-and-ask gate between each one:
 5. push, report the Railway preview URL
    (`bash .claude/scripts/get-railway-url.sh`), verify the deploy is
    live (`bash .claude/scripts/verify-deploy.sh`), then choose the
-   exit: `/mergedev` or `/review`
+   exit: `/mergedev`, `/review` or `/release`
+
+**Two ways to say "stop asking me".** In a grilling round, the standing
+option grants **grill autonomy**: take the recommended answer on every
+remaining question of that grill, breaking out only for a one-way decision
+or where the recommendation would be a guess. At the phase 1 gate, the
+"go all the way to implement" option grants **phase autopilot**: advance
+the phase 2, 3 and 4 gates without stopping, and stop at phase 5. They are
+separate switches, neither survives the session, and neither ever runs an
+exit.
 
 Never advance a gate on silence, and never skip phases 1 to 3 on your own
 judgement. Quick mode (straight to phase 4) requires an explicit
@@ -268,11 +279,27 @@ works on `dev` (stash, switch, commit, push, return) and never pushes the
 `claude/` branch, so it does not re-trigger feature branch creation. No
 need to start a new chat for a release.
 
+**Or skip the pair.** `/release` run from an unmerged `claude/` branch does
+both: it asks one confirmation, merges to `dev`, waits for `dev` to settle,
+then ships. See "Releasing to production" below.
+
 ## Releasing to production
 
 Use `/release` (with optional `major`, `minor`, or `patch` argument) to ship
 dev to production. This creates a release PR from `dev` → `main`, tags the
-version, and generates a GitHub Release with notes. The production Railway
+version, and generates a GitHub Release with notes.
+
+**`/release` knows where you ran it from.** On an unmerged `claude/` branch
+it runs the whole chain: merge to `dev`, wait until `dev` settles, then
+release. It asks one confirmation first, because taking a feature straight
+to production is not the same act as releasing reviewed work. `--quick`
+skips that question when you have already decided.
+
+**Every release reports its blast radius**, on any branch and under
+`--quick` too: everything in the range from the last tag to `dev`, split
+into your commits and the ones riding along. Releasing ships all of `dev`,
+not just your feature, and that is the number one way a colleague's
+half-finished work reaches production. The production Railway
 environment deploys automatically from main. For emergencies, use `/hotfix`
 to go directly from main with a fast-track patch release.
 
@@ -309,7 +336,8 @@ Run `/getting-started` to see all skills, or use these directly:
 - `/mergedev`: merge to dev (auto-merge)
 - `/review`: submit PR for team review
 - `/code-review`: two-axis agent review of the diff (Standards, Spec)
-- `/release`: ship dev to production
+- `/release`: ship dev to production, or merge and ship in one go from an
+  unmerged feature branch
 - `/hotfix`: emergency production fix
 - `/status`: team dashboard (with Railway preview URLs)
 - `/changelog`: generate changelog

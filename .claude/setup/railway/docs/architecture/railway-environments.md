@@ -34,9 +34,14 @@ environment, all isolated.
   anywhere else.
 - **Buckets cannot be moved after creation.** A feature bucket inherits its
   region from the dev bucket it forked. Region is a create-time decision.
-- **Preview-URL publishing is idempotent and self-healing.** A cancelled or
-  half-provisioned run recovers on the next trigger for the same branch; do
-  not hand-repair a Railway environment before re-triggering.
+- **Preview-URL publishing is idempotent by content, and self-healing.**
+  The step republishes whenever `.railway-url` does not name the domain it
+  just resolved, so a branch that inherited a stale URL corrects itself; a
+  cancelled or half-provisioned run recovers on the next trigger for the
+  same branch. Do not hand-repair a Railway environment before
+  re-triggering.
+- **A merge to dev does not provision.** `/mergedev`'s push is skipped by
+  the provisioning workflow, because that push is a teardown.
 
 ## Database
 
@@ -188,10 +193,14 @@ always exits 0. The headers come from the app itself (starter:
 **keep them when you replace the starter with your real app**, or
 deploy verification degrades to "could not confirm".
 
-The publishing step is idempotent and self-healing: even if an earlier
-run was cancelled mid-mutation, a later workflow trigger on the same
-branch will look up the existing Railway environment and commit the
-missing `.railway-url`. The deployment trigger is healed the same way:
+The publishing step resolves the environment and its domain first, then
+compares `.railway-url` against what it resolved: it does nothing when
+the file already names this environment, and rewrites it when the file is
+missing or names something else. Comparing content rather than merely
+checking the file is there is what lets a branch that inherited a stale
+URL publish its own. When the lookup fails outright (a Railway outage, a
+deleted environment) the existing file is left alone and the run warns,
+so a blip never costs you a working link. The deployment trigger is healed the same way:
 every provisioning run repoints any trigger still targeting `dev` at
 `feature/<name>` and redeploys the app service, so a half-provisioned
 environment never silently serves dev code on the preview URL.

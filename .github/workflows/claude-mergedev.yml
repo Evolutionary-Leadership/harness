@@ -323,5 +323,79 @@ jobs:
               || echo "::warning::could not promote $path"
           done
 
+      - name: Sweep signal files out of dev
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+
+          # Belt and braces. The cleanup above is supposed to leave dev clean,
+          # but a signal file that does reach dev is invisible until it breaks
+          # something far away: an inherited .harness-feature renames a future
+          # session's branch, and every claude/ branch cut from dev carries the
+          # leak onward. Strip and warn rather than refuse: a stray file must
+          # never block shipping, and the warning is what says something
+          # upstream let it through.
+          #
+          # .release-description.md is deliberately NOT swept. On dev it is not
+          # a leak but the live /release trigger, and removing it would break
+          # releasing. The release path sweeps it instead, where it is removed
+          # by design anyway.
+          # Forge decision record 0016.
+          # The whole signal-file class, in both variants. Unlike
+          # remove_signal_files above, which strips only what this workflow
+          # created and so differs per variant, the sweep is a safety net:
+          # --ignore-unmatch makes a file that never exists in a plain repo
+          # free, and one membership is one less thing to drift.
+          SWEEP=".pr-description.md .railway-url .harness-init .harness-feature"
+
+          # Only sweep a tree this run actually created. gh pr merge may have
+          # fallen back to --auto, and /review does not merge at all, so dev is
+          # not always ours to rewrite; the eventual merge sweeps it instead.
+          # Same jq spelling as the merged-PR lookup earlier in this file.
+          PR_NUMBER=$(gh pr list --head "$FEATURE_BRANCH" --base dev --state all \
+            --json number,state --jq 'map(select(.state=="MERGED")) | .[0].number // empty' 2>/dev/null || true)
+          if [ -z "$PR_NUMBER" ]; then
+            # An open PR is the expected state on the /review path and while an
+            # auto-merge is pending; neither is worth a warning.
+            OPEN_PR=$(gh pr list --head "$FEATURE_BRANCH" --base dev --state open \
+              --json number --jq '.[0].number // empty' 2>/dev/null || true)
+            if [ -n "$OPEN_PR" ]; then
+              echo "PR #$OPEN_PR is still open; dev is not this run's to sweep."
+            else
+              echo "::warning::No PR found for $FEATURE_BRANCH; skipping the dev signal-file sweep."
+            fi
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          for attempt in 1 2 3; do
+            git fetch origin dev 2>/dev/null || true
+            # No `|| true` here: if the checkout fails, the git rm and commit
+            # below would act on the feature branch's tree instead of dev's.
+            git checkout -B dev "origin/dev" > /dev/null 2>&1 || { sleep "$attempt"; continue; }
+            git rm -f --ignore-unmatch $SWEEP > /dev/null 2>&1 || true
+
+            # Nothing staged means dev was already clean, which is the common
+            # case: no commit, no push, no noise in dev's history.
+            if git diff --cached --quiet; then
+              echo "dev carries no signal files."
+              exit 0
+            fi
+
+            LEAKED=$(git diff --cached --name-only | tr '\n' ' ')
+            git commit -q -m "chore: remove signal files"
+            if git -c "http.https://github.com/.extraheader=" push origin dev; then
+              echo "::warning::Signal files reached dev and were removed: $LEAKED"
+              exit 0
+            fi
+            sleep "$attempt"
+          done
+
+          echo "::warning::Could not push the dev signal-file sweep after 3 attempts."
+
       - name: Delete source claude/ branch
         run: git push origin --delete ${{ github.ref_name }} || true

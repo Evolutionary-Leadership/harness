@@ -171,12 +171,18 @@ Each feature gets a fully isolated Railway environment:
 - Cleaned up automatically (including Postgres and bucket) when the
   feature is merged
 - Preview URL stored in `.railway-url` on the feature branch. The
-  publishing step in `feature-branch-railway.yml` is idempotent (no-op
-  when `.railway-url` already exists) and self-healing: any future run
-  on a stranded branch will look up the existing environment and commit
-  the missing `.railway-url`. Concurrent pushes to the same `claude/...`
-  branch *queue* instead of cancelling, so a new push never interrupts
-  a Railway GraphQL mutation in flight.
+  publishing step in `feature-branch-railway.yml` is idempotent by
+  **content**: it resolves this environment's domain and rewrites the
+  file whenever the file does not name it, so a branch that inherited a
+  stale URL from `dev` corrects itself on its first run rather than
+  pointing at a destroyed environment. A run that cannot resolve the
+  domain leaves the file alone and warns. Concurrent pushes to the same
+  `claude/...` branch *queue* instead of cancelling, so a new push never
+  interrupts a Railway GraphQL mutation in flight.
+- `/mergedev` does not provision. Its push is skipped by
+  `feature-branch-railway.yml`, because that push tears the environment
+  down. `/review` is not skipped: a PR opened for review keeps its
+  environment and its preview URL until it is merged.
 - Deployment triggers are self-healing too: every provisioning run
   re-checks the environment's deployment triggers and repoints any that
   still target `dev` at `feature/<name>`, then redeploys the app service
@@ -351,8 +357,11 @@ staleness is not. Sections:
 - **Out of scope**: the boundary the grill settled.
 - **Tracker**: spec issue, ticket issues and their state, the idea issue
   if one started this.
-- **Exit route**: `/mergedev` or `/review`, once chosen; "awaiting human
-  review" while a `/review` PR is open.
+- **Exit route**: `/mergedev`, `/review` or `/release`, once chosen;
+  "awaiting human review" while a `/review` PR is open.
+- **Autonomy granted**: whether grill autonomy or phase autopilot was used,
+  so a reader knows why a phase carries no approvals. It is a record, not a
+  setting: a resumed session never re-arms either.
 
 Link issues by `#number` or URL; never use relative markdown links in
 this file.
@@ -470,7 +479,7 @@ These files are maintained by the harness and replaced on
 | `.claude/skills/brainstorm/SKILL.md` | `/brainstorm` skill: standalone grilling that writes to the tracker only |
 | `.claude/skills/mergedev/SKILL.md` | `/mergedev` skill: merge to dev; owns the merge-conflict discipline and retires the feature context |
 | `.claude/skills/review/SKILL.md` | `/review` skill: submit PR for team review, with `/code-review` findings in the body |
-| `.claude/skills/release/SKILL.md` | `/release` skill: ship dev to production |
+| `.claude/skills/release/SKILL.md` | `/release` skill: ship dev to production; from an unmerged `claude/` branch it also runs the merge and waits for `dev` to settle first |
 | `.claude/skills/hotfix/SKILL.md` | `/hotfix` skill: emergency production fix |
 | `.claude/skills/status/SKILL.md` | `/status` skill: team dashboard |
 | `.claude/skills/changelog/SKILL.md` | `/changelog` skill: generate changelog |

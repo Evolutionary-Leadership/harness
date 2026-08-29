@@ -2,8 +2,8 @@
 name: release
 description: Ship dev to production. Create a release PR, tag a version, and generate a GitHub Release. Production Railway deploys automatically.
 disable-model-invocation: true
-argument-hint: "[optional: major|minor|patch (default: patch)]"
-allowed-tools: Bash(git *), Read, Write, Edit, Glob, Grep, mcp__github__push_files
+argument-hint: "[optional: major|minor|patch (default: patch)] [--quick]"
+allowed-tools: Bash(git *), Read, Write, Edit, Glob, Grep, AskUserQuestion, mcp__github__push_files
 ---
 
 # Release to production
@@ -12,8 +12,16 @@ Push a release commit directly to dev via the GitHub MCP server. The
 `release.yml` workflow then creates a PR from dev to main, merges it,
 tags the version, and creates a GitHub Release.
 
-**Important:** This skill pushes directly to dev. It does NOT go through
-the mergedev workflow chain.
+**Important:** This skill pushes directly to dev. On `dev` it does NOT go
+through the mergedev workflow chain.
+
+**This skill knows where it is being run from.** Releasing is not a local
+act: it ships everything sitting on `dev`, not just your own work. Two
+things follow, and they are steps 1, 3 and 4 below. Every run reports its
+**blast radius**, so nobody ships a colleague's half-finished feature
+without seeing it. And a run started from a `claude/` branch whose work
+has not landed asks one deliberate question before taking the feature all
+the way to `main` in one go.
 
 **Why MCP and not `git push`:** In the harness sandbox, `origin` is a
 local git proxy that only allows pushes to the current session's
@@ -25,7 +33,7 @@ single code path for both environments.
 
 ## Steps
 
-### 1. Preflight checks
+### 1. Preflight and situation
 
     CURRENT_BRANCH=$(git branch --show-current)
 
@@ -33,13 +41,32 @@ Abort with a clear message if the current branch is `main`; you cannot
 release from main.
 
 Determine the GitHub owner and repo from the remote URL, you will need
-them for the MCP call in step 7:
+them for the MCP call in step 9:
 
     REMOTE_URL=$(git config --get remote.origin.url)
 
 The owner/repo is the last two path components (e.g.
 `some-org/some-repo`), regardless of whether the remote points at
 github.com or the harness local proxy.
+
+**Parse `$ARGUMENTS` for `--quick`** as well as the version type. `--quick`
+is the user asserting they have already thought about what this ships. It
+skips the question in step 4. It does not skip the report in step 3.
+
+**Work out the situation**, because the next three steps differ by it:
+
+    git fetch origin dev main --tags
+    git log origin/dev..HEAD --oneline
+
+| Situation | How to tell | What it means |
+|---|---|---|
+| **On `dev`** | `CURRENT_BRANCH` is `dev` | The ordinary release. Everything being shipped is already on `dev` |
+| **Landed feature** | on a `claude/` branch, and `git log origin/dev..HEAD` is empty | This session's work is already merged. Behaves exactly like the `dev` case |
+| **Unlanded feature** | on a `claude/` branch with commits not on `dev` | The chain case: this feature has to reach `dev` before it can reach `main`. Steps 4 and 8 handle it |
+
+Anything else (a `feature/` branch, a detached head, a hand-made branch)
+is the unlanded case if it has commits `dev` does not, and the landed case
+if it does not.
 
 ### 2. Determine version
 
@@ -56,14 +83,122 @@ Parse the version type from `$ARGUMENTS` (default: `patch`):
 
 Calculate the new version accordingly. Store it as `$NEW_VERSION`.
 
-### 3. Check for changes
+### 3. Compute the blast radius
+
+**Do this on every run, from every branch, including under `--quick`.**
+This is the step that answers "what am I actually shipping", and the
+answer is almost never "my feature".
 
     git log "$LAST_TAG"..origin/dev --oneline
 
-If there are no commits between the last tag and origin/dev, abort with:
-"Nothing to release: dev and main are at the same point."
+That range is everything already queued on `dev` for the next release.
+Group it by the pull request each commit merged in (`git log
+"$LAST_TAG"..origin/dev --merges --oneline` gives the merge commits; the
+PR number is in their subject), and count it.
 
-### 4. Generate release notes
+If that returns nothing, the repo squash-merges and there are no merge
+commits to group by. Do not report "no pull requests": fall back to the
+`(#NN)` reference in each commit subject, and where even that is absent,
+list the commits ungrouped. An empty grouping must never read as an empty
+blast radius.
+
+In the unlanded case, add this feature's own commits, which are not in
+that range yet:
+
+    git log origin/dev..HEAD --oneline
+
+Present the two groups **distinctly labelled**, because they carry
+different risk:
+
+- **Yours**: the commits from this session, which you know the state of.
+- **Riding along**: everything else in the range, merged by someone else,
+  which you are shipping to production whether or not you have looked at
+  it. Name each PR and its author.
+
+Then a one-line count: "N commits across M pull requests, K of them yours."
+
+If both groups are empty, abort with: "Nothing to release: dev and main
+are at the same point."
+
+Hold this report. Step 4 uses it as the body of the question, and step 10
+prints it in the summary whether or not step 4 ran.
+
+### 4. Confirm, unless `--quick`
+
+Skip this step entirely when `--quick` was passed, and when the situation
+is `dev` or landed-feature with nothing riding along that the user has not
+already seen. Otherwise ask exactly one question with `AskUserQuestion`,
+with the step 3 report as its body.
+
+In the **unlanded** case, the question names the whole path explicitly:
+this takes the feature from its branch, to `dev`, to `main`, and tags a
+release, in one command. Say that the merge to `dev` happens first and
+that everything riding along ships with it.
+
+In the **dev** and **landed** cases, ask only when something is riding
+along: "this ships N commits you did not write, listed above". A release
+of only your own reviewed work needs no question.
+
+If the user declines, stop. Do not offer a partial release; there is no
+such thing.
+
+### 5. Unlanded case only: run the merge, then wait for dev to settle
+
+Skip this step entirely in the `dev` and landed-feature cases.
+
+The feature has to reach `dev` before it can reach `main`, and `dev` has to
+come to rest before the release can be composed from it.
+
+**Run the merge by following the merge skill's own file:**
+
+Read `.claude/skills/mergedev/SKILL.md` and work its steps in order.
+
+That means all of them: resolve the feature name, merge `dev` in and
+resolve conflicts with its discipline, run the docs-updater agent, retire
+the feature context, write `.pr-description.md`, push the branch, then push
+the signal file. Do not reimplement any of it here; a second copy of the
+conflict discipline and the docs audit would drift from the first.
+
+Following a user-invoked skill's file is deliberate and is recorded in ADR
+0017. `disable-model-invocation` gates the Skill tool, not a file read, and
+the authorization is the user's answer in step 4 (or their `--quick`).
+
+**Then wait: merge, then settle.**
+
+    git fetch origin dev
+    git merge-base --is-ancestor <the merge commit> origin/dev
+
+Poll that until the merge is an ancestor of `origin/dev`. Then keep
+fetching until `origin/dev`'s tip has stopped moving for about a minute.
+Cap the whole wait at about ten minutes.
+
+The settle window is the point, and it is not padding. In this authoring
+repo `harness-version-bump.yml` fires on the same merge and rewrites
+`CHANGELOG.md` on `dev` a moment later; downstream scaffolds ship no
+version bump (`templates/harness/base/workflows/` has none), so their
+settle ends at once. One rule covers both. Skipping it is not a cosmetic
+risk: step 9 pushes a `CHANGELOG.md` composed from whatever tip you read,
+so composing before the bump lands overwrites the bump's entry.
+
+**On timeout, stop.** Say plainly which of these happened, and that no
+release was cut either way:
+
+- The merge landed but `dev` never settled: re-run `/release` from `dev`
+  once it is quiet. The feature is safe on `dev`; only the release is
+  outstanding.
+- The merge never landed: the mergedev workflow has not finished or has
+  failed. Point at its recovery section ("If the workflow fails" in the
+  merge skill), which owns that diagnosis.
+
+Do not push a release after a timeout on the assumption it will be fine.
+
+**Recompute from the settled tip.** Everything after this step reads
+`origin/dev` again. The blast radius from step 3 was measured before the
+merge, so the feature's commits have moved from "yours, not yet on dev"
+into the range itself; say so when you print it in step 10 rather than
+showing a stale split.
+
+### 6. Generate release notes
 
 Gather commit messages and categorize them into:
 - **Features**: new functionality (commits containing "feat", "add", "new")
@@ -72,7 +207,7 @@ Gather commit messages and categorize them into:
 
 Keep notes concise. Use commit subject lines only.
 
-### 5. Build the new CHANGELOG.md content
+### 7. Build the new CHANGELOG.md content
 
 Read the current CHANGELOG.md from dev (in case the working tree is
 stale or the file does not exist locally):
@@ -99,13 +234,27 @@ Format:
     - Refactor auth module
 
 Hold the full new content in memory as `$CHANGELOG_CONTENT`. You may
-optionally write it to the local working tree for inspection; step 7
+optionally write it to the local working tree for inspection; step 9
 will revert any working-tree changes before the skill exits.
 
-### 6. Build `.release-description.md` content
+### 8. Build `.release-description.md` content
 
 This is a single signal file at the repo root (NOT `.pr-description.md`).
 Hold its content in memory as `$RELEASE_DESC_CONTENT`:
+
+When the chain ran from a `claude/` branch (step 5), add a
+`cleanup-branch:` key naming that branch:
+
+    ---
+    version: v1.3.0
+    type: minor
+    cleanup-branch: claude/<name>
+    ---
+
+`release.yml` parses that key and deletes the branch server-side with the
+harness PAT, which is the only deletion path that works from inside the
+sandbox. Omit the key entirely in the `dev` and landed-feature cases;
+there is no orphan to clean up.
 
     ---
     version: v1.3.0
@@ -120,7 +269,7 @@ Hold its content in memory as `$RELEASE_DESC_CONTENT`:
     ### Fixes
     - Fix login redirect bug (#43)
 
-### 7. Push directly to dev via the GitHub MCP server
+### 9. Push directly to dev via the GitHub MCP server
 
 This is the critical step. Do NOT use `git push origin dev`: the
 harness proxy rejects it with HTTP 403, and even outside the harness
@@ -133,15 +282,15 @@ Call `mcp__github__push_files` with:
 - `branch`: `dev`
 - `message`: `chore: release $NEW_VERSION`
 - `files`: an array with exactly these two entries:
-  - `{ path: "CHANGELOG.md", content: <CHANGELOG_CONTENT from step 5> }`
-  - `{ path: ".release-description.md", content: <RELEASE_DESC_CONTENT from step 6> }`
+  - `{ path: "CHANGELOG.md", content: <CHANGELOG_CONTENT from step 7> }`
+  - `{ path: ".release-description.md", content: <RELEASE_DESC_CONTENT from step 8> }`
 
 The MCP call creates a single commit on origin/dev with both files. It
 does not modify the local working tree or local refs.
 
 After the call succeeds, leave the working tree clean:
 
-    # Discard any local edits made while composing the files in steps 5 and 6
+    # Discard any local edits made while composing the files in steps 7 and 8
     git checkout -- CHANGELOG.md 2>/dev/null || true
     rm -f .release-description.md
 
@@ -157,7 +306,7 @@ If `mcp__github__push_files` returns an error, do NOT fall back to
 to the user and stop. The working tree should still be clean because
 nothing was committed locally.
 
-### 8. Inform the user
+### 10. Inform the user
 
 Tell the user:
 - The release commit was pushed to `dev` via the GitHub API
@@ -167,10 +316,18 @@ Tell the user:
   2. Merge the PR
   3. Tag version `$NEW_VERSION` and create a GitHub Release
 - Share the version number and key changes.
+- **Print the step 3 blast-radius report**, whether or not step 4 asked
+  anything. `--quick` skips the question, never the record: after the
+  fact, "what shipped" has to be answerable.
 - If main has branch protection with required checks, the merge will
   wait for checks to pass (auto-merge).
 
-### 9. Best-effort orphan branch cleanup
+### 11. Best-effort orphan branch cleanup
+
+**`cleanup-branch:` does the `claude/` branch already.** When step 8 wrote
+that key, `release.yml` deletes that branch server-side with the harness
+PAT once the release lands. This step is about what is left over, and
+about the case where no key was written.
 
 A `claude/<name>` session creates a `feature/<name>` branch and Railway
 environment only once it pushes (the slug commit from
@@ -193,13 +350,18 @@ Attempt deletion, but treat it as best-effort:
 **Harness limitation:** The local git proxy rejects deletes of branches
 it does not consider session-owned (HTTP 403), and there is no
 GitHub-MCP tool for deleting a branch. Expect these deletes to fail in
-the sandbox. If they do, mention to the user that the orphan
-`feature/<name>` (and possibly `claude/<name>`) branches may need to be
-cleaned up manually on GitHub, or will be cleaned up by the workflows
-that respond to the dev push.
+the sandbox.
+
+What to tell the user when they do fail depends on step 8. If
+`cleanup-branch:` was written, the `claude/` branch is the workflow's
+problem now and needs no mention; say only that `feature/<name>` may
+linger. If it was not (the `dev` and landed-feature cases), fall back to
+the old advice: the orphan branches may need cleaning up by hand on
+GitHub, or will be cleaned up by the workflows that respond to the dev
+push.
 
 The working tree must be clean when the skill exits. If anything was
-left modified by step 5 or step 6, revert it now:
+left modified by step 7 or step 8, revert it now:
 
     git checkout -- CHANGELOG.md 2>/dev/null || true
     rm -f .release-description.md

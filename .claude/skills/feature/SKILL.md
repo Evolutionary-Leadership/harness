@@ -57,6 +57,42 @@ Rules for a gate:
 - At every gate, refresh the feature-context file and push (see "The
   feature context" below).
 
+### Phase autopilot
+
+The phase 1 gate carries a fourth option: **from here on out, go all the
+way to implement**. Taking it auto-advances the phase 2, 3 and 4 gates and
+stops at the phase 5 exit gate.
+
+Under autopilot, everything a gate *does* still happens; only the stopping
+stops. Refresh the feature context at every phase boundary and push it.
+Report what each phase produced (the spec link, the ticket list, the diff
+summary and review findings) as you pass through, so the user reading back
+sees the same trail they would have approved. Where a phase skill asks the
+user something of its own, `/to-tickets`' granularity quiz above all,
+answer it with your own recommendation and say that you did; never drop the
+question silently.
+
+**Autopilot ends at phase 5, always.** It advances gates; it never runs an
+exit. The user still chooses `/mergedev`, `/review` or `/release` with the
+diff, the check result and the `/code-review` findings in front of them,
+because that gate is the last thing standing between this session and
+`dev`.
+
+**Autopilot and grill autonomy are two switches, not one.** Autonomy (in
+`/grilling`) answers questions *inside* phase 1. Autopilot advances phase
+*gates*. Granting autonomy mid-grill still brings the user the phase 1
+gate, because that gate is the one place the whole settled design is
+visible in one piece before it becomes tickets and code.
+
+Going backwards stays allowed under autopilot. If phase 3 exposes a hole,
+return to phase 1 for that branch of the tree; autopilot is a reason to
+keep moving, never a reason to build on a gap.
+
+**Autopilot does not survive the session.** Record in the feature context
+that it was used, so a reader knows why phases 2 to 4 carry no approvals. A
+resumed `/continue` session does not re-arm it: a switch the user flipped
+yesterday must not drive a session they start today.
+
 ## The feature context
 
 The committed file `.harness/feature-context/<slug>.md` is this feature's
@@ -66,7 +102,7 @@ live in `.claude/HARNESS.md`; the short version:
 - Phase 0 creates it. It is a rewritten summary, never an append-only
   log: current phase, next step, decisions settled (with what was
   rejected and why), open frontier, scope boundary, tracker links, exit
-  route once chosen.
+  route once chosen, and whether autopilot or grill autonomy was granted.
 - Refresh it whenever finished work changes what a fresh reader would
   need: a decision settled, a ticket landed, direction changed. Commit a
   refresh that touches only this file with the message prefix
@@ -178,7 +214,9 @@ Phase 1 is done when the grill is **satisfied**, which means all of:
 
 If you cannot say all four, you are not done. Keep asking.
 
-Then gate.
+Then gate. This gate offers four options, not three: continue to phase 2,
+**go all the way to implement** (phase autopilot, above), stay in phase 1,
+or revise a settled decision.
 
 ## Phase 2: spec
 
@@ -239,10 +277,35 @@ Then ask the user which exit they want, using `AskUserQuestion`:
   `.harness-version` has no `reviewers:` field.
 - **`/review`**: open a PR that waits for human review. The default
   suggestion when `.harness-version` configures `reviewers:`.
+- **`/release`**: merge to dev and ship to production in one go. Offered
+  always, suggested never; the user picks this one deliberately or not at
+  all. Its own confirmation still applies, so they will see the release's
+  blast radius (everything queued on `dev`, not just this feature) before
+  anything reaches `main`.
 
-Suggest the default for this repo, but always ask; never assume. Record
-the chosen exit in the feature context, push it, and run the chosen
-skill.
+Suggest the default for this repo, but always ask; never assume.
+
+Then **run the chosen exit**. Record it in the feature context and push
+that first, because the exit merges the branch out from under you.
+
+**Running it means reading that skill's `SKILL.md` and following its steps
+in order, to the end**, trigger push included:
+
+| Answer | Follow |
+|---|---|
+| `/mergedev` | `.claude/skills/mergedev/SKILL.md` |
+| `/review` | `.claude/skills/review/SKILL.md` |
+| `/release` | `.claude/skills/release/SKILL.md` |
+
+These are user-invoked skills, so the Skill tool will not fire them and
+you must not try. A `SKILL.md` is a file; read it and do what it says.
+This is deliberate and is recorded in ADR 0017:
+`disable-model-invocation` exists to stop an unprompted auto-fire, and the
+user's answer at this gate is the authorization it was waiting for. No
+skill's frontmatter changes, and nothing here fires without that answer.
+
+Autopilot, if it was granted at the phase 1 gate, ends at this question.
+It advances gates; it never picks an exit.
 
 ## Quick mode (escape hatch)
 

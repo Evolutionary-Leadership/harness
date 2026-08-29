@@ -185,8 +185,11 @@ staleness is not. Sections:
 - **Out of scope**: the boundary the grill settled.
 - **Tracker**: spec issue, ticket issues and their state, the idea issue
   if one started this.
-- **Exit route**: `/mergedev` or `/review`, once chosen; "awaiting human
-  review" while a `/review` PR is open.
+- **Exit route**: `/mergedev`, `/review` or `/release`, once chosen;
+  "awaiting human review" while a `/review` PR is open.
+- **Autonomy granted**: whether grill autonomy or phase autopilot was used,
+  so a reader knows why a phase carries no approvals. It is a record, not a
+  setting: a resumed session never re-arms either.
 
 Link issues by `#number` or URL; never use relative markdown links in
 this file.
@@ -294,7 +297,7 @@ These files are maintained by the harness and replaced on
 | `.claude/skills/brainstorm/SKILL.md` | `/brainstorm` skill: standalone grilling that writes to the tracker only |
 | `.claude/skills/mergedev/SKILL.md` | `/mergedev` skill: merge to dev; owns the merge-conflict discipline and retires the feature context |
 | `.claude/skills/review/SKILL.md` | `/review` skill: submit PR for team review, with `/code-review` findings in the body |
-| `.claude/skills/release/SKILL.md` | `/release` skill: ship dev to production |
+| `.claude/skills/release/SKILL.md` | `/release` skill: ship dev to production; from an unmerged `claude/` branch it also runs the merge and waits for `dev` to settle first |
 | `.claude/skills/hotfix/SKILL.md` | `/hotfix` skill: emergency production fix |
 | `.claude/skills/status/SKILL.md` | `/status` skill: team dashboard |
 | `.claude/skills/changelog/SKILL.md` | `/changelog` skill: generate changelog |
