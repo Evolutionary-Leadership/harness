@@ -60,6 +60,49 @@ jobs:
           # Extract body (everything after second ---)
           awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' .release-description.md > /tmp/release-body.md
 
+      - name: Check the downstream release notes
+        run: |
+          set -euo pipefail
+
+          # The template repo publishes its own release notes, written for
+          # downstream projects rather than for this repo, from
+          # release-notes/<version>.md. The sync composes and publishes it;
+          # this is where a mistake is still cheap to fix, before preprod moves.
+          #
+          # Both a malformed and a missing note fail the release. Malformed
+          # because the sync would reject it later, after main has already
+          # moved. Missing because a release that publishes no note leaves
+          # the template repo carrying new content under the previous
+          # release, which is what happened at 0.7.2: this step warned, the
+          # release shipped, and the releases page sat a version behind
+          # until somebody noticed. The note is generated from the changelog
+          # and migration range now, so a missing one means generation was
+          # skipped rather than that anyone forgot to write prose.
+          #
+          # Skips itself where VERSION or the composer is absent, so this
+          # step stays harmless in the base template's copy of this file,
+          # which no downstream scaffold can satisfy.
+          #
+          # Forge decision records 0020 and 0023.
+          if [ ! -f VERSION ] || [ ! -f scripts/compose-release-notes.mjs ]; then
+            exit 0
+          fi
+
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          NOTES="release-notes/${VERSION}.md"
+
+          if [ ! -f "${NOTES}" ]; then
+            echo "::error::${NOTES} is missing, so the template repo would sync new content and publish no release. Generate it: node scripts/release-notes-brief.mjs --version ${VERSION}, then compose the note per release-notes/README.md."
+            exit 1
+          fi
+
+          if ! node scripts/compose-release-notes.mjs --notes "${NOTES}" > /dev/null; then
+            echo "::error::${NOTES} is malformed; fix it before releasing. Rules: release-notes/README.md."
+            exit 1
+          fi
+          echo "Downstream release note for ${VERSION} is valid." >> "$GITHUB_STEP_SUMMARY"
+
+
       - name: Remove signal file
         if: hashFiles('.release-description.md') != ''
         run: |

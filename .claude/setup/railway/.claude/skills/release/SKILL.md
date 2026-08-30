@@ -265,6 +265,46 @@ Hold the full new content in memory as `$CHANGELOG_CONTENT`. You may
 optionally write it to the local working tree for inspection; step 9
 will revert any working-tree changes before the skill exits.
 
+### 7b. Generate the downstream release note
+
+**Skip this step entirely where `release-notes/` or
+`scripts/release-notes-brief.mjs` is absent.** Only the authoring repo
+publishes to a template repo; a downstream project has neither, and this
+step is written to disappear there rather than to be deleted.
+
+Where they exist, the note is **required**: `release.yml` fails the
+release when `release-notes/$NEW_VERSION.md` is missing, because a
+release that publishes no note leaves the template repo carrying new
+content under the previous release (forge decision record 0023).
+
+Gather the material rather than recalling it:
+
+    node scripts/release-notes-brief.mjs --version <version without the leading v>
+
+The brief spans every bump since the last published note and, per
+version, gives the changelog prose plus what the migration says actually
+changed. Two of its markers decide what reaches the note:
+
+- **`factory only, omit from the note`**: that version changed nothing
+  under `templates/`, so a downstream project cannot act on it. Leave its
+  prose out entirely.
+- **`railway only`**: prefix those bullets with `**Railway only:** `.
+
+Then write `release-notes/$NEW_VERSION.md` from the brief, following
+`release-notes/README.md`: the five sections in order, omitting any that
+would be empty, saying what a reader can do or must know rather than
+which file moved. The changelog prose is written for maintainers, so
+rewrite it for someone who runs a scaffolded project and has never seen
+this repository. Never carry across an issue reference, a repository
+name, or an em dash; the composer rejects all three.
+
+Validate before going further, which is the same check `release.yml` and
+the sync will run:
+
+    node scripts/compose-release-notes.mjs --notes release-notes/$NEW_VERSION.md
+
+Fix anything it reports. Step 9 carries the file in the release commit.
+
 ### 8. Build `.release-description.md` content
 
 This is a single signal file at the repo root (NOT `.pr-description.md`).
@@ -311,6 +351,8 @@ Call `mcp__github__push_files` with:
 - `message`: `chore: release $NEW_VERSION`
 - `files`: always
   `{ path: ".release-description.md", content: <RELEASE_DESC_CONTENT from step 8> }`,
+  plus `{ path: "release-notes/<version>.md", content: <the note from step 7b> }`
+  whenever step 7b ran (the release fails without it),
   plus **exactly one** of:
   - `{ path: "CHANGELOG.md", content: <CHANGELOG_CONTENT from step 7> }` when
     step 7 composed one.
