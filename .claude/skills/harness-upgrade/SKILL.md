@@ -177,13 +177,17 @@ entry, determine its relevance to this project:
   skills list both variants; overlay skills list `harness-railway` only)
 - `scope: docs` where `VARIANT` appears in `affects.variants`
 
-Exception: changes whose files live under `templates/harness/setup/`
-describe the one-shot `/setup` skill and the pre-built foundation
-payload it materializes. In a configured repository the skill has
-already run and deleted itself (taking the quarantine with it), and any
+Exception: changes whose files live under `templates/harness/setup/`,
+plus the spine script `templates/harness/base/claude/scripts/setup.sh`
+(landing at `.claude/scripts/setup.sh`), describe the one-shot `/setup`
+skill, its deterministic spine, and the pre-built foundation payload it
+materializes. In a configured repository the skill has already run and
+deleted itself (taking the quarantine AND the spine with it), and any
 materialized foundation files are user-owned application code, so treat
 these changes as **INFORMATIONAL** regardless of scope. Never write
-`setup/` payload files into a configured repository.
+`setup/` payload files or `.claude/scripts/setup.sh` into a configured
+repository; a restored spine would sit armed in a repo that must never
+run it again.
 
 **STARTER (skip-if-exists)**: write-once scaffold files for this variant:
 - `scope: starter` where `VARIANT` appears in `affects.variants`

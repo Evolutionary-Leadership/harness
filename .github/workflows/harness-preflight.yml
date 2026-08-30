@@ -35,8 +35,9 @@ name: "0. Harness preflight (verifies tokens before /setup mutates anything)"
 
 on:
   workflow_dispatch:
-  # Sentinel fallback for sessions without the GitHub MCP dispatch tool:
-  # /setup pushes a one-line .harness-preflight to preprod and this fires.
+  # Sentinel dispatch: the /setup spine (.claude/scripts/setup.sh) pushes
+  # a one-line .harness-preflight to preprod and this fires. An agent
+  # whose sentinel push is rejected dispatches this workflow directly.
   push:
     branches: [preprod]
     paths:
@@ -124,16 +125,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # The sentinel is single-fire either way: a rerun rewrites it with
-          # a fresh timestamp. On pass the workflow file goes too; deleting
-          # a workflow file over the PAT is itself the probe for the PAT's
-          # workflows permission, exercised here as the real operation
-          # harness-railway.yml's cleanup will perform later.
-          git rm -q --ignore-unmatch .harness-preflight
-          if [ "$VERDICT" = "pass" ]; then
-            git rm -q --ignore-unmatch .github/workflows/harness-preflight.yml
-          fi
-
           # Workspace lines come last: the fixed keys stay at a predictable
           # offset from the subject however many workspaces the account has.
           compose_body() {
@@ -145,16 +136,52 @@ jobs:
             return 0
           }
 
-          git commit -q --allow-empty -m "chore: harness preflight result" -m "$(compose_body "$VERDICT")"
-
-          if ! git push origin preprod; then
-            # A rejected pass-push most likely means the PAT cannot write
-            # workflow files. Rebuild the commit without the self-delete and
-            # report that instead of timing out silently.
-            git reset -q --hard origin/preprod
+          # The sentinel is single-fire either way: a rerun rewrites it with
+          # a fresh timestamp. On pass the workflow file goes too; deleting
+          # a workflow file over the PAT is itself the probe for the PAT's
+          # workflows permission, exercised here as the real operation
+          # harness-railway.yml's cleanup will perform later.
+          #
+          # build_result rebuilds the deletions and the commit on whatever
+          # tip is checked out. --ignore-unmatch and --allow-empty make it
+          # idempotent on a tip where the deletions already landed.
+          build_result() {
             git rm -q --ignore-unmatch .harness-preflight
+            if [ "$1" = "pass" ]; then
+              git rm -q --ignore-unmatch .github/workflows/harness-preflight.yml
+            fi
+            git commit -q --allow-empty -m "chore: harness preflight result" -m "$(compose_body "$1")"
+          }
+
+          build_result "$VERDICT"
+
+          # Push with a refetch-reset-rebuild retry. A concurrent preprod
+          # push (for example a bootstrap sentinel-clear landing between
+          # this job's checkout and its push) must read as "try again on
+          # the new tip", never as a verdict about the PAT.
+          PUSHED=false
+          for attempt in 1 2 3; do
+            if git push origin preprod; then
+              PUSHED=true
+              break
+            fi
+            echo "Result push attempt $attempt rejected; rebuilding on the fresh preprod tip."
+            git fetch origin preprod
+            git reset -q --hard origin/preprod
+            build_result "$VERDICT"
+            sleep "$attempt"
+          done
+
+          if [ "$PUSHED" != true ]; then
+            # Three rejections on a refreshed tip: the push itself is being
+            # refused, and a pass-push deletes this workflow file, so the
+            # likely cause is the PAT lacking the workflows permission.
+            # Rebuild without the self-delete and report that instead of
+            # timing out silently.
+            git fetch origin preprod
+            git reset -q --hard origin/preprod
             DETAIL="${DETAIL}pat-workflows: denied (push deleting this workflow file was rejected)\n"
-            git commit -q --allow-empty -m "chore: harness preflight result" -m "$(compose_body fail)"
+            build_result fail
             git push origin preprod || {
               echo "::error::Preflight could not push its result commit to preprod. PAT_TOKEN likely lacks Contents: Read and write."
               exit 1

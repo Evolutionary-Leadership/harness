@@ -55,10 +55,10 @@ rather than configured.
 - The OAuth tables and the JWKS table are part of this app's schema, and
   `src/lib/db/schema/oauth.ts` is generated from the plugins rather than
   hand-written.
-- Every environment serves the endpoint identically. Dev and feature previews
-  carry the public demo login, so an agent can obtain a real token there; that
-  is deliberate, and the existing rule that those environments hold no real
-  data is what makes it safe.
+- Every environment serves the endpoint identically. Preprod and feature
+  previews carry the public demo login, so an agent can obtain a real token
+  there; that is deliberate, and the existing rule that those environments
+  hold no real data is what makes it safe.
 
 ## Threat model
 

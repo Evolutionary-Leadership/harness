@@ -25,16 +25,27 @@ name: "0. Harness bootstrap (guarantees the three branches)"
 # repository that already has all three branches passes through untouched.
 # /setup dispatches it before its own configuration commit.
 #
-# The steps run in a deliberate order. The sentinel is cleared FIRST, while
+# The steps run in a deliberate order. The sentinel is handled FIRST, while
 # the working tree still holds it: the orphan checkout further down empties
 # the tree, so anything that tested for the file afterwards would always
 # come back false and the sentinel would linger and re-fire this workflow.
+#
+# The sentinel has one owner per trigger path. This workflow clears it ONLY
+# when .github/workflows/harness-railway.yml is absent from the tree. When
+# that file is present, the same push that fired this workflow also fired
+# provisioning, which reads the sentinel's foundation and workspace lines
+# and deletes it in its own cleanup commit; clearing it here as well used
+# to race that cleanup's push to preprod and silently sink it. A sentinel
+# that lingers after FAILED provisioning is correct: the documented
+# recovery is to re-commit it with a fresh timestamp, which re-fires
+# provisioning.
 
 on:
   workflow_dispatch:
-  # Sentinel fallback for sessions without the GitHub MCP dispatch tool:
-  # push a one-line .harness-bootstrap to the default branch and this fires.
-  # Mirrors the shape harness-preflight.yml uses for the same reason.
+  # Sentinel dispatch: the /setup spine (.claude/scripts/setup.sh) pushes
+  # a one-line .harness-bootstrap to the default branch and this fires.
+  # Mirrors the shape harness-preflight.yml uses. An agent whose sentinel
+  # push is rejected dispatches this workflow directly instead.
   push:
     paths:
       - .harness-bootstrap
@@ -67,13 +78,37 @@ jobs:
 
           exists() { git ls-remote --exit-code --heads origin "$1" >/dev/null 2>&1; }
 
-          # 0. Clear the sentinel while the tree still has it. See the note
-          #    in the header for why this cannot wait until the end.
-          if [ -f .harness-bootstrap ]; then
+          # 0. Handle the sentinel while the tree still has it. See the note
+          #    in the header for why this cannot wait until the end, and for
+          #    the ownership rule: when harness-railway.yml rode in on the
+          #    same push, provisioning owns the sentinel and deletes it in
+          #    its cleanup commit, so clearing it here would race that push.
+          if [ -f .harness-bootstrap ] && [ ! -f .github/workflows/harness-railway.yml ]; then
             git rm -f .harness-bootstrap >/dev/null
             git commit -q -m "chore: remove bootstrap sentinel"
-            git push origin "HEAD:$DEFAULT"
+            # Retry over a moving default branch: the /setup session keeps
+            # pushing (preflight sentinel, configuration commit) while this
+            # runs, so rebase onto whatever landed and try again. A clear
+            # that is already upstream rebases to nothing and the push
+            # no-ops. Still failing after three attempts is a real error
+            # and set -e makes it fail the job.
+            CLEARED=false
+            for attempt in 1 2 3; do
+              if git push origin "HEAD:$DEFAULT"; then
+                CLEARED=true
+                break
+              fi
+              git fetch origin "$DEFAULT"
+              git rebase "origin/$DEFAULT" || { git rebase --abort || true; }
+              sleep "$attempt"
+            done
+            if [ "$CLEARED" != true ]; then
+              echo "::error::Could not push the sentinel removal to $DEFAULT."
+              exit 1
+            fi
             echo "sentinel: removed"
+          elif [ -f .harness-bootstrap ]; then
+            echo "sentinel: present but harness-railway.yml owns it; leaving it for provisioning's cleanup"
           fi
 
           # 1. main, so release.yml has a base for its release PR.

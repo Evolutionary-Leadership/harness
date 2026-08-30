@@ -2,14 +2,16 @@ name: "00. Create Railway environments (one time only for a fresh repository)"
 
 on:
   workflow_dispatch:
-  # Sentinel-file trigger: lets a fresh Claude Code session bootstrap
-  # provisioning via the GitHub MCP server (which has create_or_update_file
-  # but no workflow_dispatch tool). Claude writes .harness-bootstrap to preprod
-  # (timestamp, the /setup foundation answer, and on a multi-workspace
-  # Railway account the workspace the user picked); this push fires the
-  # workflow. The cleanup step at the end
+  # Sentinel-file trigger: /setup's spine (.claude/scripts/setup.sh) writes
+  # .harness-bootstrap to preprod (timestamp, the /setup foundation answer,
+  # and on a multi-workspace Railway account the workspace the user
+  # picked); this push fires the workflow. While this workflow file is in
+  # the tree, the sentinel belongs to it alone: harness-bootstrap.yml sees
+  # the file and leaves the sentinel for the cleanup step here, which
   # deletes both this workflow file and .harness-bootstrap, so the trigger
-  # can never re-fire after a successful run.
+  # can never re-fire after a successful run. After a FAILED run both
+  # survive, deliberately: re-committing the sentinel with a fresh
+  # timestamp is the documented re-fire.
   push:
     branches: [preprod]
     paths:
@@ -484,7 +486,11 @@ jobs:
             echo "package.json already exists, skipping seed commit"
             # Preprod has app code but main may not. serviceCreate (Step 5)
             # binds the service to main, so the first deploy builds from
-            # main, sync preprod to main now.
+            # main, sync preprod to main now. This sync is the EARLY half of
+            # main-alignment ownership: it is what moves main to the
+            # configuration commit before provisioning (the cleanup step
+            # owns the final alignment, and harness-bootstrap.yml only
+            # creates main when it is absent).
             if ! git ls-remote --exit-code origin main > /dev/null 2>&1; then
               git push origin HEAD:main
             elif is_main_fresh; then
@@ -794,7 +800,7 @@ jobs:
           if [ "$PG_DEPLOYED" != true ]; then
             echo "Skipping DATABASE_URL wiring for preprod (Postgres deployment failed)"
           else
-          WIRE_DEV_RESP=$(curl -s -X POST "$API_URL" \
+          WIRE_PREPROD_RESP=$(curl -s -X POST "$API_URL" \
             -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
@@ -803,9 +809,9 @@ jobs:
               --arg sid "$SERVICE_ID" \
               --arg dbref "$PG_REF" \
               '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: {"DATABASE_URL": $dbref}}}}')")
-          if echo "$WIRE_DEV_RESP" | jq -e '.errors' > /dev/null 2>&1; then
+          if echo "$WIRE_PREPROD_RESP" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Warning: Failed to wire DATABASE_URL to preprod app service:"
-            echo "$WIRE_DEV_RESP" | jq '.errors'
+            echo "$WIRE_PREPROD_RESP" | jq '.errors'
           else
             echo "Set DATABASE_URL on app service (preprod)"
           fi
@@ -993,47 +999,125 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main 2>/dev/null || true
-          git merge origin/main --no-edit --allow-unrelated-histories -m "merge: align preprod with main before cleanup" 2>/dev/null || true
-          REMOVED=false
-          if [ -f .github/workflows/harness-railway.yml ]; then
-            git rm .github/workflows/harness-railway.yml
-            REMOVED=true
-          fi
-          if [ -f .harness-bootstrap ]; then
-            git rm .harness-bootstrap
-            REMOVED=true
-          fi
-          if [ "$REMOVED" = true ]; then
-            # Commit body carries the Railway URLs so a bootstrapping
-            # Claude Code session can fetch them via list_commits without
-            # asking the user to paste from the Job Summary. Lines stay
-            # in a stable "key: value" shape so consumers can grep them.
-            PROD_LINE="production-url: $( [ -n "${PROD_DOMAIN:-}" ] && echo "https://${PROD_DOMAIN}" || echo "(unknown)" )"
-            PREPROD_LINE="preprod-url: $( [ -n "${PREPROD_DOMAIN:-}" ] && echo "https://${PREPROD_DOMAIN}" || echo "(unknown)" )"
-            COMMIT_MSG=$(printf 'chore: remove harness bootstrap files (one-time use)\n\n%s\n%s\n' "$PROD_LINE" "$PREPROD_LINE")
-            git commit -m "$COMMIT_MSG"
-            if git push origin preprod && git push origin preprod:main; then
-              export GH_TOKEN="$PAT_TOKEN"
 
-              # Delete any claude/* and feature/* branches left over from
-              # the bootstrap session. The first session does not call
-              # /to-preprod (it runs the setup prompt via MCP on preprod), so if
-              # it named a feature or pushed any code, the resulting
-              # feature/<name> branch would otherwise leak. This workflow
-              # self-deletes after success, so it can only run during
-              # bootstrap, never against an established repo where these
-              # branches would represent real work.
-              git ls-remote --refs origin 'refs/heads/claude/*' 'refs/heads/feature/*' 2>/dev/null \
-                | awk '{print $2}' | sed 's|^refs/heads/||' | while read -r br; do
-                  [ -z "$br" ] && continue
-                  if git push origin --delete "$br" 2>/dev/null; then
-                    echo "Deleted stray bootstrap branch: $br"
-                  else
-                    echo "::warning::Could not delete bootstrap branch '$br'; remove it manually."
-                  fi
-                done
-            else
-              echo "::warning::Could not auto-remove bootstrap files. Delete .github/workflows/harness-railway.yml and .harness-bootstrap manually."
+          # Commit body carries the Railway URLs so the /setup spine
+          # (.claude/scripts/setup.sh) can read them from a git fetch
+          # instead of asking the user to paste from the Job Summary. The
+          # subject and the two key: value lines are a PARSED CONTRACT
+          # (forge decision record 0004); the forge's
+          # scripts/check-template-overlay.mjs fails its merge gate when
+          # the two sides stop naming the same strings.
+          PROD_LINE="production-url: $( [ -n "${PROD_DOMAIN:-}" ] && echo "https://${PROD_DOMAIN}" || echo "(unknown)" )"
+          PREPROD_LINE="preprod-url: $( [ -n "${PREPROD_DOMAIN:-}" ] && echo "https://${PREPROD_DOMAIN}" || echo "(unknown)" )"
+          COMMIT_MSG=$(printf 'chore: remove harness bootstrap files (one-time use)\n\n%s\n%s\n' "$PROD_LINE" "$PREPROD_LINE")
+
+          # main-alignment ownership, in one place: Step 2b already moved
+          # main to the configuration commit before provisioning (the
+          # production service is bound to main and needs code to build).
+          # This step owns the FINAL alignment: the cleanup commit lands on
+          # preprod, then preprod is pushed to main. harness-bootstrap.yml
+          # only ever creates main when it is absent; it never moves it.
+          # The merge in build_cleanup is defensive, for a main that gained
+          # history mid-provisioning; with Step 2b's sync in place it is
+          # normally "already up to date".
+          #
+          # build_cleanup redoes the merge and the removals on whatever tip
+          # is checked out, and returns 1 only when nothing is left to
+          # remove. A merge left conflicted, or any other state the commit
+          # refuses, is a hard red with the URLs echoed, never a warning.
+          build_cleanup() {
+            git fetch origin main 2>/dev/null || true
+            git merge origin/main --no-edit --allow-unrelated-histories -m "merge: align preprod with main before cleanup" 2>/dev/null || true
+            REMOVED=false
+            if [ -f .github/workflows/harness-railway.yml ]; then
+              git rm -q .github/workflows/harness-railway.yml
+              REMOVED=true
             fi
+            if [ -f .harness-bootstrap ]; then
+              git rm -q .harness-bootstrap
+              REMOVED=true
+            fi
+            if [ "$REMOVED" != true ]; then
+              return 1
+            fi
+            if ! git commit -q -m "$COMMIT_MSG"; then
+              echo "$PROD_LINE"
+              echo "$PREPROD_LINE"
+              echo "::error::Could not create the cleanup commit (a conflicted main merge?). The URLs above are correct; finish by hand: reconcile main and preprod, then delete .github/workflows/harness-railway.yml and .harness-bootstrap from preprod in one commit."
+              exit 1
+            fi
+          }
+
+          if ! build_cleanup; then
+            echo "Nothing to remove; a previous run already cleaned up."
+            exit 0
           fi
+
+          # Push with refetch-reset-rebuild retry, the cell's shape for
+          # regenerable commits (rebasing a generated commit over a moved
+          # preprod would drop the defensive main merge exactly when it
+          # mattered). One-owner-per-trigger-path removed the known racer
+          # (harness-bootstrap.yml leaves the sentinel alone when this
+          # workflow is present), but nothing guarantees preprod holds
+          # still, so rebuild on whatever landed and try again. Deletions
+          # that already landed upstream leave nothing to rebuild, which
+          # means another actor finished the cleanup: success.
+          PUSHED=false
+          for attempt in 1 2 3; do
+            if git push origin preprod; then
+              PUSHED=true
+              break
+            fi
+            echo "Cleanup push attempt $attempt rejected; rebuilding on the fresh preprod tip."
+            git fetch origin preprod
+            git reset -q --hard origin/preprod
+            if ! build_cleanup; then
+              echo "The concurrent push already carried the cleanup; nothing left to land."
+              PUSHED=true
+              break
+            fi
+            sleep $((attempt * 2))
+          done
+
+          if [ "$PUSHED" != true ]; then
+            # A red job, deliberately. A swallowed failure here once cost six
+            # minutes of false polling and left this workflow armed; the
+            # /setup watcher and its recovery guidance rely on this exit
+            # code to tell "provisioning failed" from what this is:
+            # provisioning SUCCEEDED and only the cleanup did not land.
+            echo "$PROD_LINE"
+            echo "$PREPROD_LINE"
+            echo "::error::Provisioning succeeded but the cleanup push did not land. The URLs above are correct. Finish the cleanup by deleting .github/workflows/harness-railway.yml and .harness-bootstrap from preprod in one commit."
+            exit 1
+          fi
+
+          # Final main alignment (ownership note above). main sits at the
+          # Step 2b sync point, an ancestor of preprod, so this is a
+          # fast-forward; anything else moved main unexpectedly and is a
+          # red failure too, not a warning.
+          if ! git push origin preprod:main; then
+            echo "$PROD_LINE"
+            echo "$PREPROD_LINE"
+            echo "::error::The cleanup landed on preprod but aligning main failed. Align it by hand: git push origin preprod:main."
+            exit 1
+          fi
+
+          export GH_TOKEN="$PAT_TOKEN"
+
+          # Delete any claude/* and feature/* branches left over from
+          # the bootstrap session. The first session does not call
+          # /to-preprod (it runs the setup prompt via MCP on preprod), so if
+          # it named a feature or pushed any code, the resulting
+          # feature/<name> branch would otherwise leak. This workflow
+          # self-deletes after success, so it can only run during
+          # bootstrap, never against an established repo where these
+          # branches would represent real work.
+          git ls-remote --refs origin 'refs/heads/claude/*' 'refs/heads/feature/*' 2>/dev/null \
+            | awk '{print $2}' | sed 's|^refs/heads/||' | while read -r br; do
+              [ -z "$br" ] && continue
+              if git push origin --delete "$br" 2>/dev/null; then
+                echo "Deleted stray bootstrap branch: $br"
+              else
+                echo "::warning::Could not delete bootstrap branch '$br'; remove it manually."
+              fi
+            done
