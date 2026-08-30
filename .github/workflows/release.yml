@@ -3,7 +3,7 @@ name: Release to production
 on:
   push:
     branches:
-      - dev
+      - preprod
     paths:
       - '.release-description.md'
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
         required: false
 
 concurrency:
-  group: dev-write
+  group: preprod-write
   cancel-in-progress: false
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
             LAST_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo "v0.0.0")
             echo "## Release $VERSION" > /tmp/release-body.md
             echo "" >> /tmp/release-body.md
-            git log "$LAST_TAG"..origin/dev --oneline --no-merges >> /tmp/release-body.md || true
+            git log "$LAST_TAG"..origin/preprod --oneline --no-merges >> /tmp/release-body.md || true
             exit 0
           fi
 
@@ -66,11 +66,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git pull --rebase origin dev || true
+          git pull --rebase origin preprod || true
 
           # This commit is what keeps main clean. It already had to remove the
           # release signal file; sweeping the rest of the class in the same
-          # commit costs nothing and is the last point before dev's tree
+          # commit costs nothing and is the last point before preprod's tree
           # becomes main's. A signal file on main is inherited by every
           # scaffold and every branch cut from it afterwards.
           #
@@ -89,15 +89,15 @@ jobs:
           # that aborts the step before the commit below, failing every release
           # in the normal case where nothing leaked.
           LEAKED=$(git diff --cached --name-only -- ':!.release-description.md' | tr '\n' ' ')
-          [ -z "$LEAKED" ] || echo "::warning::Signal files reached dev and were removed before the release: $LEAKED"
+          [ -z "$LEAKED" ] || echo "::warning::Signal files reached preprod and were removed before the release: $LEAKED"
           git commit -m "chore: remove release signal file"
 
           for i in 1 2 3; do
-            if git push origin dev; then
+            if git push origin preprod; then
               break
             fi
             echo "Push attempt $i failed, pulling and retrying..."
-            git pull --rebase origin dev || true
+            git pull --rebase origin preprod || true
             sleep "$i"
           done
 
@@ -108,12 +108,12 @@ jobs:
         run: |
           VERSION="${{ steps.release.outputs.version }}"
 
-          EXISTING=$(gh pr list --head dev --base main --state open --json number --jq '.[0].number // empty')
+          EXISTING=$(gh pr list --head preprod --base main --state open --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then
             PR_NUMBER="$EXISTING"
             gh pr edit "$PR_NUMBER" --title "Release $VERSION" --body-file /tmp/release-body.md
           else
-            PR_URL=$(gh pr create --base main --head dev --title "Release $VERSION" --body-file /tmp/release-body.md)
+            PR_URL=$(gh pr create --base main --head preprod --title "Release $VERSION" --body-file /tmp/release-body.md)
             PR_NUMBER=$(echo "$PR_URL" | grep -oP '/pull/\K[0-9]+')
           fi
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
@@ -139,7 +139,7 @@ jobs:
             done
           fi
 
-      - name: Back-merge main into dev (sync ahead/behind to 0)
+      - name: Back-merge main into preprod (sync ahead/behind to 0)
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
@@ -162,21 +162,21 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # main's tip is a merge commit whose second parent is dev's tip,
-          # so dev can fast-forward to main. Retry on race with another dev write.
+          # main's tip is a merge commit whose second parent is preprod's tip,
+          # so preprod can fast-forward to main. Retry on race with another preprod write.
           for i in 1 2 3 4 5; do
-            git fetch origin main dev
-            if git push origin origin/main:dev; then
-              echo "dev fast-forwarded to main; ahead/behind is now 0/0."
+            git fetch origin main preprod
+            if git push origin origin/main:preprod; then
+              echo "preprod fast-forwarded to main; ahead/behind is now 0/0."
               exit 0
             fi
-            echo "Back-merge attempt $i lost a race with another dev write, refetching..."
+            echo "Back-merge attempt $i lost a race with another preprod write, refetching..."
             sleep "$((i * 2))"
           done
 
-          echo "::warning::Could not fast-forward dev to main after 5 attempts."
-          echo "::warning::dev has diverged from main. Next release will re-sync, or run manually:"
-          echo "::warning::  git checkout dev && git merge --no-ff origin/main && git push origin dev"
+          echo "::warning::Could not fast-forward preprod to main after 5 attempts."
+          echo "::warning::preprod has diverged from main. Next release will re-sync, or run manually:"
+          echo "::warning::  git checkout preprod && git merge --no-ff origin/main && git push origin preprod"
           exit 0
 
       - name: Create git tag and GitHub Release

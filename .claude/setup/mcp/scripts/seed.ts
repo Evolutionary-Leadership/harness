@@ -69,7 +69,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // The guard that matters. NODE_ENV would say "production" on dev and on every
+  // The guard that matters. NODE_ENV would say "production" on preprod and on every
   // feature environment too, so it cannot be the check.
   if (isProductionEnvironment()) {
     console.error(

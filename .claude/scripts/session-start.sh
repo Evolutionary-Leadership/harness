@@ -26,7 +26,7 @@ if [[ "$BRANCH" == claude/* ]]; then
     # Provisioning happens on the first push (see getting-started Step 0).
     echo "Fresh session on $BRANCH (no feature branch yet)."
     # On an unconfigured template the only sane first move is /setup, which
-    # pushes to dev, never to this branch; naming advice would nudge the
+    # pushes to preprod, never to this branch; naming advice would nudge the
     # session toward exactly the push /setup forbids.
     if [ ! -d .claude/skills/setup ]; then
       echo "Name this feature before your first push so the branch is created"

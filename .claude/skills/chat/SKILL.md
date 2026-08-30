@@ -41,7 +41,7 @@ about it in a session that pushed nothing.
   read-only ones like `git log` or `ls`. If you need to inspect the repo,
   use Read, Glob, or Grep.
 - **No skill chaining**: do not invoke other skills (like `/feature` or
-  `/mergedev`). The one exception is `/endchat`, which the user runs
+  `/to-preprod`). The one exception is `/endchat`, which the user runs
   themselves to close out the chat.
 
 ### What you CAN do

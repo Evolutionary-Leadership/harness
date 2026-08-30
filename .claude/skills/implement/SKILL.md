@@ -42,7 +42,7 @@ running it yourself.
 Then use `/code-review` to review the work, and act on what it finds.
 
 Leave the branch committed. Pushing and merging are not this skill's job:
-inside `/feature` the phase gate owns the push, and `/mergedev` or
+inside `/feature` the phase gate owns the push, and `/to-preprod` or
 `/review` owns the merge.
 
 ---

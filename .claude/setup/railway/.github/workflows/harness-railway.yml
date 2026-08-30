@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
   # Sentinel-file trigger: lets a fresh Claude Code session bootstrap
   # provisioning via the GitHub MCP server (which has create_or_update_file
-  # but no workflow_dispatch tool). Claude writes .harness-bootstrap to dev
+  # but no workflow_dispatch tool). Claude writes .harness-bootstrap to preprod
   # (timestamp, the /setup foundation answer, and on a multi-workspace
   # Railway account the workspace the user picked); this push fires the
   # workflow. The cleanup step at the end
   # deletes both this workflow file and .harness-bootstrap, so the trigger
   # can never re-fire after a successful run.
   push:
-    branches: [dev]
+    branches: [preprod]
     paths:
       - .harness-bootstrap
 
@@ -377,7 +377,7 @@ jobs:
           echo ""
           echo "=== Step 2b: Push seed commit (minimal deployable app) ==="
           # Railway's Railpack needs something to detect. An empty repo fails.
-          # Push a minimal Express app to main and dev so first deploy succeeds.
+          # Push a minimal Express app to main and preprod so first deploy succeeds.
           cd "$GITHUB_WORKSPACE"
 
           if [ -f Dockerfile ]; then
@@ -390,9 +390,9 @@ jobs:
           # A single-commit main covers both bootstrap shapes we care about:
           # the GitHub auto-init stub (empty README), and the "Use this
           # template" snapshot (template files, including package.json,
-          # but a fresh root commit with no shared ancestry to dev).
+          # but a fresh root commit with no shared ancestry to preprod).
           # Either way, there is no real development history to preserve,
-          # so it is safe to force-overwrite with dev's seeded content.
+          # so it is safe to force-overwrite with preprod's seeded content.
           # This workflow self-deletes after first success, so it can only
           # run during bootstrap, never against an established repo.
           is_main_fresh() {
@@ -450,61 +450,61 @@ jobs:
             git add package.json server.js public/index.html
             git commit -m "seed: minimal Express app for Railway deploy"
 
-            # We're on dev (the branch selected in "Run workflow from").
-            # Push seed to dev first, then ensure main exists too.
-            git push origin dev
+            # We're on preprod (the branch selected in "Run workflow from").
+            # Push seed to preprod first, then ensure main exists too.
+            git push origin preprod
 
-            # Create main from dev if it doesn't exist yet
+            # Create main from preprod if it doesn't exist yet
             if ! git ls-remote --exit-code origin main > /dev/null 2>&1; then
               git checkout -b main
               git push origin main
-              git checkout dev
+              git checkout preprod
             elif is_main_fresh; then
-              echo "main is a fresh bootstrap snapshot; force-overwriting with seeded dev."
+              echo "main is a fresh bootstrap snapshot; force-overwriting with seeded preprod."
               MAIN_SHA=$(git ls-remote origin main | awk '{print $1}')
-              git push --force-with-lease=main:"$MAIN_SHA" origin dev:main
+              git push --force-with-lease=main:"$MAIN_SHA" origin preprod:main
             else
-              # main has real history; merge it into dev so dev is a superset, then push.
-              # --allow-unrelated-histories covers the case where dev was created
-              # as an orphan (e.g. by a wizard that initialized dev separately
+              # main has real history; merge it into preprod so preprod is a superset, then push.
+              # --allow-unrelated-histories covers the case where preprod was created
+              # as an orphan (e.g. by a wizard that initialized preprod separately
               # from main); without it, plain `git merge` aborts with
               # "refusing to merge unrelated histories".
               git fetch origin main
-              if git merge origin/main --no-edit --allow-unrelated-histories -m "merge: align dev with main before seed push"; then
-                git push origin dev
-                git push origin dev:main
+              if git merge origin/main --no-edit --allow-unrelated-histories -m "merge: align preprod with main before seed push"; then
+                git push origin preprod
+                git push origin preprod:main
               else
                 git merge --abort 2>/dev/null || true
-                echo "::error::Cannot reconcile main and dev automatically (merge conflicts). Resolve the merge by hand and re-run, or delete .github/workflows/harness-railway.yml and seed manually."
+                echo "::error::Cannot reconcile main and preprod automatically (merge conflicts). Resolve the merge by hand and re-run, or delete .github/workflows/harness-railway.yml and seed manually."
                 exit 1
               fi
             fi
-            echo "Seed commit pushed to dev and main"
+            echo "Seed commit pushed to preprod and main"
           else
             echo "package.json already exists, skipping seed commit"
-            # Dev has app code but main may not. serviceCreate (Step 5)
+            # Preprod has app code but main may not. serviceCreate (Step 5)
             # binds the service to main, so the first deploy builds from
-            # main, sync dev to main now.
+            # main, sync preprod to main now.
             if ! git ls-remote --exit-code origin main > /dev/null 2>&1; then
               git push origin HEAD:main
             elif is_main_fresh; then
-              echo "main is a fresh bootstrap snapshot; force-overwriting with dev."
+              echo "main is a fresh bootstrap snapshot; force-overwriting with preprod."
               MAIN_SHA=$(git ls-remote origin main | awk '{print $1}')
               git push --force-with-lease=main:"$MAIN_SHA" origin HEAD:main
             else
               # See note above: --allow-unrelated-histories is required when
-              # dev was initialized as an orphan branch.
+              # preprod was initialized as an orphan branch.
               git fetch origin main
-              if git merge origin/main --no-edit --allow-unrelated-histories -m "merge: align dev with main before Railway setup"; then
+              if git merge origin/main --no-edit --allow-unrelated-histories -m "merge: align preprod with main before Railway setup"; then
                 git push origin HEAD
                 git push origin HEAD:main
               else
                 git merge --abort 2>/dev/null || true
-                echo "::error::main has real history that conflicts with dev (merge conflicts). Reconcile manually (e.g. rebase dev onto main) and re-run."
+                echo "::error::main has real history that conflicts with preprod (merge conflicts). Reconcile manually (e.g. rebase preprod onto main) and re-run."
                 exit 1
               fi
             fi
-            echo "Synced dev to main"
+            echo "Synced preprod to main"
           fi
 
           # Give GitHub a few seconds to propagate the push.
@@ -530,7 +530,7 @@ jobs:
 
           echo ""
           echo "=== Step 4: Deploy PostgreSQL to production ==="
-          # Deploy Postgres + bucket to production FIRST, then fork to create dev.
+          # Deploy Postgres + bucket to production FIRST, then fork to create preprod.
           # The app service is not yet connected to the repo, so no deployment
           # is in flight. This ensures DATABASE_URL and bucket credentials are
           # available before the first app deployment.
@@ -755,76 +755,76 @@ jobs:
           fi
 
           echo ""
-          echo "=== Step 6: Create dev environment ==="
+          echo "=== Step 6: Create preprod environment ==="
           # Fork from production AFTER Postgres + bucket + DATABASE_URL are set up.
-          # Dev inherits all services, variables, and bucket from the fork.
+          # Preprod inherits all services, variables, and bucket from the fork.
           ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
-          DEV_ENV_ID=$(echo "$ENVS" | jq -r '.data.environments.edges[].node | select(.name == "dev") | .id // empty')
+          PREPROD_ENV_ID=$(echo "$ENVS" | jq -r '.data.environments.edges[].node | select(.name == "preprod") | .id // empty')
 
-          if [ -n "$DEV_ENV_ID" ]; then
-            echo "Dev environment already exists: $DEV_ENV_ID"
+          if [ -n "$PREPROD_ENV_ID" ]; then
+            echo "Preprod environment already exists: $PREPROD_ENV_ID"
           else
-            CREATE_DEV=$(gql "mutation { environmentCreate(input: { name: \\\"dev\\\", projectId: \\\"$PROJECT_ID\\\", sourceEnvironmentId: \\\"$PROD_ENV_ID\\\" }) { id deploymentTriggers { edges { node { id } } } } }")
-            DEV_ENV_ID=$(echo "$CREATE_DEV" | jq -r '.data.environmentCreate.id')
-            echo "Created dev environment: $DEV_ENV_ID"
+            CREATE_PREPROD=$(gql "mutation { environmentCreate(input: { name: \\\"preprod\\\", projectId: \\\"$PROJECT_ID\\\", sourceEnvironmentId: \\\"$PROD_ENV_ID\\\" }) { id deploymentTriggers { edges { node { id } } } } }")
+            PREPROD_ENV_ID=$(echo "$CREATE_PREPROD" | jq -r '.data.environmentCreate.id')
+            echo "Created preprod environment: $PREPROD_ENV_ID"
 
-            # Update triggers to deploy from dev branch
-            DEV_TRIGGER_IDS=$(echo "$CREATE_DEV" | jq -r '.data.environmentCreate.deploymentTriggers.edges[].node.id')
-            for TID in $DEV_TRIGGER_IDS; do
-              gql "mutation { deploymentTriggerUpdate(id: \\\"$TID\\\", input: { branch: \\\"dev\\\" }) { id } }" > /dev/null
-              echo "Set dev trigger $TID → dev"
+            # Update triggers to deploy from preprod branch
+            PREPROD_TRIGGER_IDS=$(echo "$CREATE_PREPROD" | jq -r '.data.environmentCreate.deploymentTriggers.edges[].node.id')
+            for TID in $PREPROD_TRIGGER_IDS; do
+              gql "mutation { deploymentTriggerUpdate(id: \\\"$TID\\\", input: { branch: \\\"preprod\\\" }) { id } }" > /dev/null
+              echo "Set preprod trigger $TID → preprod"
             done
           fi
 
-          # Defensive: re-pin region for the dev fork. environmentCreate should
+          # Defensive: re-pin region for the preprod fork. environmentCreate should
           # carry per-instance config from production, but Railway forks have
           # been seen to drop pieces silently.
-          if set_service_region "$SERVICE_ID" "$DEV_ENV_ID"; then
-            echo "Pinned app service region to $SERVICE_REGION (dev)"
+          if set_service_region "$SERVICE_ID" "$PREPROD_ENV_ID"; then
+            echo "Pinned app service region to $SERVICE_REGION (preprod)"
           fi
           if [ -n "$PG_SVC_ID" ]; then
-            if set_service_region "$PG_SVC_ID" "$DEV_ENV_ID"; then
-              echo "Pinned Postgres region to $SERVICE_REGION (dev)"
+            if set_service_region "$PG_SVC_ID" "$PREPROD_ENV_ID"; then
+              echo "Pinned Postgres region to $SERVICE_REGION (preprod)"
             fi
           fi
 
           echo ""
-          echo "=== Step 6b: Wire DATABASE_URL to app service (dev) ==="
-          # Belt-and-suspenders: ensure dev has DATABASE_URL even if fork didn't inherit it
+          echo "=== Step 6b: Wire DATABASE_URL to app service (preprod) ==="
+          # Belt-and-suspenders: ensure preprod has DATABASE_URL even if fork didn't inherit it
           if [ "$PG_DEPLOYED" != true ]; then
-            echo "Skipping DATABASE_URL wiring for dev (Postgres deployment failed)"
+            echo "Skipping DATABASE_URL wiring for preprod (Postgres deployment failed)"
           else
           WIRE_DEV_RESP=$(curl -s -X POST "$API_URL" \
             -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
               --arg pid "$PROJECT_ID" \
-              --arg eid "$DEV_ENV_ID" \
+              --arg eid "$PREPROD_ENV_ID" \
               --arg sid "$SERVICE_ID" \
               --arg dbref "$PG_REF" \
               '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: {"DATABASE_URL": $dbref}}}}')")
           if echo "$WIRE_DEV_RESP" | jq -e '.errors' > /dev/null 2>&1; then
-            echo "Warning: Failed to wire DATABASE_URL to dev app service:"
+            echo "Warning: Failed to wire DATABASE_URL to preprod app service:"
             echo "$WIRE_DEV_RESP" | jq '.errors'
           else
-            echo "Set DATABASE_URL on app service (dev)"
+            echo "Set DATABASE_URL on app service (preprod)"
           fi
           fi  # end PG_DEPLOYED gate
 
           echo ""
-          echo "=== Step 6c: Wire bucket credentials to app service (dev) ==="
+          echo "=== Step 6c: Wire bucket credentials to app service (preprod) ==="
           BUCKET_REF=$(railref "${STORAGE_SVC_NAME}.BUCKET")
           ENDPOINT_REF=$(railref "${STORAGE_SVC_NAME}.ENDPOINT")
           ACCESSKEY_REF=$(railref "${STORAGE_SVC_NAME}.ACCESS_KEY_ID")
           SECRETKEY_REF=$(railref "${STORAGE_SVC_NAME}.SECRET_ACCESS_KEY")
           REGION_REF=$(railref "${STORAGE_SVC_NAME}.REGION")
 
-          WIRE_BUCKET_DEV=$(curl -s -X POST "$API_URL" \
+          WIRE_BUCKET_PREPROD=$(curl -s -X POST "$API_URL" \
             -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
               --arg pid "$PROJECT_ID" \
-              --arg eid "$DEV_ENV_ID" \
+              --arg eid "$PREPROD_ENV_ID" \
               --arg sid "$SERVICE_ID" \
               --arg bucket "$BUCKET_REF" \
               --arg endpoint "$ENDPOINT_REF" \
@@ -832,69 +832,69 @@ jobs:
               --arg secretkey "$SECRETKEY_REF" \
               --arg region "$REGION_REF" \
               '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: {"AWS_S3_BUCKET_NAME": $bucket, "AWS_ENDPOINT_URL": $endpoint, "AWS_ACCESS_KEY_ID": $accesskey, "AWS_SECRET_ACCESS_KEY": $secretkey, "AWS_DEFAULT_REGION": $region}}}}')")
-          if echo "$WIRE_BUCKET_DEV" | jq -e '.errors' > /dev/null 2>&1; then
-            echo "Warning: Failed to wire bucket credentials to dev app service:"
-            echo "$WIRE_BUCKET_DEV" | jq '.errors'
+          if echo "$WIRE_BUCKET_PREPROD" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "Warning: Failed to wire bucket credentials to preprod app service:"
+            echo "$WIRE_BUCKET_PREPROD" | jq '.errors'
           else
-            echo "Set bucket credentials on app service (dev)"
+            echo "Set bucket credentials on app service (preprod)"
           fi
 
           echo ""
-          echo "=== Step 6d: Wire application variables to app service (dev) ==="
+          echo "=== Step 6d: Wire application variables to app service (preprod) ==="
           # This step runs AFTER the fork in Step 6, and that position is the
           # whole guarantee that SHOW_DEMO_LOGIN never reaches production.
-          # Production is built first and dev is duplicated from it, so a value
+          # Production is built first and preprod is duplicated from it, so a value
           # written here cannot travel upward. Do not move this above Step 6.
           # Forge decision record 0007.
           if [ "$PROVISION_APP_VARS" != true ]; then
-            echo "Skipping application variables for dev (sentinel says foundation=no)."
+            echo "Skipping application variables for preprod (sentinel says foundation=no)."
           else
             # Seeding and the demo login are literal values, safe to re-assert
             # on every run.
-            DEV_VARS_JSON=$(jq -n '{ "SEED_DATA": "true", "SHOW_DEMO_LOGIN": "true" }')
+            PREPROD_VARS_JSON=$(jq -n '{ "SEED_DATA": "true", "SHOW_DEMO_LOGIN": "true" }')
 
-            # Dev's secret is correct exactly when it DIFFERS from production's.
+            # Preprod's secret is correct exactly when it DIFFERS from production's.
             #
-            # "Does dev already have the key" is the wrong question, and asking
+            # "Does preprod already have the key" is the wrong question, and asking
             # it is a trap: environmentCreate copies production's variables as
-            # literals, so a forked dev always has the key, and the answer is
-            # yes even when the value is production's. A run that forked dev
+            # literals, so a forked preprod always has the key, and the answer is
+            # yes even when the value is production's. A run that forked preprod
             # and then failed before this step would, on re-fire, see the key
-            # present and preserve production's own signing key on dev forever.
+            # present and preserve production's own signing key on preprod forever.
             # Comparing the values covers the fresh fork and the resumed fork
             # alike, and needs no bookkeeping variable in the user's dashboard.
-            DEV_AUTH_SECRET=""
-            read_env_var "$DEV_ENV_ID" "$SERVICE_ID" BETTER_AUTH_SECRET DEV_AUTH_SECRET || true
-            if [ -n "$DEV_AUTH_SECRET" ] && [ "$DEV_AUTH_SECRET" != "$PROD_AUTH_SECRET" ]; then
-              echo "Dev already has its own BETTER_AUTH_SECRET; preserving it."
+            PREPROD_AUTH_SECRET=""
+            read_env_var "$PREPROD_ENV_ID" "$SERVICE_ID" BETTER_AUTH_SECRET PREPROD_AUTH_SECRET || true
+            if [ -n "$PREPROD_AUTH_SECRET" ] && [ "$PREPROD_AUTH_SECRET" != "$PROD_AUTH_SECRET" ]; then
+              echo "Preprod already has its own BETTER_AUTH_SECRET; preserving it."
             else
-              gen_masked_secret DEV_AUTH_SECRET
-              DEV_VARS_JSON=$(echo "$DEV_VARS_JSON" | jq --arg v "$DEV_AUTH_SECRET" '. + { "BETTER_AUTH_SECRET": $v }')
-              echo "Set BETTER_AUTH_SECRET for dev (a fresh value, distinct from production's)."
+              gen_masked_secret PREPROD_AUTH_SECRET
+              PREPROD_VARS_JSON=$(echo "$PREPROD_VARS_JSON" | jq --arg v "$PREPROD_AUTH_SECRET" '. + { "BETTER_AUTH_SECRET": $v }')
+              echo "Set BETTER_AUTH_SECRET for preprod (a fresh value, distinct from production's)."
             fi
 
-            WIRE_APP_DEV=$(curl -s -X POST "$API_URL" \
+            WIRE_APP_PREPROD=$(curl -s -X POST "$API_URL" \
               -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
               -H "Content-Type: application/json" \
               -d "$(jq -n \
                 --arg pid "$PROJECT_ID" \
-                --arg eid "$DEV_ENV_ID" \
+                --arg eid "$PREPROD_ENV_ID" \
                 --arg sid "$SERVICE_ID" \
-                --argjson vars "$DEV_VARS_JSON" \
+                --argjson vars "$PREPROD_VARS_JSON" \
                 '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: $vars}}}')")
-            if echo "$WIRE_APP_DEV" | jq -e '.errors' > /dev/null 2>&1; then
-              echo "::warning::Failed to wire application variables to dev app service:"
-              echo "$WIRE_APP_DEV" | jq '.errors'
+            if echo "$WIRE_APP_PREPROD" | jq -e '.errors' > /dev/null 2>&1; then
+              echo "::warning::Failed to wire application variables to preprod app service:"
+              echo "$WIRE_APP_PREPROD" | jq '.errors'
             else
               # Names only. Never the values.
-              echo "Set on app service (dev): $(echo "$DEV_VARS_JSON" | jq -r 'keys | join(", ")')"
+              echo "Set on app service (preprod): $(echo "$PREPROD_VARS_JSON" | jq -r 'keys | join(", ")')"
             fi
           fi
 
           echo ""
           echo "=== Step 7: Create Railway domains ==="
           PROD_DOMAIN=""
-          DEV_DOMAIN=""
+          PREPROD_DOMAIN=""
 
           # Production domain
           PROD_DOMAIN_RESP=$(gql "mutation { serviceDomainCreate(input: { serviceId: \\\"$SERVICE_ID\\\", environmentId: \\\"$PROD_ENV_ID\\\" }) { domain } }") || true
@@ -905,13 +905,13 @@ jobs:
             echo "Warning: Production domain may already exist or creation failed"
           fi
 
-          # Dev domain
-          DEV_DOMAIN_RESP=$(gql "mutation { serviceDomainCreate(input: { serviceId: \\\"$SERVICE_ID\\\", environmentId: \\\"$DEV_ENV_ID\\\" }) { domain } }") || true
-          DEV_DOMAIN=$(echo "$DEV_DOMAIN_RESP" | jq -r '.data.serviceDomainCreate.domain // empty' 2>/dev/null) || true
-          if [ -n "$DEV_DOMAIN" ]; then
-            echo "Dev: https://$DEV_DOMAIN"
+          # Preprod domain
+          PREPROD_DOMAIN_RESP=$(gql "mutation { serviceDomainCreate(input: { serviceId: \\\"$SERVICE_ID\\\", environmentId: \\\"$PREPROD_ENV_ID\\\" }) { domain } }") || true
+          PREPROD_DOMAIN=$(echo "$PREPROD_DOMAIN_RESP" | jq -r '.data.serviceDomainCreate.domain // empty' 2>/dev/null) || true
+          if [ -n "$PREPROD_DOMAIN" ]; then
+            echo "Preprod: https://$PREPROD_DOMAIN"
           else
-            echo "Warning: Dev domain may already exist or creation failed"
+            echo "Warning: Preprod domain may already exist or creation failed"
           fi
 
           echo ""
@@ -942,7 +942,7 @@ jobs:
             echo "Bucket:      FAILED. Create manually via Railway dashboard."
           fi
           echo "Production:  https://${PROD_DOMAIN:-'(see Railway dashboard)'}"
-          echo "Dev:         https://${DEV_DOMAIN:-'(see Railway dashboard)'}"
+          echo "Preprod:         https://${PREPROD_DOMAIN:-'(see Railway dashboard)'}"
 
           # Export domains to subsequent steps so the cleanup commit can
           # carry them in its body. The bootstrapping Claude Code session
@@ -950,7 +950,7 @@ jobs:
           # paste from the Job Summary.
           {
             echo "PROD_DOMAIN=${PROD_DOMAIN:-}"
-            echo "DEV_DOMAIN=${DEV_DOMAIN:-}"
+            echo "PREPROD_DOMAIN=${PREPROD_DOMAIN:-}"
           } >> "$GITHUB_ENV"
 
           # Write GitHub Actions Job Summary for visibility
@@ -975,14 +975,14 @@ jobs:
             else
               echo "| Production | **No domain** (check Railway dashboard) |"
             fi
-            if [ -n "$DEV_DOMAIN" ]; then
-              echo "| Dev | https://$DEV_DOMAIN |"
+            if [ -n "$PREPROD_DOMAIN" ]; then
+              echo "| Preprod | https://$PREPROD_DOMAIN |"
             else
-              echo "| Dev | **No domain** (check Railway dashboard) |"
+              echo "| Preprod | **No domain** (check Railway dashboard) |"
             fi
             echo ""
             echo "### Next steps"
-            echo "Start a new Claude Code session on the \`dev\` branch and build something!"
+            echo "Start a new Claude Code session on the \`preprod\` branch and build something!"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove harness workflow (one-time use)
@@ -994,7 +994,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin main 2>/dev/null || true
-          git merge origin/main --no-edit --allow-unrelated-histories -m "merge: align dev with main before cleanup" 2>/dev/null || true
+          git merge origin/main --no-edit --allow-unrelated-histories -m "merge: align preprod with main before cleanup" 2>/dev/null || true
           REMOVED=false
           if [ -f .github/workflows/harness-railway.yml ]; then
             git rm .github/workflows/harness-railway.yml
@@ -1010,15 +1010,15 @@ jobs:
             # asking the user to paste from the Job Summary. Lines stay
             # in a stable "key: value" shape so consumers can grep them.
             PROD_LINE="production-url: $( [ -n "${PROD_DOMAIN:-}" ] && echo "https://${PROD_DOMAIN}" || echo "(unknown)" )"
-            DEV_LINE="dev-url: $( [ -n "${DEV_DOMAIN:-}" ] && echo "https://${DEV_DOMAIN}" || echo "(unknown)" )"
-            COMMIT_MSG=$(printf 'chore: remove harness bootstrap files (one-time use)\n\n%s\n%s\n' "$PROD_LINE" "$DEV_LINE")
+            PREPROD_LINE="preprod-url: $( [ -n "${PREPROD_DOMAIN:-}" ] && echo "https://${PREPROD_DOMAIN}" || echo "(unknown)" )"
+            COMMIT_MSG=$(printf 'chore: remove harness bootstrap files (one-time use)\n\n%s\n%s\n' "$PROD_LINE" "$PREPROD_LINE")
             git commit -m "$COMMIT_MSG"
-            if git push origin dev && git push origin dev:main; then
+            if git push origin preprod && git push origin preprod:main; then
               export GH_TOKEN="$PAT_TOKEN"
 
               # Delete any claude/* and feature/* branches left over from
               # the bootstrap session. The first session does not call
-              # /mergedev (it runs the setup prompt via MCP on dev), so if
+              # /to-preprod (it runs the setup prompt via MCP on preprod), so if
               # it named a feature or pushed any code, the resulting
               # feature/<name> branch would otherwise leak. This workflow
               # self-deletes after success, so it can only run during

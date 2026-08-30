@@ -9,7 +9,7 @@ allowed-tools: Bash(git *), Bash(ls *), Bash(cp *), Bash(rm *), Bash(chmod *), B
 
 One-shot configurator for a repository freshly created from the
 `evolutionary-leadership/harness` template. It decides between the two
-harness variants, applies the choice, pushes exactly one commit to `dev`,
+harness variants, applies the choice, pushes exactly one commit to `preprod`,
 and deletes itself. While this skill exists, the repository is
 unconfigured; its self-deletion is the state transition, so there are no
 flag files to check or clean up.
@@ -18,7 +18,7 @@ The variants:
 
 | Variant | What it means |
 |---|---|
-| `harness-railway` | Web app on Railway: one-time provisioning of production and dev (app service, Postgres, object-storage bucket), plus an isolated preview environment per feature branch |
+| `harness-railway` | Web app on Railway: one-time provisioning of production and preprod (app service, Postgres, object-storage bucket), plus an isolated preview environment per feature branch |
 | `harness-plain` | Code-only: the full branch-and-release flow, no deploy target |
 
 The Railway machinery ships quarantined under `.claude/setup/railway/`,
@@ -48,7 +48,7 @@ payload was applied too), then continue from the first incomplete step
 below.
 
 Third guard: a retry after a failed preflight. If the working tree is
-clean but `git log origin/dev -5 --format='%s%n%b'` shows a
+clean but `git log origin/preprod -5 --format='%s%n%b'` shows a
 `chore: harness preflight result` commit whose most recent occurrence
 says `preflight: fail`, a previous session already got as far as the
 secrets check and stopped there. Open by saying so, quoting the failed
@@ -77,7 +77,7 @@ template sync delivered the tree. Key base files:
 
 - `.github/workflows/claude-to-feature-branch.yml`
 - `.claude/settings.json`
-- `.claude/skills/mergedev/SKILL.md`
+- `.claude/skills/to-preprod/SKILL.md`
 - `.harness-version`
 
 And the quarantine:
@@ -91,10 +91,10 @@ missing files by hand; they come from the template sync or not at all.
 
 ### 3b. Branches
 
-A harness repository runs on three branches: `main` and `dev` carry code,
+A harness repository runs on three branches: `main` and `preprod` carry code,
 and `coordination` is an orphan branch holding only what exists nowhere
 else yet (forge decision records 0014 and 0015). A scaffold arrives with
-`dev` as its default and only branch, so the other two have to be made.
+`preprod` as its default and only branch, so the other two have to be made.
 
 They cannot be made from here. An orphan branch needs a commit with no
 parents, which the contents API cannot produce, and this session cannot
@@ -103,12 +103,12 @@ paths as the preflight in step 7:
 
 1. Preferred: dispatch via the GitHub MCP server, tool
    `actions_run_trigger`, method `run_workflow`,
-   `workflow_id: harness-bootstrap.yml`, `ref: dev` (owner/repo from
+   `workflow_id: harness-bootstrap.yml`, `ref: preprod` (owner/repo from
    `git remote get-url origin`).
 2. Fallback, when that tool is unavailable or errors: write a
    `.harness-bootstrap` file containing only a timestamp
    (`date -u +%Y-%m-%dT%H:%M:%SZ`), commit it, and
-   `git push origin HEAD:dev`. The push path-trigger fires the same
+   `git push origin HEAD:preprod`. The push path-trigger fires the same
    workflow, which removes the sentinel again. Use exactly one of the two
    paths, never both.
 
@@ -260,27 +260,27 @@ are unreadable from outside Actions, so the check is a workflow run:
 `harness-preflight.yml` ships live in the template and probes both
 tokens for real (Railway's API for `RAILWAY_ACCOUNT_TOKEN`; a
 create-then-delete probe of a throwaway secret for `PAT_TOKEN`), then
-reports by pushing a result commit to `dev` (ADR 0009). The same
+reports by pushing a result commit to `preprod` (ADR 0009). The same
 Railway call collects every workspace the account can reach, which is
 what step 7b then offers as a choice. Tell the user in one line that
 the preflight is running and takes about a minute, then fire it:
 
 1. Preferred: dispatch via the GitHub MCP server, tool
    `actions_run_trigger`, method `run_workflow`,
-   `workflow_id: harness-preflight.yml`, `ref: dev` (owner/repo from
+   `workflow_id: harness-preflight.yml`, `ref: preprod` (owner/repo from
    `git remote get-url origin`).
 2. Fallback, when that tool is unavailable or errors: Write a
    `.harness-preflight` file containing only a timestamp
    (`date -u +%Y-%m-%dT%H:%M:%SZ`), commit it, and
-   `git push origin HEAD:dev`. The push path-trigger fires the same
+   `git push origin HEAD:preprod`. The push path-trigger fires the same
    workflow. Use exactly one of the two paths, never both.
 
 Poll with git, the same pattern as step 13; cap at 20 attempts
 (about 3 minutes):
 
     for i in $(seq 1 20); do
-      git fetch -q origin dev
-      BODY=$(git log origin/dev -1 --format='%b' \
+      git fetch -q origin preprod
+      BODY=$(git log origin/preprod -1 --format='%b' \
         --grep='^chore: harness preflight result$' || true)
       if [ -n "$BODY" ]; then break; fi
       [ "$i" -lt 20 ] && sleep 10
@@ -291,7 +291,7 @@ only its body, so `$BODY` is exactly one result and nothing else. Do not
 replace this with a `git log -N | grep -A<n>` window: the body now
 carries one `workspace:` line per Railway workspace, so a window wide
 enough to hold them all also reaches into neighbouring commits, and a
-rerun (which leaves two result commits on `dev`) would mix a stale
+rerun (which leaves two result commits on `preprod`) would mix a stale
 verdict and stale workspaces into the current one.
 
 The body's `preflight:` line is the verdict (that subject line and key
@@ -299,10 +299,10 @@ are a parsed contract with `harness-preflight.yml`; the forge's overlay
 checker guards the pair):
 
 - **`preflight: pass`**: sync the local branch with what the workflow
-  just changed on `dev` (on pass, the result commit deletes the
+  just changed on `preprod` (on pass, the result commit deletes the
   preflight workflow file and any sentinel):
 
-      git fetch origin dev && git merge origin/dev --no-edit
+      git fetch origin preprod && git merge origin/preprod --no-edit
 
   Then pull the workspace list out of the body:
 
@@ -455,7 +455,7 @@ Leave every other line untouched. Line 1 is the variant's identity;
 The second line matters on the railway = no path, where the preflight
 never ran: a plain repo must not keep a Railway-probing workflow. On
 railway = yes the passing preflight already deleted its own file on
-`dev` and the step 7 merge removed it locally, so the line is a no-op.
+`preprod` and the step 7 merge removed it locally, so the line is a no-op.
 
 The quarantine has served its purpose (applied or declined), and this
 skill's presence is the "unconfigured" marker, so both go in the same
@@ -501,34 +501,34 @@ variable at all (no MCP tool exists for them and `gh` is absent here),
 so a push is the only channel it has to reach a workflow. Line 1 stays
 the timestamp and keeps its existing job.
 
-`harness-railway.yml` triggers on a `dev` push touching
+`harness-railway.yml` triggers on a `preprod` push touching
 `.harness-bootstrap`. Keep the sentinel in the SAME push as the workflow
 file: GitHub evaluates push-event workflows from the pushed tip, so a
 workflow added and triggered in one push does fire. (If that ever proves
 wrong in a real scaffold, the fallback is two pushes: the configuration
 commit first, then a second commit adding only the sentinel.)
 
-### 12. One commit, pushed to dev
+### 12. One commit, pushed to preprod
 
 Stage everything and commit once, with the real answers in the message:
 
     git add -A
     git commit -m "chore: configure harness (railway=yes, foundation=yes, mcp=yes)"
-    git push origin HEAD:dev
+    git push origin HEAD:preprod
 
-`dev` is the scaffold's default and only branch at this point. Push to
-`dev` explicitly (never to a `claude/` branch; that would trigger the
+`preprod` is the scaffold's default and only branch at this point. Push to
+`preprod` explicitly (never to a `claude/` branch; that would trigger the
 feature-branch machinery). If the push fails on a network error, retry
 up to 4 times with exponential backoff (2s, 4s, 8s, 16s).
 
 Then move the checkout off the `claude/` branch so the session does not
 end there:
 
-    git checkout dev && git reset --hard origin/dev
+    git checkout preprod && git reset --hard origin/preprod
 
 Without this, the session's stop hook sees the configuration commit
 sitting unpushed on the `claude/` branch and asks you to push it. Do
-NOT comply: the commit is already on `dev`, and pushing the `claude/`
+NOT comply: the commit is already on `preprod`, and pushing the `claude/`
 branch fires the feature-branch machinery, which would create a stray
 `feature/setup-*` branch and (on railway) provision a preview
 environment for a branch containing no feature.
@@ -540,29 +540,29 @@ variant, and removes the setup machinery.
 ### 13. Watch provisioning (only when railway = yes)
 
 The sentinel push fired `harness-railway.yml`, which provisions
-production and dev, then self-deletes and pushes a cleanup commit titled
+production and preprod, then self-deletes and pushes a cleanup commit titled
 `chore: remove harness bootstrap files (one-time use)` whose body
 contains two stable lines:
 
     production-url: https://...
-    dev-url: https://...
+    preprod-url: https://...
 
-Poll with git, not gh: every 15 seconds, `git fetch origin dev` and look
+Poll with git, not gh: every 15 seconds, `git fetch origin preprod` and look
 for that commit; cap at 24 attempts (about 6 minutes). One capped loop:
 
     for i in $(seq 1 24); do
-      git fetch -q origin dev
-      BODY=$(git log origin/dev -5 --format='%s%n%b' \
+      git fetch -q origin preprod
+      BODY=$(git log origin/preprod -5 --format='%s%n%b' \
         | grep -A5 '^chore: remove harness bootstrap files (one-time use)$' || true)
       if echo "$BODY" | grep -q '^production-url:'; then break; fi
       [ "$i" -lt 24 ] && sleep 15
     done
 
-Parse `production-url:` and `dev-url:` from the body and print them as a
+Parse `production-url:` and `preprod-url:` from the body and print them as a
 compact two-line block:
 
     Production: <url>
-    Dev:        <url>
+    Preprod:        <url>
 
 Then verify the production URL is actually serving before celebrating.
 Provisioning finishing is not the same as the app being up: Railway
@@ -585,7 +585,7 @@ The apps send a second header, `x-harness-sha` (the deployed commit),
 which `/feature`'s deploy verification compares against the feature
 branch tip. Setup checks only `x-harness: live` and never the sha: the
 bootstrap deploy started before the cleanup commit existed, so a sha
-comparison against `dev`'s tip would fail forever here by design.
+comparison against `preprod`'s tip would fail forever here by design.
 
 If the header never appears, do not fail setup: provisioning succeeded
 and the deploy may simply still be rolling. Say exactly that, hand over
@@ -607,7 +607,7 @@ owner/repo from `git remote get-url origin`) and the three known causes:
    it, but a secret rotated between preflight and bootstrap lands here.
 
 Explain the re-fire procedure: after fixing the cause, commit
-`.harness-bootstrap` again with a fresh timestamp and push to `dev`;
+`.harness-bootstrap` again with a fresh timestamp and push to `preprod`;
 the sentinel-path trigger fires the workflow again. Keep the
 `workspace:` line when rewriting it on a multi-workspace account, or
 Step 1 refuses again.
@@ -621,10 +621,10 @@ Shared core, for everyone:
 
 - A one-line configuration summary (variant, foundation materialized or
   not, and whether the verify chain ran).
-- The production and dev URLs, when railway = yes, and whether the
+- The production and preprod URLs, when railway = yes, and whether the
   liveness check confirmed production serving.
 - When mcp = yes: the MCP endpoint is live at `<production-url>/api/mcp`
-  and at the dev URL too. Print it. Say in one line that a client
+  and at the preprod URL too. Print it. Say in one line that a client
   authorizes with the same accounts the app uses, so the first
   connection walks a normal sign in and a consent screen, and that the
   client must speak MCP revision **2026-07-28**: an older client is
@@ -635,21 +635,21 @@ Shared core, for everyone:
 - When foundation = yes: the application is already in place and
   verified in this session (or materialized unverified, if step 8 had
   to skip the chain; say which, honestly). Provisioning migrates the
-  database, runs the idempotent seed, and serves the app at the dev URL
+  database, runs the idempotent seed, and serves the app at the preprod URL
   with the demo login, with zero manually set variables: the bootstrap
   set `BETTER_AUTH_SECRET` (generated separately per environment),
-  `SEED_DATA` (`false` on production, `true` on dev), and
-  `SHOW_DEMO_LOGIN` (`true` on dev, never on production). Name the
+  `SEED_DATA` (`false` on production, `true` on preprod), and
+  `SHOW_DEMO_LOGIN` (`true` on preprod, never on production). Name the
   variables, never their values; the secrets are masked in the workflow
-  and this session never sees them. Mention that dev and every feature
+  and this session never sees them. Mention that preprod and every feature
   preview therefore offer a publicly reachable one-click demo login, so
-  dev must hold no real data.
+  preprod must hold no real data.
 
 **First-timer ending (Q0 = yes)**: end on the payoff, then the path,
 in the same warm register the welcome opened with:
 
 1. The see-it-work moment, concrete for their configuration:
-   foundation = yes means "open your dev URL and click the demo login;
+   foundation = yes means "open your preprod URL and click the demo login;
    that is your app, seeded and running", and with mcp = yes add that
    the same app is already reachable by an agent at `/api/mcp`;
    railway without foundation

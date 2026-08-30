@@ -18,7 +18,7 @@ other's context; this skill aggregates their findings.
 
 ### 1. Pin the fixed point
 
-Inside `/feature`, the fixed point is `origin/dev`. Standalone, it is
+Inside `/feature`, the fixed point is `origin/preprod`. Standalone, it is
 whatever the user said (a commit SHA, branch name, tag, `HEAD~5`); if they
 did not specify one, ask.
 
@@ -133,7 +133,7 @@ End with a one-line summary: total findings per axis, and the worst issue
 is the reranking the separation exists to prevent.
 
 Inside `/feature`, this summary carries into phase 5 and into the PR body
-that `/mergedev` or `/review` writes.
+that `/to-preprod` or `/review` writes.
 
 ## Why two axes
 

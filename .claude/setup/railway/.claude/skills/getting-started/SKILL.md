@@ -67,12 +67,12 @@ Two skills have "review" in their name; learn the pair once:
 - **`/code-review` reviews code.** Agents review the diff along two axes
   (Standards and Spec) in parallel sub-agents. It runs automatically at
   the end of `/feature` phase 4.
-- **`/review` requests humans.** It opens a PR to dev that is NOT
+- **`/review` requests humans.** It opens a PR to preprod that is NOT
   auto-merged and assigns reviewers from `.harness-version`. When humans
-  approve, the PR lands via `/mergedev`, never the GitHub merge button.
+  approve, the PR lands via `/to-preprod`, never the GitHub merge button.
 
 The full catalog, for orientation. Process skills (the flow):
-`/feature`, `/brainstorm`, `/chat`, `/endchat`, `/continue`, `/mergedev`,
+`/feature`, `/brainstorm`, `/chat`, `/endchat`, `/continue`, `/to-preprod`,
 `/review`, `/release`, `/hotfix`, `/rollback`, `/status`, `/changelog`,
 `/deps`, `/document`, `/harness-upgrade`, `/getting-started` (this one).
 Technique skills (chained by the flow, also usable directly):

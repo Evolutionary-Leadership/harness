@@ -33,7 +33,7 @@ or another skill must. If it only ever fires by hand, make it user-invoked
 and pay no context load.
 
 In this harness the split runs: entry points (`/feature`, `/brainstorm`,
-`/mergedev`, `/review`, and the other process skills) are user-invoked;
+`/to-preprod`, `/review`, and the other process skills) are user-invoked;
 the technique skills they chain (`/grilling`, `/to-spec`, `/to-tickets`,
 `/implement`, `/tdd`, `/code-review`, `/domain-modeling`,
 `/codebase-design`) are model-invoked, precisely so the entry points can

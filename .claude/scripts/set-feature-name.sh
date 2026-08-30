@@ -20,7 +20,7 @@ if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]*$'; then
   exit 1
 fi
 case "$SLUG" in
-  dev | main | HEAD) echo "Reserved name: $SLUG" >&2; exit 1 ;;
+  preprod | dev | main | HEAD) echo "Reserved name: $SLUG" >&2; exit 1 ;;
 esac
 BRANCH="$(git branch --show-current 2>/dev/null || echo "")"
 if [[ "$BRANCH" != claude/* ]]; then

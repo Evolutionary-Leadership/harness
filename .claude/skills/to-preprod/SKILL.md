@@ -1,19 +1,23 @@
 ---
-name: mergedev
-description: Merge the current feature branch into dev. Use when the user says "merge to dev", "merge into dev", or invokes /mergedev.
+name: to-preprod
+description: Merge the current feature branch into preprod, the gate before production. Use when the user says "merge to preprod", "ship it to the gate", or invokes /to-preprod.
 disable-model-invocation: true
 argument-hint: "[optional: PR title]"
 allowed-tools: Bash(git *), Read, Write, Glob, Grep
 ---
 
-# Merge to dev
+# To preprod
 
-Merge the current feature into dev by creating the `.pr-description.md` signal
-file, committing, and pushing. The GitHub Action (`claude-to-feature-branch.yml`)
+Take the current feature through the gate. `preprod` is the branch between
+feature branches and production (ADR 0021): a feature that has been built
+and tested waits there until a release promotes it to `main`.
+
+This skill does not merge anything itself. It writes the `.pr-description.md`
+signal file, commits it, and pushes; the GitHub Action picks the signal up and
 handles PR creation and auto-merge.
 
-This is also how a `/review` PR lands after humans approve it: the workflow
-reuses the open PR instead of creating a second one, so run `/mergedev`
+It is also how a `/review` PR lands after humans approve it. The workflow
+reuses the open PR instead of opening a second one, so run `/to-preprod`
 rather than clicking the GitHub merge button.
 
 ## Steps
@@ -27,29 +31,29 @@ rather than clicking the GitHub merge button.
 This prefers the slug in `.harness-feature` (set via `set-feature-name.sh`)
 and falls back to the random session codename, matching the workflows.
 
-### 2. Gather all changes and sync with dev
+### 2. Gather all changes and sync with preprod
 
-Fetch and diff against dev to understand what's being merged:
+Fetch and diff against preprod to understand what is going through the gate:
 
-    git fetch origin dev
-    git log origin/dev..HEAD --oneline
-    git diff origin/dev..HEAD --stat
+    git fetch origin preprod
+    git log origin/preprod..HEAD --oneline
+    git diff origin/preprod..HEAD --stat
 
 Also check if a `feature/<name>` branch exists and include its commits:
 
     git fetch origin feature/<name> 2>/dev/null
-    git log origin/dev..origin/feature/<name> --oneline 2>/dev/null
+    git log origin/preprod..origin/feature/<name> --oneline 2>/dev/null
 
 Review ALL changes (not just the latest commit) to write an accurate PR
 description.
 
-**Pre-empt merge conflicts with dev.** The workflow merges this branch into
-`dev` through the PR; if `dev` has advanced in a conflicting way, the PR cannot
-merge and the workflow leaves it open. Merge `dev` into the current branch now
-so any conflict surfaces here, where you can resolve it, instead of stalling the
-PR:
+**Pre-empt merge conflicts with preprod.** The workflow merges this branch
+into `preprod` through the PR; if `preprod` has advanced in a conflicting way,
+the PR cannot merge and the workflow leaves it open. Merge `preprod` into the
+current branch now so any conflict surfaces here, where you can resolve it,
+instead of stalling the PR:
 
-    git merge origin/dev --no-edit
+    git merge origin/preprod --no-edit
 
 If the merge succeeds cleanly, continue. If it reports conflicts, resolve
 them with the discipline below rather than aborting.
@@ -70,7 +74,7 @@ conflict.
 3. **Resolve each hunk.** Preserve both intents where possible. Where
    they are incompatible, pick the side matching this merge's stated goal
    and note the trade-off. Do not invent new behaviour in a resolution.
-   For generated, lock, or signal files, prefer the `dev` version. Always
+   For generated, lock, or signal files, prefer the `preprod` version. Always
    resolve; never `--abort`.
 4. **Run the checks.** Run the `check:` command from `.harness-version`
    (or the project's typecheck and tests) and fix anything the merge
@@ -86,7 +90,7 @@ merge needs no mention. If a conflict is genuinely ambiguous and you
 cannot resolve it safely (two incompatible intents in the same hunk),
 stop and ask the user instead of guessing.
 
-**Sweep leaked feature contexts.** If the merge from dev brought in any
+**Sweep leaked feature contexts.** If the merge from preprod brought in any
 `.harness/feature-context/*.md` for *other* features (leaked past a merge
 that bypassed this skill and the cleanup workflow), delete them now; the
 deletion rides along with this merge.
@@ -97,7 +101,7 @@ Before writing the PR description, launch the docs-updater agent so the
 documentation lands in the same merge as the code. Use the Agent tool:
 
     Launch the docs-updater agent with prompt:
-    "Delta audit for a merge to dev. Base is origin/dev.
+    "Delta audit for a merge to preprod. Base is origin/preprod.
      Read docs/README.md as the manifest and route every finding through it.
      Enforce architecture `sources:` globs against the changed paths, verify
      surface-table counts, treat docs/decisions/ as append-only, and flag any
@@ -129,9 +133,9 @@ Then delete it, in its own commit:
     git rm .harness/feature-context/"$FEATURE_NAME".md
     git commit -m "chore: retire feature context for $FEATURE_NAME"
 
-The context lives only while the feature is in flight; it never reaches
-`dev`. (If someone merges around this skill, the cleanup workflow removes
-the leftover from dev.)
+The context lives only while the feature is in flight; it never passes the
+gate. (If someone merges around this skill, the cleanup workflow removes the
+leftover from `preprod`.)
 
 ### 5. Write `.pr-description.md`
 
@@ -173,37 +177,37 @@ on the remote before the signal file triggers the workflow:
     git push -u origin <current-branch>
 
 Then add the signal file as its own commit and push it. `.pr-description.md`
-is in `.gitignore` (it is a signal file, never committed to dev/main), so the
-`-f` flag is required to stage it on the `claude/` branch:
+is in `.gitignore` (it is a signal file, and no signal file may pass the gate),
+so the `-f` flag is required to stage it on the `claude/` branch:
 
     git add -f .pr-description.md
-    git commit -m "chore: trigger auto-merge to dev"
+    git commit -m "chore: trigger auto-merge to preprod"
     git push -u origin <current-branch>
 
 ### 7. Inform the user
 
 Tell the user:
 - The auto-merge has been triggered
-- The GitHub Action will create a PR from `feature/<name>` to `dev` and
+- The GitHub Action will create a PR from `feature/<name>` to `preprod` and
   merge it (or reuse and merge the open `/review` PR, if one exists)
-- Any conflicts with `dev` were already resolved locally in step 2; report
+- Any conflicts with `preprod` were already resolved locally in step 2; report
   which files conflicted and how you resolved them. The PR should now merge
   cleanly. (If the workflow still cannot merge, it leaves a comment on the PR
   with manual resolution steps.)
 - The feature branch will be cleaned up automatically
 - They can stay in this chat and chain `/release` once the merge lands. The
-  release skill works on `dev` and never re-pushes the `claude/` branch, so
+  release skill works on `preprod` and never re-pushes the `claude/` branch, so
   it will not re-trigger feature branch creation.
 - Next time, `/release` on its own would have done both: run from an
   unmerged `claude/` branch it asks one confirmation, follows this
-  procedure, waits for `dev` to settle, and then ships. Mention it once,
+  procedure, waits for `preprod` to settle, and then ships. Mention it once,
   as an option; it is a bigger act than a merge and stays the user's call.
 
 ### 8. If the workflow fails
 
 If the GitHub Actions run for this push fails, the recovery path depends on
 where it broke. Open the Actions tab in GitHub and find the run titled
-"Merge feature branch to dev (mergedev)" triggered by the `claude/<branch>`
+"Merge feature branch to preprod (to-preprod)" triggered by the `claude/<branch>`
 push.
 
 Common failure modes:
@@ -213,9 +217,9 @@ Common failure modes:
   `claude/` branch was already deleted by `claude-to-feature-branch.yml`, the
   push creates a fresh branch and retriggers the chain. The workflow is
   idempotent, so re-runs do not duplicate commits or work.
-- **PR opened but could not auto-merge** (conflicts with dev): the workflow
+- **PR opened but could not auto-merge** (conflicts with preprod): the workflow
   leaves a comment on the PR with manual resolution steps. Check out
-  `feature/<name>` locally, merge `dev` into it, resolve the conflicts using
+  `feature/<name>` locally, merge `preprod` into it, resolve the conflicts using
   the discipline in step 2, push, and merge the PR by hand.
 - **PR did not open at all**: the workflow errored before PR creation. Read
   the failed step's logs in the Actions tab. Most common cause: a missing or
@@ -223,7 +227,7 @@ Common failure modes:
   `::error::PAT_TOKEN is missing or empty...` annotation pointing at
   Settings → Secrets and variables → Actions; the PAT needs `repo` and
   `workflow` scopes (or fine-grained equivalent: Contents r/w, Pull
-  requests r/w, Workflows r/w). Other causes: branch protection on `dev`
+  requests r/w, Workflows r/w). Other causes: branch protection on `preprod`
   that requires explicit reviewers. **Recovery when `PAT_TOKEN` was
   missing**: add the secret, then re-push the `claude/` branch
   (`git push -u origin <branch>`) to retrigger. Because cleanup now runs

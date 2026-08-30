@@ -34,5 +34,5 @@ a term in the code is not here, either add it or rename the code to a term that 
 | **Repository** | Layer 1. The only code that touches a table | `src/server/repositories/` |
 | **Service** | Layer 2. Domain logic over repositories, never over the Drizzle client | `src/server/services/` |
 | **Expand and contract** | Ship the new schema shape, migrate, then remove the old, so no deploy needs both at once | `docs/architecture/data-model.md` |
-| **Feature environment** | An ephemeral Railway environment per feature branch, cloned from dev, with its own Postgres | `docs/architecture/railway-environments.md` |
+| **Feature environment** | An ephemeral Railway environment per feature branch, cloned from preprod, with its own Postgres | `docs/architecture/railway-environments.md` |
 | **Reference variable** | A Railway variable like `${{Postgres.DATABASE_URL}}` that RE-RESOLVES per environment, so it clones safely | `docs/architecture/configuration.md` |

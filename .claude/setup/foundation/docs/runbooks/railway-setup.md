@@ -14,7 +14,7 @@ Set by hand, once per environment. Generate every secret with `openssl rand -bas
 | `ALLOW_SIGNUP` | `false` to close signup, otherwise leave unset |
 | `SHOW_DEMO_LOGIN` | leave unset |
 
-## dev (deploys from `dev`)
+## preprod (deploys from `preprod`)
 
 | Variable | Value to paste |
 |---|---|
@@ -25,4 +25,4 @@ Set by hand, once per environment. Generate every secret with `openssl rand -bas
 | `SHOW_DEMO_LOGIN` | `true` |
 | `BETTER_AUTH_URL` | leave unset (a literal here clones into every feature environment and breaks its sign in) |
 
-**Feature environments need ZERO setup**: they clone dev, where every value is either a reference variable that re-resolves against their own Postgres or a literal correct everywhere, and `BETTER_AUTH_URL` is unset so each falls back to its own Railway domain. Reasoning: [../architecture/configuration.md](../architecture/configuration.md).
+**Feature environments need ZERO setup**: they clone preprod, where every value is either a reference variable that re-resolves against their own Postgres or a literal correct everywhere, and `BETTER_AUTH_URL` is unset so each falls back to its own Railway domain. Reasoning: [../architecture/configuration.md](../architecture/configuration.md).

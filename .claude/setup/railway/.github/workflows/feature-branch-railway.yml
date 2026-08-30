@@ -22,20 +22,20 @@ jobs:
     # 1. `chore(context):` is the prefix the skills use for pure
     #    feature-context refreshes (see .claude/HARNESS.md).
     #
-    # 2. MERGE_SIGNAL is the subject /mergedev commits when it asks for the
-    #    auto-merge to dev. Such a push is a teardown, not a provisioning
-    #    event: claude-mergedev.yml is concurrently deleting the environment,
+    # 2. MERGE_SIGNAL is the subject /to-preprod commits when it asks for the
+    #    auto-merge to preprod. Such a push is a teardown, not a provisioning
+    #    event: claude-to-preprod.yml is concurrently deleting the environment,
     #    stripping the signal files and merging the PR. Running anyway raced
     #    that cleanup and committed .railway-url back onto the PR head, which
-    #    is how the file reached dev and then main; and because the teardown
+    #    is how the file reached preprod and then main; and because the teardown
     #    deletes the environment first, a run whose existence check landed
-    #    after the delete forked dev into an environment nobody asked for.
+    #    after the delete forked preprod into an environment nobody asked for.
     #
     #    /review's subject is deliberately NOT skipped. A review PR keeps its
-    #    environment (claude-mergedev.yml gates the teardown on the review
+    #    environment (claude-to-preprod.yml gates the teardown on the review
     #    flag), so it still wants provisioning and healing to run.
     #
-    #    The literal is a contract between the /mergedev skill that writes it
+    #    The literal is a contract between the /to-preprod skill that writes it
     #    and this guard that matches it, like the bootstrap foundation marker
     #    and the preflight result subject. It is spelled out inline rather
     #    than held in a variable because a job-level `if:` cannot read the
@@ -48,7 +48,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.head_branch, 'claude/') &&
       !startsWith(github.event.workflow_run.head_commit.message, 'chore(context):') &&
-      !startsWith(github.event.workflow_run.head_commit.message, 'chore: trigger auto-merge to dev')
+      !startsWith(github.event.workflow_run.head_commit.message, 'chore: trigger auto-merge to preprod')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -59,7 +59,7 @@ jobs:
       # US East unless every service-instance carries a region override.
       SERVICE_REGION: europe-west4-drams3a
       # Single visible knob for the object-storage bucket region. Feature
-      # buckets are NOT created here: they are inherited from the dev
+      # buckets are NOT created here: they are inherited from the preprod
       # environment's bucket (which harness-railway.yml creates in this
       # region), because Object Storage is not addressable via
       # project.services and a bucket cannot be moved after creation. This
@@ -84,7 +84,7 @@ jobs:
             -H "Accept: application/vnd.github.raw" \
             "https://api.github.com/repos/${{ github.repository }}/contents/.harness-feature?ref=$HEAD_SHA" \
             2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
-          if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
+          if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != preprod ] && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
           echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
           echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
 
@@ -126,7 +126,7 @@ jobs:
 
           # POST a raw JSON payload, retrying when the response is not
           # valid JSON. Slow mutations (environmentCreate forks the whole
-          # dev environment and can take over a minute) sometimes come
+          # preprod environment and can take over a minute) sometimes come
           # back with a malformed body even though they succeeded
           # server-side; a single bad response must not be trusted.
           gql_post() {
@@ -188,25 +188,25 @@ jobs:
             echo "$resp" | jq -e --arg k "$key" '((.data.variables | type) == "object") and (.data.variables | has($k))' > /dev/null 2>&1
           }
 
-          # 1. Get the dev environment ID
+          # 1. Get the preprod environment ID
           ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
-          DEV_ENV_ID=$(echo "$ENVS" | jq -r '.data.environments.edges[].node | select(.name == "dev") | .id')
+          PREPROD_ENV_ID=$(echo "$ENVS" | jq -r '.data.environments.edges[].node | select(.name == "preprod") | .id')
 
-          if [ -z "$DEV_ENV_ID" ]; then
-            echo "Error: Could not find dev environment"
+          if [ -z "$PREPROD_ENV_ID" ]; then
+            echo "Error: Could not find preprod environment"
             exit 1
           fi
 
-          # 2. Create environment duplicated from dev
-          CREATE_RESPONSE=$(gql "mutation { environmentCreate(input: { name: \\\"$FEATURE_NAME\\\", projectId: \\\"$PROJECT_ID\\\", sourceEnvironmentId: \\\"$DEV_ENV_ID\\\" }) { id deploymentTriggers { edges { node { id branch } } } } }")
+          # 2. Create environment duplicated from preprod
+          CREATE_RESPONSE=$(gql "mutation { environmentCreate(input: { name: \\\"$FEATURE_NAME\\\", projectId: \\\"$PROJECT_ID\\\", sourceEnvironmentId: \\\"$PREPROD_ENV_ID\\\" }) { id deploymentTriggers { edges { node { id branch } } } } }")
 
           ENV_ID=$(echo "$CREATE_RESPONSE" | jq -r '.data.environmentCreate.id // empty')
           if [ -z "$ENV_ID" ]; then
             # The create response can be malformed even though the
-            # environment WAS created server-side (with dev's deployment
-            # trigger still pointing at dev). Exiting 0 here would skip
+            # environment WAS created server-side (with preprod's deployment
+            # trigger still pointing at preprod). Exiting 0 here would skip
             # the trigger update, region pin, and variable wiring, and
-            # the preview would silently serve dev code. Poll for the
+            # the preview would silently serve preprod code. Poll for the
             # environment by name and continue provisioning once found.
             echo "environmentCreate returned no id; polling for environment '$FEATURE_NAME'..."
             echo "$CREATE_RESPONSE" | jq . || true
@@ -237,7 +237,7 @@ jobs:
           done
 
           # 3b. Wire DATABASE_URL and bucket credentials to app service
-          # environmentCreate *should* inherit variables from dev, but Railway
+          # environmentCreate *should* inherit variables from preprod, but Railway
           # reference variables sometimes fail to resolve in forked environments.
           # Explicitly setting them ensures the app works on first deploy.
           # Build Railway reference variables at runtime so double braces
@@ -250,7 +250,7 @@ jobs:
           PG_REF=$(railref "${PG_SVC_NAME}.DATABASE_URL")
 
           # Pin region for the forked feature environment. environmentCreate
-          # *should* carry per-instance region from dev, but inheritance is
+          # *should* carry per-instance region from preprod, but inheritance is
           # not guaranteed, so set it explicitly.
           if [ -n "$APP_SERVICE_ID" ]; then
             set_service_region "$APP_SERVICE_ID" "$ENV_ID"
@@ -305,13 +305,13 @@ jobs:
             fi
 
             # 3b-ii. Give this preview its own auth secret.
-            # environmentCreate copies dev's variables as literals, so a fresh
-            # preview arrives holding dev's BETTER_AUTH_SECRET. Replace it, so
+            # environmentCreate copies preprod's variables as literals, so a fresh
+            # preview arrives holding preprod's BETTER_AUTH_SECRET. Replace it, so
             # the "unique per environment" rule the foundation states is
-            # actually true, and a leaked preview key cannot forge dev sessions.
+            # actually true, and a leaked preview key cannot forge preprod sessions.
             #
             # Gated on the key already being present. A project without the
-            # standard technical foundation has no BETTER_AUTH_SECRET on dev,
+            # standard technical foundation has no BETTER_AUTH_SECRET on preprod,
             # so its previews have nothing to rotate and this does nothing.
             # That presence check is why the /setup foundation marker never has
             # to reach this workflow.
@@ -322,7 +322,7 @@ jobs:
             # reviewer out mid review. Forge decision record 0007.
             # Unlike the bootstrap workflow's read, this one fails towards
             # doing NOTHING: an unreadable response leaves the preview with
-            # dev's inherited secret, which is degraded but harmless, whereas
+            # preprod's inherited secret, which is degraded but harmless, whereas
             # rotating on a bad read could disturb an environment we could not
             # actually inspect.
             if env_has_var "$ENV_ID" "$APP_SERVICE_ID" BETTER_AUTH_SECRET; then
@@ -334,17 +334,17 @@ jobs:
                 --arg secret "$FEATURE_AUTH_SECRET" \
                 '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: {"BETTER_AUTH_SECRET": $secret}}}}')" > /dev/null
               # Name only. Never the value.
-              echo "Set BETTER_AUTH_SECRET on app service for feature environment (fresh value, not dev's)"
+              echo "Set BETTER_AUTH_SECRET on app service for feature environment (fresh value, not preprod's)"
             else
-              echo "No BETTER_AUTH_SECRET inherited from dev; nothing to rotate for this feature environment."
+              echo "No BETTER_AUTH_SECRET inherited from preprod; nothing to rotate for this feature environment."
             fi
           fi
 
           # 3c. Redeploy the app service from the feature branch
-          # environmentCreate duplicates the dev environment and immediately
-          # queues a deployment using the *old* (dev) triggers. By the time
+          # environmentCreate duplicates the preprod environment and immediately
+          # queues a deployment using the *old* (preprod) triggers. By the time
           # we update the triggers above, that first deployment is already
-          # in flight with dev code. Explicitly redeploying ensures the
+          # in flight with preprod code. Explicitly redeploying ensures the
           # feature branch code is what actually runs.
           # Only the app service needs redeployment. Postgres and storage
           # are managed services that don't pull from git branches.
@@ -356,14 +356,14 @@ jobs:
           # 4. Eagerly ensure a service domain exists. The publish step
           # below also does get-or-create, but seeding it here means the
           # domain is reachable as soon as the deployment finishes.
-          # environmentCreate duplicates dev's domain, so we check for an
+          # environmentCreate duplicates preprod's domain, so we check for an
           # inherited domain before creating a new one to avoid duplicates.
           if [ -n "$APP_SERVICE_ID" ]; then
             EXISTING_DOMAIN=$(gql "query { domains(projectId: \\\"$PROJECT_ID\\\", environmentId: \\\"$ENV_ID\\\", serviceId: \\\"$APP_SERVICE_ID\\\") { serviceDomains { domain } } }" \
               | jq -r '.data.domains.serviceDomains[0].domain // empty' 2>/dev/null) || true
 
             if [ -n "$EXISTING_DOMAIN" ]; then
-              echo "Using existing domain inherited from dev: $EXISTING_DOMAIN"
+              echo "Using existing domain inherited from preprod: $EXISTING_DOMAIN"
             else
               gql "mutation { serviceDomainCreate(input: { serviceId: \\\"$APP_SERVICE_ID\\\", environmentId: \\\"$ENV_ID\\\" }) { domain } }" >/dev/null || true
             fi
@@ -372,10 +372,10 @@ jobs:
       - name: Repoint deployment triggers to feature branch (heal)
         # Always runs when secrets are present, regardless of whether the
         # create step ran or was skipped (exists=true), analogous to the
-        # URL publish heal below. environmentCreate forks dev's deployment
+        # URL publish heal below. environmentCreate forks preprod's deployment
         # trigger, so a half-provisioned environment (older harness
         # versions, or a create run that died between environmentCreate
-        # and deploymentTriggerUpdate) keeps serving dev code while
+        # and deploymentTriggerUpdate) keeps serving preprod code while
         # looking healthy. Any trigger not pointing at feature/<name> is
         # repointed here, followed by a redeploy of the app service so
         # the running deployment matches the connected branch. Idempotent:
@@ -452,10 +452,10 @@ jobs:
         #
         # Bucket note: Railway Object Storage is NOT addressable via
         # project.services, so a feature bucket's region cannot be read or
-        # re-pinned here. Feature buckets inherit their region from the dev
+        # re-pinned here. Feature buckets inherit their region from the preprod
         # environment's bucket, which harness-railway.yml creates in
         # BUCKET_REGION (ams). A bucket cannot be moved after creation, so
-        # the dev bucket is the durable control for bucket region; this
+        # the preprod bucket is the durable control for bucket region; this
         # step governs only the app + Postgres services. We deliberately
         # ship no untested storage-region mutation here. See
         # claude/HARNESS.md "Region default".
@@ -534,9 +534,9 @@ jobs:
 
           # Object Storage is not in project.services, so the feature
           # bucket's region cannot be verified or re-pinned here. It is
-          # inherited from the dev bucket (created in BUCKET_REGION=$BUCKET_REGION)
+          # inherited from the preprod bucket (created in BUCKET_REGION=$BUCKET_REGION)
           # and cannot be moved after creation.
-          echo "Bucket region inherited from dev (BUCKET_REGION=$BUCKET_REGION); not re-pinnable per feature."
+          echo "Bucket region inherited from preprod (BUCKET_REGION=$BUCKET_REGION); not re-pinnable per feature."
 
           # A region change only takes effect on the next deployment, so
           # redeploy the app when its region changed. Postgres and storage
@@ -553,7 +553,7 @@ jobs:
         # Idempotent by CONTENT, not by presence. "Published" means the file
         # names the environment THIS run resolved, not merely that a file is
         # there. A presence check cannot tell a URL this branch published from
-        # one it inherited: a branch cut from a dev that wrongly carries
+        # one it inherited: a branch cut from a preprod that wrongly carries
         # .railway-url would keep the previous feature's URL forever, and every
         # reader would silently target an environment that no longer exists.
         # Comparing content is what repairs such a branch on its first run.
@@ -613,7 +613,7 @@ jobs:
           fi
 
           # Get-or-create the service domain. environmentCreate inherits
-          # dev's domain, so check first to avoid duplicates.
+          # preprod's domain, so check first to avoid duplicates.
           EXISTING_DOMAIN=$(gql "query { domains(projectId: \\\"$PROJECT_ID\\\", environmentId: \\\"$ENV_ID\\\", serviceId: \\\"$APP_SERVICE_ID\\\") { serviceDomains { domain } } }" \
             | jq -r '.data.domains.serviceDomains[0].domain // empty' 2>/dev/null) || true
           if [ -n "$EXISTING_DOMAIN" ]; then
@@ -643,7 +643,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Refetch-reset-retry, the same shape claude-mergedev.yml's cleanup
+          # Refetch-reset-retry, the same shape claude-to-preprod.yml's cleanup
           # uses, and deliberately not a rebase. Rebasing a "set the URL to X"
           # commit onto a branch whose file says Y conflicts, and the case
           # where the branch says Y is exactly the one this step now exists to

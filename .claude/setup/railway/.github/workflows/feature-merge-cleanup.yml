@@ -1,9 +1,9 @@
-name: Clean up feature branch after merge to dev
+name: Clean up feature branch after merge to preprod
 
 on:
   pull_request:
     types: [closed]
-    branches: [dev]
+    branches: [preprod]
 
 jobs:
   cleanup:
@@ -71,24 +71,24 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # The feature-context file (see .claude/HARNESS.md) lives only while a
-      # feature is in flight. /mergedev deletes it before triggering the
-      # merge; this step is the net for merges that bypassed /mergedev
+      # feature is in flight. /to-preprod deletes it before triggering the
+      # merge; this step is the net for merges that bypassed /to-preprod
       # (the GitHub UI merge button, a manual git merge), so the file
-      # never lingers on dev.
-      - name: Remove leftover feature-context file from dev
+      # never lingers on preprod.
+      - name: Remove leftover feature-context file from preprod
         run: |
           SLUG="${{ steps.feature.outputs.name }}"
           FILE=".harness/feature-context/${SLUG}.md"
-          git clone --depth 1 --branch dev \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" dev-clone
-          cd dev-clone
+          git clone --depth 1 --branch preprod \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" preprod-clone
+          cd preprod-clone
           if [ -f "$FILE" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git rm -q "$FILE"
             git commit -m "chore: remove feature context for merged ${SLUG}"
-            git push origin dev \
-              || echo "Warning: could not push context cleanup to dev (branch protection?)."
+            git push origin preprod \
+              || echo "Warning: could not push context cleanup to preprod (branch protection?)."
           else
             echo "No feature-context file to clean up."
           fi

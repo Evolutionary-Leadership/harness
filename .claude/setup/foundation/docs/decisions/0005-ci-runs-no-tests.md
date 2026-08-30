@@ -6,7 +6,7 @@
 ## Context
 
 The harness runs the command in `.harness-version`'s `check:` field on pull
-requests to `dev` and `main`, and auto-merge waits for it. The obvious thing to put
+requests to `preprod` and `main`, and auto-merge waits for it. The obvious thing to put
 there is the full verify chain, including tests.
 
 The GitHub Actions runner this harness uses **has no Docker daemon**. The

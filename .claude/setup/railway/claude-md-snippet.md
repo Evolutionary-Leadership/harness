@@ -129,15 +129,15 @@ check status.claude.com if it persists across sessions.
 
 ## The three branches
 
-This repository runs on three branches. `main` and `dev` carry code.
+This repository runs on three branches. `main` and `preprod` carry code.
 `coordination` is an orphan branch that carries none, is never merged, and
 shares no history with the other two.
 
 It holds only what exists nowhere else yet. Today that is one thing:
 reserved ADR numbers. `/document adr` claims a number there before writing
-the file, so two sessions cut from the same `dev` tip cannot pick the same
-one; the candidate is always `max(numbers on dev, numbers claimed) + 1`, so
-`dev` stays the source of truth and the branch is a cache over it.
+the file, so two sessions cut from the same `preprod` tip cannot pick the same
+one; the candidate is always `max(numbers on preprod, numbers claimed) + 1`, so
+`preprod` stays the source of truth and the branch is a cache over it.
 
 Everything on the branch is advisory and nothing blocks on it. If it is
 missing or unreachable, a session carries on with a warning. The guarantee
@@ -154,7 +154,7 @@ is deployable from the first push.
 
 ### Railway environments
 
-Every environment (production, dev, and one per feature branch) gets its own
+Every environment (production, preprod, and one per feature branch) gets its own
 isolated PostgreSQL instance, S3-compatible bucket, and app service. The
 mechanics are a catalog, so they live in
 [`docs/architecture/railway-environments.md`](docs/architecture/railway-environments.md).
@@ -163,14 +163,14 @@ the preview URL. What you need in every session:
 
 - Read `DATABASE_URL` and the `AWS_*` bucket variables from the environment.
   Never build a connection string or hard-code a bucket name.
-- A feature environment's database starts **empty**; dev and production only
+- A feature environment's database starts **empty**; preprod and production only
   run pending migrations. Use expand-and-contract for breaking schema changes.
 - Production is never seeded: honour `SEED_DATA=false` at the top of any seed
   script.
 - `BETTER_AUTH_SECRET`, `SEED_DATA`, and `SHOW_DEMO_LOGIN` are set for you at
   provision time, per environment. Read them; do not set them by hand.
-- **Dev and every preview are publicly loginable**: they carry a seeded demo
-  account, `SHOW_DEMO_LOGIN=true`, and a public URL. Dev must never hold real
+- **Preprod and every preview are publicly loginable**: they carry a seeded demo
+  account, `SHOW_DEMO_LOGIN=true`, and a public URL. Preprod must never hold real
   data. Production never gets that flag.
 - **After your final push, fetch and include the Railway preview URL in your
   summary:** `bash .claude/scripts/get-railway-url.sh`. Hook output is not
@@ -215,7 +215,7 @@ with a stop-and-ask gate between each one:
 5. push, report the Railway preview URL
    (`bash .claude/scripts/get-railway-url.sh`), verify the deploy is
    live (`bash .claude/scripts/verify-deploy.sh`), then choose the
-   exit: `/mergedev`, `/review` or `/release`
+   exit: `/to-preprod`, `/review` or `/release`
 
 **Two ways to say "stop asking me".** In a grilling round, the standing
 option grants **grill autonomy**: take the recommended answer on every
@@ -243,11 +243,11 @@ context, not from memory.
 Push to the `claude/` branch. The GitHub Action merges it into the feature
 branch and deletes the source claude/ branch.
 
-### 3. Merging to dev
+### 3. Merging to preprod
 
-Use `/mergedev` or say "merge to dev". This writes `.pr-description.md`,
+Use `/to-preprod` or say "merge to preprod". This writes `.pr-description.md`,
 commits, and pushes. The GitHub Action creates a PR and auto-merges it.
-`/mergedev` also retires the feature context; it never reaches `dev`.
+`/to-preprod` also retires the feature context; it never reaches `preprod`.
 
 ### 3b. Submitting for review (instead of auto-merge)
 
@@ -255,7 +255,7 @@ Use `/review` to create a PR without auto-merge. The PR stays open for
 team review, carrying the `/code-review` findings, the spec link, and the
 Railway preview URL for live testing. Reviewers are assigned from
 `.harness-version` if configured. When the review is approved, land it
-with `/mergedev` (it reuses the open PR); merges go through `/mergedev`,
+with `/to-preprod` (it reuses the open PR); merges go through `/to-preprod`,
 not the GitHub merge button.
 
 Two different things both called review: `/code-review` is the agent
@@ -271,33 +271,33 @@ bucket) and feature branch. The separate `feature-branch-cleanup.yml` workflow
 serves as a fallback if a feature branch is deleted manually (e.g., without
 going through a PR).
 
-**Gotcha:** Don't push to a merged branch. After `/mergedev`, both branches
+**Gotcha:** Don't push to a merged branch. After `/to-preprod`, both branches
 are deleted remotely. Pushing again re-creates everything from scratch.
 
-**`/release` after `/mergedev` in the same chat is fine.** The release skill
-works on `dev` (stash, switch, commit, push, return) and never pushes the
+**`/release` after `/to-preprod` in the same chat is fine.** The release skill
+works on `preprod` (stash, switch, commit, push, return) and never pushes the
 `claude/` branch, so it does not re-trigger feature branch creation. No
 need to start a new chat for a release.
 
 **Or skip the pair.** `/release` run from an unmerged `claude/` branch does
-both: it asks one confirmation, merges to `dev`, waits for `dev` to settle,
+both: it asks one confirmation, merges to `preprod`, waits for `preprod` to settle,
 then ships. See "Releasing to production" below.
 
 ## Releasing to production
 
 Use `/release` (with optional `major`, `minor`, or `patch` argument) to ship
-dev to production. This creates a release PR from `dev` → `main`, tags the
+preprod to production. This creates a release PR from `preprod` → `main`, tags the
 version, and generates a GitHub Release with notes.
 
 **`/release` knows where you ran it from.** On an unmerged `claude/` branch
-it runs the whole chain: merge to `dev`, wait until `dev` settles, then
+it runs the whole chain: merge to `preprod`, wait until `preprod` settles, then
 release. It asks one confirmation first, because taking a feature straight
 to production is not the same act as releasing reviewed work. `--quick`
 skips that question when you have already decided.
 
 **Every release reports its blast radius**, on any branch and under
-`--quick` too: everything in the range from the last tag to `dev`, split
-into your commits and the ones riding along. Releasing ships all of `dev`,
+`--quick` too: everything in the range from the last tag to `preprod`, split
+into your commits and the ones riding along. Releasing ships all of `preprod`,
 not just your feature, and that is the number one way a colleague's
 half-finished work reaches production. The production Railway
 environment deploys automatically from main. For emergencies, use `/hotfix`
@@ -316,7 +316,7 @@ also exposes it as `npm run check:docs`): it makes broken docs block
 auto-merge exactly like a type error, which is the only reason docs stay
 fresh. It has no dependencies and runs in under a second.
 
-When set, PRs to dev (and main) run the check command, and merges wait for
+When set, PRs to preprod (and main) run the check command, and merges wait for
 checks to pass. See `.claude/HARNESS.md` for prerequisites.
 
 ## Team configuration
@@ -333,10 +333,10 @@ check: node scripts/check-docs.mjs && npm test && npm run lint
 Run `/getting-started` to see all skills, or use these directly:
 - `/feature`: build a feature through the five-phase gated flow
 - `/brainstorm`: stress-test an idea; writes to the tracker only
-- `/mergedev`: merge to dev (auto-merge)
+- `/to-preprod`: merge to preprod (auto-merge)
 - `/review`: submit PR for team review
 - `/code-review`: two-axis agent review of the diff (Standards, Spec)
-- `/release`: ship dev to production, or merge and ship in one go from an
+- `/release`: ship preprod to production, or merge and ship in one go from an
   unmerged feature branch
 - `/hotfix`: emergency production fix
 - `/status`: team dashboard (with Railway preview URLs)
@@ -352,7 +352,7 @@ Run `/getting-started` to see all skills, or use these directly:
   clean up; only run `/endchat` if the session pushed at some point)
 - `/endchat`: clean up after `/chat` (deletes the orphaned `feature/<name>`
   branch left behind by a session that pushed, and switches local back to
-  `dev`)
+  `preprod`)
 
 The technique skills the flow chains (`/grilling`, `/domain-modeling`,
 `/to-spec`, `/to-tickets`, `/implement`, `/tdd`, `/diagnosing-bugs`,

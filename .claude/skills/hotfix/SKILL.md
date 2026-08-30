@@ -1,6 +1,6 @@
 ---
 name: hotfix
-description: Emergency production fix. Branch from main, fix, PR to main, auto-tag patch release, back-merge to dev.
+description: Emergency production fix. Branch from main, fix, PR to main, auto-tag patch release, back-merge to preprod.
 disable-model-invocation: true
 argument-hint: "<description of the fix needed>"
 allowed-tools: Bash(git *), Bash(gh *), Bash(node scripts/check-docs.mjs*), Bash(python3 scripts/check-docs.py*), Read, Write, Edit, Glob, Grep
@@ -9,7 +9,7 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(node scripts/check-docs.mjs*), Bash
 # Hotfix: emergency production fix
 
 Create a hotfix branch from `main`, apply the fix, and trigger a fast-track
-release directly to production. Bypasses the normal feature → dev → release flow.
+release directly to production. Bypasses the normal feature → preprod → release flow.
 
 ## Steps
 
@@ -27,7 +27,7 @@ specific issue and nothing else.
 
 ### 3. Docs, fast path
 
-A hotfix skips the full docs audit on purpose: `/mergedev` and `/review` run
+A hotfix skips the full docs audit on purpose: `/to-preprod` and `/review` run
 the docs-updater agent, but an outage is not the moment for a taxonomy sweep.
 Do only what is cheap and what would otherwise be lost:
 
@@ -90,5 +90,5 @@ Tell the user:
 - The hotfix workflow will create a PR from `hotfix/<name>` → `main`
 - After merge, version `$NEW_VERSION` will be tagged automatically
 - A GitHub Release will be created marked as a hotfix
-- `main` will be back-merged into `dev` to prevent drift
+- `main` will be back-merged into `preprod` to prevent drift
 - Production will be updated immediately

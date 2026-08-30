@@ -155,8 +155,8 @@ the full skill catalog. Every issue-tracker operation goes through the contract 
 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
 
 The flow: push to the `claude/` branch, which a GitHub Action merges into
-`feature/<name>`; `/mergedev` opens an auto-merged PR to `dev`; `/review` opens one
-that waits for humans; `/release` ships `dev` to `main`. After a final push, report
+`feature/<name>`; `/to-preprod` opens an auto-merged PR to `preprod`; `/review` opens one
+that waits for humans; `/release` ships `preprod` to `main`. After a final push, report
 the preview URL with `bash .claude/scripts/get-railway-url.sh`, then confirm
 the deploy is serving that push with `bash .claude/scripts/verify-deploy.sh`
 (say first that the session stays open to watch the deploy and will report

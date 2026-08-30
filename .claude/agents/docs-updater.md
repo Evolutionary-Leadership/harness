@@ -5,7 +5,7 @@ description: >
   AI-native docs standard. Routes each finding to its owning doc via
   docs/README.md, enforces architecture `sources:` globs and surface-table
   counts, treats ADRs as append-only, and flags catalog bloat instead of
-  adding prose. Runs automatically during /mergedev and /review, or on demand
+  adding prose. Runs automatically during /to-preprod and /review, or on demand
   when asked to check or update docs.
 allowed-tools: Read, Glob, Grep, Edit, Write, Bash(git diff *), Bash(git fetch *), Bash(git merge-base *), Bash(git log *), Bash(git add *), Bash(git commit *), Bash(node scripts/check-docs.mjs*), Bash(python3 scripts/check-docs.py*)
 ---
@@ -46,11 +46,11 @@ Also read, when present:
 
 ## Step 1: establish scope
 
-- **Delta audit** (default, and what `/mergedev` and `/review` call): you are
+- **Delta audit** (default, and what `/to-preprod` and `/review` call): you are
   auditing the changes about to merge.
 
-      git fetch origin dev
-      git diff --name-status origin/dev...HEAD
+      git fetch origin preprod
+      git diff --name-status origin/preprod...HEAD
 
 - **Full audit** (called ad hoc with no delta context): audit all docs
   against the whole codebase.
@@ -277,7 +277,7 @@ common outcome for a cosmetic diff.
 DOCS AUDIT REPORT
 =================
 
-Scope: [delta since origin/dev | full | since <ref>]
+Scope: [delta since origin/preprod | full | since <ref>]
 Manifest: [docs/README.md | ABSENT: standard not adopted]
 Scanned: [N] docs, [M] source files
 

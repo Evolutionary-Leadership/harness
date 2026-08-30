@@ -15,7 +15,7 @@ changes, and update CHANGELOG.md.
 
 ### 1. Determine the range
 
-    git fetch origin dev --tags
+    git fetch origin preprod --tags
     LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 
 If `$ARGUMENTS` is provided, use it as the version label. Otherwise, use
@@ -26,17 +26,17 @@ If `$ARGUMENTS` is provided, use it as the version label. Otherwise, use
 **From merged PRs** (preferred, richer descriptions):
 
     if [ -n "$LAST_TAG" ]; then
-      gh pr list --base dev --state merged --search "merged:>=$(git log -1 --format=%aI $LAST_TAG)" --json number,title,body,labels,mergedAt --jq '.[]'
+      gh pr list --base preprod --state merged --search "merged:>=$(git log -1 --format=%aI $LAST_TAG)" --json number,title,body,labels,mergedAt --jq '.[]'
     else
-      gh pr list --base dev --state merged --limit 50 --json number,title,body,labels,mergedAt --jq '.[]'
+      gh pr list --base preprod --state merged --limit 50 --json number,title,body,labels,mergedAt --jq '.[]'
     fi
 
 **From commits** (fallback if no PRs found):
 
     if [ -n "$LAST_TAG" ]; then
-      git log "$LAST_TAG"..origin/dev --oneline
+      git log "$LAST_TAG"..origin/preprod --oneline
     else
-      git log origin/dev --oneline -50
+      git log origin/preprod --oneline -50
     fi
 
 ### 3. Categorize changes

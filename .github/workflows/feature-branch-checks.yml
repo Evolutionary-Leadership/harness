@@ -7,10 +7,10 @@ name: Feature branch checks
 #   with the default GITHUB_TOKEN, and events created with GITHUB_TOKEN do
 #   not start workflows. Signal-file-only pushes are skipped; the merge PR
 #   run covers them.
-# - pull_request to dev/main is the merge gate: claude-mergedev.yml waits
+# - pull_request to preprod/main is the merge gate: claude-to-preprod.yml waits
 #   for this run's conclusion before merging when a check: command is
 #   configured in .harness-version.
-# The 'check' job id below is a contract with claude-mergedev.yml's merge
+# The 'check' job id below is a contract with claude-to-preprod.yml's merge
 # gate, which polls the run by that name; do not rename it.
 on:
   push:
@@ -25,7 +25,7 @@ on:
       # merge PR run still checks the full tree.
       - '.harness/feature-context/**'
   pull_request:
-    branches: [dev, main]
+    branches: [preprod, main]
 
 concurrency:
   group: checks-${{ github.ref }}

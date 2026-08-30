@@ -5,9 +5,9 @@
 
 ## Context
 
-Three environments deploy from this repository: `production` (from `main`), `dev`
-(from `dev`), and one ephemeral environment per feature branch, duplicated from
-`dev`.
+Three environments deploy from this repository: `production` (from `main`), `preprod`
+(from `preprod`), and one ephemeral environment per feature branch, duplicated from
+`preprod`.
 
 All three run **`NODE_ENV=production`**, and must. `NODE_ENV` is what React, Next,
 and much of npm read to decide whether to strip development warnings, enable
@@ -17,13 +17,13 @@ which defeats the point of having a preview. `development` is correct only local
 under `next dev`.
 
 The consequence is easy to state and easy to forget: **`NODE_ENV` cannot answer
-"is this production"**, because it says `production` on dev and on every feature
+"is this production"**, because it says `production` on preprod and on every feature
 environment too. Any guard written as `if (process.env.NODE_ENV === "production")`
 is not a production guard, it is a "not running locally" guard, and the two differ
 in exactly the case that matters.
 
 This is not hypothetical. The seed script must refuse to run on production and
-must run happily on dev and on feature environments. A `NODE_ENV` check would
+must run happily on preprod and on feature environments. A `NODE_ENV` check would
 refuse everywhere and the previews would arrive empty, or, if inverted, would run
 against production data.
 
@@ -48,10 +48,10 @@ developer's machine is not production.
 
 ## Consequences
 
-- The seed's guard is correct on all four environments (local, feature, dev,
+- The seed's guard is correct on all four environments (local, feature, preprod,
   production), and `tests/integration/seed.test.ts` asserts both halves,
   including the case `NODE_ENV=production` with
-  `RAILWAY_ENVIRONMENT_NAME=dev`, which is the one a `NODE_ENV` check gets wrong.
+  `RAILWAY_ENVIRONMENT_NAME=preprod`, which is the one a `NODE_ENV` check gets wrong.
 - A grep for `NODE_ENV` in `src/` and `scripts/` should return only the Zod schema
   entry in `src/lib/env.ts`. Anything else is a bug.
 - The check is Railway specific. Moving hosts means introducing an equivalent
@@ -62,8 +62,8 @@ developer's machine is not production.
 ## Alternatives considered
 
 - **A dedicated `APP_ENV` variable.** Explicit and portable, but it has to be set
-  by hand on every environment, and a feature environment cloned from dev would
-  inherit dev's literal value. The whole design goal is that feature environments
+  by hand on every environment, and a feature environment cloned from preprod would
+  inherit preprod's literal value. The whole design goal is that feature environments
   need zero manual configuration, and a variable Railway already injects
   correctly per environment beats one a human has to remember.
 - **Keying on `RAILWAY_PUBLIC_DOMAIN` matching the custom domain.** Works, but

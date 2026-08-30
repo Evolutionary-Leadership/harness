@@ -6,7 +6,7 @@ name: "0. Harness preflight (verifies tokens before /setup mutates anything)"
 # sessions run), so the only honest check is a workflow that uses the
 # tokens: Railway's API for RAILWAY_ACCOUNT_TOKEN, and a create-then-delete
 # probe of a throwaway secret for PAT_TOKEN. The result comes back as a
-# commit on dev whose body /setup parses, the same git-poll pattern as the
+# commit on preprod whose body /setup parses, the same git-poll pattern as the
 # bootstrap cleanup commit (forge decision records 0004 and 0009).
 #
 # Those ids are spelled "forge decision record NNNN" on purpose: this file
@@ -36,9 +36,9 @@ name: "0. Harness preflight (verifies tokens before /setup mutates anything)"
 on:
   workflow_dispatch:
   # Sentinel fallback for sessions without the GitHub MCP dispatch tool:
-  # /setup pushes a one-line .harness-preflight to dev and this fires.
+  # /setup pushes a one-line .harness-preflight to preprod and this fires.
   push:
-    branches: [dev]
+    branches: [preprod]
     paths:
       - .harness-preflight
 
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
-          ref: dev
+          ref: preprod
 
       - name: Probe tokens
         env:
@@ -147,16 +147,16 @@ jobs:
 
           git commit -q --allow-empty -m "chore: harness preflight result" -m "$(compose_body "$VERDICT")"
 
-          if ! git push origin dev; then
+          if ! git push origin preprod; then
             # A rejected pass-push most likely means the PAT cannot write
             # workflow files. Rebuild the commit without the self-delete and
             # report that instead of timing out silently.
-            git reset -q --hard origin/dev
+            git reset -q --hard origin/preprod
             git rm -q --ignore-unmatch .harness-preflight
             DETAIL="${DETAIL}pat-workflows: denied (push deleting this workflow file was rejected)\n"
             git commit -q --allow-empty -m "chore: harness preflight result" -m "$(compose_body fail)"
-            git push origin dev || {
-              echo "::error::Preflight could not push its result commit to dev. PAT_TOKEN likely lacks Contents: Read and write."
+            git push origin preprod || {
+              echo "::error::Preflight could not push its result commit to preprod. PAT_TOKEN likely lacks Contents: Read and write."
               exit 1
             }
             VERDICT="fail"

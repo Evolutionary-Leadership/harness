@@ -7,7 +7,7 @@
 
 This template gives a fresh repository a complete, convention-driven
 CI/CD harness: ephemeral `claude/` session branches that collapse into
-persistent `feature/` branches, auto-merged PRs to `dev`, versioned
+persistent `feature/` branches, auto-merged PRs to `preprod`, versioned
 releases to `main`, and a catalog of Claude Code skills that drive the
 whole lifecycle in natural language. Optionally, it deploys every
 feature branch to its own isolated Railway preview environment.
@@ -15,7 +15,7 @@ feature branch to its own isolated Railway preview environment.
 ## Start here (three steps)
 
 1. **Click "Use this template"** and create your repository. Make sure
-   `dev` is the default branch (it is, unless you changed it).
+   `preprod` is the default branch (it is, unless you changed it).
 2. **Open the new repository in Claude Code.**
 3. **Run `/setup`.** It asks a few short questions (first time here?
    deploy to Railway? start from the standard technical foundation? and,
@@ -30,7 +30,7 @@ foundation, `/setup` already put it in place.
 ## What `/setup` decides
 
 - **Railway or code-only.** Answer yes and the harness activates its
-  Railway machinery: one-time provisioning of production and dev
+  Railway machinery: one-time provisioning of production and preprod
   environments (app service, Postgres, object-storage bucket), plus an
   isolated preview environment per feature branch. Answer no and you
   get the code-only variant: the full branch-and-release flow with no
@@ -55,8 +55,8 @@ claude/<name>-<sessionId>   Claude Code works here
         v   GitHub Actions, driven by the branch name alone
 feature/<name>              persistent feature branch (+ preview env on Railway setups)
         |
-        v   /mergedev
-dev                         PR auto-created and auto-merged
+        v   /to-preprod
+preprod                         PR auto-created and auto-merged
         |
         v   /release
 main                        versioned, tagged, released

@@ -30,7 +30,7 @@ const envSchema = z.object({
 
   /**
    * A runtime switch for React and Next, never an environment label. Every
-   * deployed environment runs `production`, including dev and feature
+   * deployed environment runs `production`, including preprod and feature
    * environments. See ADR 0003.
    */
   NODE_ENV: z.enum(["development", "production", "test"]).optional(),
@@ -59,7 +59,7 @@ const envSchema = z.object({
   // Injected by Railway. Never set these by hand.
   /** The environment's own public hostname, without a scheme. */
   RAILWAY_PUBLIC_DOMAIN: z.string().optional(),
-  /** "production", "dev", or the feature branch environment's name. */
+  /** "production", "preprod", or the feature branch environment's name. */
   RAILWAY_ENVIRONMENT_NAME: z.string().optional(),
 });
 
@@ -105,7 +105,7 @@ const stripTrailingSlash = (url: string): string => url.replace(/\/+$/, "");
 /**
  * The origin Better Auth should treat as its own.
  *
- * Falling back to the Railway domain is what lets dev and every feature
+ * Falling back to the Railway domain is what lets preprod and every feature
  * environment self configure: BETTER_AUTH_URL is deliberately left unset there
  * so each environment resolves its own hostname. Returning undefined means
  * "localhost", which is correct under `next dev`.
@@ -162,7 +162,7 @@ export function getPublicOrigin(): string {
 /**
  * True only on the Railway environment literally named "production".
  *
- * NODE_ENV cannot answer this: every deployed environment, dev and feature
+ * NODE_ENV cannot answer this: every deployed environment, preprod and feature
  * environments included, runs NODE_ENV=production. See ADR 0003.
  */
 export function isProductionEnvironment(): boolean {

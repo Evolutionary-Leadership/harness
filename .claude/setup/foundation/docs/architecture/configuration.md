@@ -40,10 +40,10 @@ environment lacking it into a crash loop.** Everything feature scoped is
 The operational walkthrough is [../runbooks/railway-setup.md](../runbooks/railway-setup.md).
 This table is the reasoning behind it.
 
-| Variable | production | dev | feature envs | local |
+| Variable | production | preprod | feature envs | local |
 |---|---|---|---|---|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | `${{Postgres.DATABASE_URL}}` | cloned reference, re-resolves | `.env.local` |
-| `BETTER_AUTH_SECRET` | unique literal | unique literal | cloned from dev | `.env.local` |
+| `BETTER_AUTH_SECRET` | unique literal | unique literal | cloned from preprod | `.env.local` |
 | `BETTER_AUTH_URL` | custom domain | **UNSET** | **UNSET** | unset |
 | `NODE_ENV` | `production` | `production` | `production` | `development` |
 | `SEED_DATA` | `false` | `true` | inherits `true` | `true` |
@@ -52,7 +52,7 @@ This table is the reasoning behind it.
 
 ## The rule that makes feature environments free
 
-Railway clones dev's variables into every feature environment.
+Railway clones preprod's variables into every feature environment.
 
 | Value kind | On clone |
 |---|---|
@@ -60,9 +60,9 @@ Railway clones dev's variables into every feature environment.
 | Literal | Copied verbatim. Correct only if it is correct everywhere |
 
 Therefore **any variable whose correct value differs per environment must be either
-a reference variable, or left UNSET on dev so the code derives it.**
+a reference variable, or left UNSET on preprod so the code derives it.**
 
-`BETTER_AUTH_URL` is the case that matters. Setting it on dev would clone dev's
+`BETTER_AUTH_URL` is the case that matters. Setting it on preprod would clone preprod's
 hostname into every feature environment, and sign in there would fail with
 `INVALID_ORIGIN`. Left unset, `getAuthBaseUrl()` falls back to
 `https://$RAILWAY_PUBLIC_DOMAIN`, which Railway injects per environment. That single

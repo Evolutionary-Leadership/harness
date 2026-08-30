@@ -8,7 +8,7 @@ on:
       - '.pr-description.md'
 
 concurrency:
-  group: dev-write
+  group: preprod-write
   cancel-in-progress: false
 
 jobs:
@@ -108,18 +108,18 @@ jobs:
               --target main
           fi
 
-      - name: Back-merge main into dev
+      - name: Back-merge main into preprod
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git fetch origin main dev
-          git checkout dev
+          git fetch origin main preprod
+          git checkout preprod
           git merge origin/main --no-edit || {
-            echo "::warning::Back-merge of main into dev has conflicts. Manual resolution needed."
+            echo "::warning::Back-merge of main into preprod has conflicts. Manual resolution needed."
             exit 0
           }
-          git push origin dev
+          git push origin preprod
 
       - name: Delete hotfix branch
         run: git push origin --delete "${{ steps.hotfix.outputs.branch }}" || true

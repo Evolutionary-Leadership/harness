@@ -31,16 +31,16 @@ Offer to scaffold it: `docs/README.md`, `docs/GLOSSARY.md`,
 ## Mode A: scaffold an ADR
 
 1. Claim the number before you write anything. Two sessions cut from the
-   same `dev` tip otherwise compute the same number, and because the
+   same `preprod` tip otherwise compute the same number, and because the
    filenames differ git merges both without a conflict (ADR 0015).
 
    Read both views and take the successor of the higher one:
 
-       ON_DEV=$(bash .claude/scripts/coordination.sh adr-numbers-on-dev)
+       ON_PREPROD=$(bash .claude/scripts/coordination.sh adr-numbers-on-preprod)
        CLAIMED=$(bash .claude/scripts/coordination.sh list adr)
-       NUMBER=$(bash .claude/scripts/coordination.sh next-adr "$ON_DEV" "$CLAIMED")
+       NUMBER=$(bash .claude/scripts/coordination.sh next-adr "$ON_PREPROD" "$CLAIMED")
 
-   `dev` is the source of truth and the coordination branch is a cache over
+   `preprod` is the source of truth and the coordination branch is a cache over
    it, so a lost branch can never re-issue a number that already landed.
 
    Then write `claims/adr/<NUMBER>.md` on the `coordination` branch with the
@@ -116,8 +116,8 @@ status line of a superseded ADR is the only edit an accepted ADR ever takes.
 
 1. Establish the base and the changed paths:
 
-       git fetch origin dev
-       BASE=$(git merge-base HEAD origin/dev)
+       git fetch origin preprod
+       BASE=$(git merge-base HEAD origin/preprod)
        git diff --name-status "$BASE"..HEAD
 
 2. Read `docs/README.md`. Map every changed path through the definition of

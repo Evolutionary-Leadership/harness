@@ -14,9 +14,9 @@ dist/
 .env.*
 !.env.example
 
-# Harness signal file. Written by /mergedev to trigger the auto-merge workflow,
+# Harness signal file. Written by /to-preprod to trigger the auto-merge workflow,
 # force-added onto the claude/ branch, and stripped from feature/<name> by the
-# workflow's own cleanup before the PR merges. It must never reach dev or main.
+# workflow's own cleanup before the PR merges. It must never reach preprod or main.
 .pr-description.md
 
 # Test output

@@ -56,7 +56,7 @@ full git history (no force push).
 
     ## Action items
     - [ ] Investigate root cause
-    - [ ] Fix the issue on dev
+    - [ ] Fix the issue on preprod
     - [ ] Re-release with fix
     "
 
@@ -66,5 +66,5 @@ Tell the user:
 - Production has been rolled back to `$PREVIOUS_TAG`
 - A tracking issue has been created
 - The revert commit is on `main`, so no history was lost
-- Next steps: investigate the issue, fix it on dev, then do a new release
+- Next steps: investigate the issue, fix it on preprod, then do a new release
 - If using Railway: production will redeploy automatically from the updated main

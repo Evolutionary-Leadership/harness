@@ -20,9 +20,9 @@ and synced from there into this template repo on every harness release.
 claude/<codename>-<sessionId>  ← you work here (random codename)
        ↓ first push: slug commit from set-feature-name.sh, or any code push
        ↓ (GitHub Action)
-feature/<name>                 ← created automatically from dev
-       ↓ (/mergedev)
-dev                            ← PR auto-merged
+feature/<name>                 ← created automatically from preprod
+       ↓ (/to-preprod)
+preprod                        ← PR auto-merged
 ```
 
 - The session branch starts with a random codename
@@ -45,18 +45,18 @@ The mechanism:
   `bash .claude/scripts/set-feature-name.sh <slug>`, which sanitizes the
   input, writes the file, commits, and pushes.
 - **Resolution (everywhere):** use the slug if `.harness-feature` is
-  present and valid (`^[a-z0-9][a-z0-9-]{0,40}$`, and not `dev` or `main`),
+  present and valid (`^[a-z0-9][a-z0-9-]{0,40}$`, and not `preprod` or `main`),
   otherwise fall back to the codename. The shared resolver is
   `.claude/scripts/resolve-feature-name.sh`; the workflows
-  (`claude-to-feature-branch.yml`, `claude-mergedev.yml`) apply the
+  (`claude-to-feature-branch.yml`, `claude-to-preprod.yml`) apply the
   identical check.
 - **Set it before the first push** so the feature branch is created with the
   good name from the start.
 - **Graceful fallback:** if `set-feature-name.sh` is never called, the first
   code push still creates `feature/<codename>`. Naming is an improvement,
   never a requirement.
-- **No leak to dev:** `.harness-feature` is removed by the mergedev workflow
-  before the merge, so a future session cloned from dev never inherits a
+- **No leak to preprod:** `.harness-feature` is removed by the to-preprod workflow
+  before the merge, so a future session cloned from preprod never inherits a
   stale name. For this reason it must stay out of `.gitignore` (the
   workflows read it from the commit).
 
@@ -66,25 +66,25 @@ The mechanism:
 |------|-------|
 | Provisioning trigger | A `claude/` push (the slug commit, or first code push) |
 | Feature branch | `feature/<name>` |
-| CI checks | Only on the PR to `dev`/`main` |
+| CI checks | Only on the PR to `preprod`/`main` |
 | Current feature name | `bash .claude/scripts/resolve-feature-name.sh` |
 
 ### Signal files
 
 - **`.pr-description.md`**: Committing this file to the repo root triggers
-  the GitHub Action to create a PR from `feature/<name>` → `dev` and
-  auto-merge it. The `/mergedev` skill writes this file for you. If the
+  the GitHub Action to create a PR from `feature/<name>` → `preprod` and
+  auto-merge it. The `/to-preprod` skill writes this file for you. If the
   frontmatter contains `review: true`, the PR is created but NOT auto-merged
   (used by the `/review` skill). If `hotfix: true`, the hotfix workflow
   handles it instead.
 - **`.release-description.md`**: Committing this file triggers the release
-  workflow to create a PR from `dev` → `main`, tag a version, and create a
+  workflow to create a PR from `preprod` → `main`, tag a version, and create a
   GitHub Release. The `/release` skill writes this file.
 - **`.harness-feature`**: A committed one-line kebab-case slug naming this
   feature, written by `set-feature-name.sh`. The workflows and shell
   scripts resolve the feature name from it (with a codename fallback). It
-  is removed before the merge to dev (by `claude-mergedev.yml`) so the name
-  never leaks onto dev and into the next session. Unlike the other signal
+  is removed before the merge to preprod (by `claude-to-preprod.yml`) so the name
+  never leaks onto preprod and into the next session. Unlike the other signal
   files it must stay tracked (not in `.gitignore`), because the workflows
   read it from the commit.
 
@@ -107,12 +107,12 @@ reviewers: teammate1, teammate2
   diff against the latest release.
 - **`repo`**: the upstream forge repo (`evolutionary-leadership/harness-forge`),
   which hosts `VERSION`, `migrations/`, and `stacks/traits/`.
-- **`check`**: CI command to run on PRs to dev. Keep
+- **`check`**: CI command to run on PRs to preprod. Keep
   `node scripts/check-docs.mjs` at the front of the chain so documentation
   drift fails the merge gate like any other error. When configured, the
   `feature-branch-checks.yml` workflow runs this command (also on every
   push to a `claude/**` branch, for feedback before the merge PR exists),
-  and mergedev polls the run's conclusion on the PR head, merging only on
+  and to-preprod polls the run's conclusion on the PR head, merging only on
   success. The check chain must finish within the gate's 12-minute budget.
 - **`reviewers`**: Default reviewers assigned when using `/review`.
 - **`traits`**: stack-specific best-practice files installed under
@@ -132,7 +132,7 @@ reviewers: teammate1, teammate2
   matching `feature/<name>` branch already exists, merges previous work. It
   no longer pushes an init commit: a fresh session just prints naming
   guidance (skipped while the one-shot `/setup` skill is still present,
-  since the only sane first move then is `/setup`, which pushes to `dev`,
+  since the only sane first move then is `/setup`, which pushes to `preprod`,
   never to this branch). The feature branch is created on Claude's first
   push, ideally
   the `set-feature-name.sh` slug commit (see "Feature naming"). You do not
@@ -185,7 +185,7 @@ staleness is not. Sections:
 - **Out of scope**: the boundary the grill settled.
 - **Tracker**: spec issue, ticket issues and their state, the idea issue
   if one started this.
-- **Exit route**: `/mergedev`, `/review` or `/release`, once chosen;
+- **Exit route**: `/to-preprod`, `/review` or `/release`, once chosen;
   "awaiting human review" while a `/review` PR is open.
 - **Autonomy granted**: whether grill autonomy or phase autopilot was used,
   so a reader knows why a phase carries no approvals. It is a record, not a
@@ -204,11 +204,11 @@ context refresh (a commit touching only this file) with the message
 prefix `chore(context):`; the harness workflows use both signals to skip
 busywork, and pushes that touch only this file skip the CI checks
 (`feature-branch-checks.yml` ignores the path). At merge time
-`/mergedev` uses it to draft the PR
+`/to-preprod` uses it to draft the PR
 description, promotes anything permanent into `docs/`, and deletes it: it
-never reaches `dev`. If a merge bypasses `/mergedev` (the GitHub merge
-button), `feature-merge-cleanup.yml` removes the leftover from dev, and
-`/continue` and `/mergedev` also sweep strays as a safety net.
+never reaches `preprod`. If a merge bypasses `/to-preprod` (the GitHub merge
+button), `feature-merge-cleanup.yml` removes the leftover from preprod, and
+`/continue` and `/to-preprod` also sweep strays as a safety net.
 
 ### The two reviews
 
@@ -216,11 +216,11 @@ button), `feature-merge-cleanup.yml` removes the leftover from dev, and
   sub-agents, run automatically at the end of `/feature` phase 4.
 - **`/review` requests humans**: opens a non-auto-merged PR carrying the
   `/code-review` findings and the spec link. Approved `/review` PRs land
-  via `/mergedev` (which reuses the open PR), never the GitHub merge
+  via `/to-preprod` (which reuses the open PR), never the GitHub merge
   button.
 
 `/feature` phase 5 always asks which exit the user wants, suggesting
-`/review` when `.harness-version` configures `reviewers:` and `/mergedev`
+`/review` when `.harness-version` configures `reviewers:` and `/to-preprod`
 otherwise.
 
 ### The variants differ only in the Railway steps
@@ -270,7 +270,7 @@ Each harness version has a structured migration file
 - **Show context**: what changed and why, not just raw diffs
 
 Migration files are auto-generated by the `harness-version-bump.yml`
-workflow in the forge whenever a feature merges to `dev`. They are never
+workflow in the forge whenever a feature merges to `preprod`. They are never
 manually authored.
 
 ## Harness-managed files
@@ -280,13 +280,13 @@ These files are maintained by the harness and replaced on
 
 | File | Purpose |
 |------|---------|
-| `.github/workflows/harness-bootstrap.yml` | Guarantees the three branches (`main`, `dev`, and the orphan `coordination`). Idempotent; dispatch it if a branch goes missing |
+| `.github/workflows/harness-bootstrap.yml` | Guarantees the three branches (`main`, `preprod`, and the orphan `coordination`). Idempotent; dispatch it if a branch goes missing |
 | `.github/workflows/claude-to-feature-branch.yml` | Merges `claude/` branches into `feature/` branches |
-| `.github/workflows/claude-mergedev.yml` | Creates PR from `feature/` to `dev` and auto-merges (or opens for review) |
-| `.github/workflows/feature-branch-checks.yml` | Runs CI checks on PRs to dev (reads `check:` from `.harness-version`) |
-| `.github/workflows/release.yml` | Creates release PR dev → main, tags version, creates GitHub Release |
-| `.github/workflows/hotfix.yml` | Handles hotfix PRs to main, tags patch release, back-merges to dev |
-| `.github/workflows/feature-merge-cleanup.yml` | Deletes feature branch after merge to dev, and removes a leftover feature-context file if the merge bypassed `/mergedev` |
+| `.github/workflows/claude-to-preprod.yml` | Creates PR from `feature/` to `preprod` and auto-merges (or opens for review) |
+| `.github/workflows/feature-branch-checks.yml` | Runs CI checks on PRs to preprod (reads `check:` from `.harness-version`) |
+| `.github/workflows/release.yml` | Creates release PR preprod → main, tags version, creates GitHub Release |
+| `.github/workflows/hotfix.yml` | Handles hotfix PRs to main, tags patch release, back-merges to preprod |
+| `.github/workflows/feature-merge-cleanup.yml` | Deletes feature branch after merge to preprod, and removes a leftover feature-context file if the merge bypassed `/to-preprod` |
 | `.claude/scripts/session-start.sh` | Session startup hook |
 | `.claude/scripts/list-skills.sh` | Skill discovery script |
 | `.claude/scripts/resolve-feature-name.sh` | Resolves the feature name (slug from `.harness-feature`, else session codename); shared by the hooks, scripts, and workflows |
@@ -295,9 +295,9 @@ These files are maintained by the harness and replaced on
 | `.claude/skills/getting-started/SKILL.md` | Orientation skill: the session-opening flavor question, the skill catalog, the two-review pair |
 | `.claude/skills/feature/SKILL.md` | `/feature` skill: the five-phase gated flow (name, grill, spec, tickets, implement, hand over) |
 | `.claude/skills/brainstorm/SKILL.md` | `/brainstorm` skill: standalone grilling that writes to the tracker only |
-| `.claude/skills/mergedev/SKILL.md` | `/mergedev` skill: merge to dev; owns the merge-conflict discipline and retires the feature context |
+| `.claude/skills/to-preprod/SKILL.md` | `/to-preprod` skill: merge to preprod; owns the merge-conflict discipline and retires the feature context |
 | `.claude/skills/review/SKILL.md` | `/review` skill: submit PR for team review, with `/code-review` findings in the body |
-| `.claude/skills/release/SKILL.md` | `/release` skill: ship dev to production; from an unmerged `claude/` branch it also runs the merge and waits for `dev` to settle first |
+| `.claude/skills/release/SKILL.md` | `/release` skill: ship preprod to production; from an unmerged `claude/` branch it also runs the merge and waits for `preprod` to settle first |
 | `.claude/skills/hotfix/SKILL.md` | `/hotfix` skill: emergency production fix |
 | `.claude/skills/status/SKILL.md` | `/status` skill: team dashboard |
 | `.claude/skills/changelog/SKILL.md` | `/changelog` skill: generate changelog |
@@ -318,7 +318,7 @@ These files are maintained by the harness and replaced on
 | `.claude/skills/diagnosing-bugs/` | `/diagnosing-bugs` skill: feedback-loop-first debugging discipline |
 | `.claude/skills/codebase-design/` | `/codebase-design` skill: deep-module vocabulary and design patterns |
 | `.claude/skills/writing-for-agents/` | `/writing-for-agents` skill: how to write skills and agent-facing docs |
-| `.claude/agents/docs-updater.md` | Documentation auditor agent (runs during `/mergedev` and `/review`) |
+| `.claude/agents/docs-updater.md` | Documentation auditor agent (runs during `/to-preprod` and `/review`) |
 | `.claude/HARNESS.md` | This file |
 | `.harness-version` | Version tracking |
 | `.claude/traits/*.md` | Stack best practices (managed per `traits:` in `.harness-version`) |
@@ -369,7 +369,7 @@ check: node scripts/check-docs.mjs && npm test
 
 `/document` writes ADRs, audits the diff against the manifest, and routes a
 fact to its owning doc. The `docs-updater` agent runs the same taxonomy
-automatically during `/mergedev` and `/review`.
+automatically during `/to-preprod` and `/review`.
 
 The rationale for the layout ships as ADR 0001 in `docs/decisions/`.
 
@@ -451,7 +451,7 @@ changed, filtered by your variant and installed traits. See
 
 Harness versions use semver (`MAJOR.MINOR.PATCH`):
 - **PATCH** bumps automatically on each feature merge to the forge's
-  `dev` branch
+  `preprod` branch
 - **MINOR** bumps are a developer decision for significant releases
 - **MAJOR** is reserved for breaking architecture changes
 

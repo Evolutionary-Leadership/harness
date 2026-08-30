@@ -1,6 +1,6 @@
 ---
 name: endchat
-description: Clean up after a /chat session. Deletes the auto-created feature/<name> and claude/<name> branches if they contain no real work, and switches the local checkout back to dev.
+description: Clean up after a /chat session. Deletes the auto-created feature/<name> and claude/<name> branches if they contain no real work, and switches the local checkout back to preprod.
 disable-model-invocation: true
 allowed-tools: Bash(git *), Read
 ---
@@ -18,7 +18,7 @@ feature and never pushed leaves no branch behind, and this skill has nothing
 to do. A `feature/<name>` branch exists only if the `claude/` branch was
 pushed: either by `set-feature-name.sh` (the `chore: set feature name`
 commit) or by a code push. Pushing triggers `claude-to-feature-branch.yml`,
-which creates `feature/<name>` from `dev` and deletes the source
+which creates `feature/<name>` from `preprod` and deletes the source
 `claude/<name>` branch on the remote.
 
 If that branch holds no real work (for example you named the feature, then
@@ -41,7 +41,7 @@ runs on a `claude/` session branch, and stop.
     git status --porcelain
 
 If the working tree is dirty, stop and tell the user to either commit and
-run `/mergedev`, or discard the changes manually before retrying. Do not
+run `/to-preprod`, or discard the changes manually before retrying. Do not
 discard changes on the user's behalf.
 
 ### 3. Refuse if the feature branch has real commits
@@ -51,10 +51,10 @@ Fetch and inspect the remote feature branch:
     git fetch origin "$FEATURE_BRANCH" 2>/dev/null || true
 
 If the remote branch exists, check what it contains beyond the merge base
-with `dev`:
+with `preprod`:
 
-    git fetch origin dev
-    COMMITS=$(git log "origin/dev..origin/$FEATURE_BRANCH" --pretty=format:"%H %s" 2>/dev/null || true)
+    git fetch origin preprod
+    COMMITS=$(git log "origin/preprod..origin/$FEATURE_BRANCH" --pretty=format:"%H %s" 2>/dev/null || true)
 
 The branch is "empty" if every line of `$COMMITS` matches one of:
 
@@ -63,7 +63,7 @@ The branch is "empty" if every line of `$COMMITS` matches one of:
 - `chore: clean up stale signal file from previous merge`
 
 If any other commit appears, **stop**. Tell the user the feature branch
-contains real work and they should run `/mergedev` instead, or manually
+contains real work and they should run `/to-preprod` instead, or manually
 review and decide. List the unexpected commits so the user can see what
 would be lost.
 
@@ -75,7 +75,7 @@ for confirmation before deleting anything:
     About to delete:
       - remote: feature/<name>      (name/init commit only, safe)
       - remote: claude/<name>-...   (if it still exists)
-      - local: claude/<name>-...    (after switching to dev)
+      - local: claude/<name>-...    (after switching to preprod)
 
     Proceed? (y/N)
 
@@ -87,11 +87,11 @@ for confirmation before deleting anything:
 Both deletions are best-effort; the `claude-to-feature-branch.yml` workflow
 usually deletes the `claude/` branch already.
 
-### 6. Switch local checkout to dev
+### 6. Switch local checkout to preprod
 
-    git fetch origin dev
-    git checkout dev
-    git pull --ff-only origin dev
+    git fetch origin preprod
+    git checkout preprod
+    git pull --ff-only origin preprod
     git branch -D "$BRANCH" 2>/dev/null || true
 
 ### 7. Summary
@@ -99,7 +99,7 @@ usually deletes the `claude/` branch already.
 Tell the user:
 
 - which branches were deleted
-- that they are now on `dev` locally
+- that they are now on `preprod` locally
 - they can start a new session whenever they want; the next `claude/*`
   branch will reinitialize cleanly
 

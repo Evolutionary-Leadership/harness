@@ -73,10 +73,10 @@ answer it with your own recommendation and say that you did; never drop the
 question silently.
 
 **Autopilot ends at phase 5, always.** It advances gates; it never runs an
-exit. The user still chooses `/mergedev`, `/review` or `/release` with the
+exit. The user still chooses `/to-preprod`, `/review` or `/release` with the
 diff, the check result and the `/code-review` findings in front of them,
 because that gate is the last thing standing between this session and
-`dev`.
+`preprod`.
 
 **Autopilot and grill autonomy are two switches, not one.** Autonomy (in
 `/grilling`) answers questions *inside* phase 1. Autopilot advances phase
@@ -111,8 +111,8 @@ live in `.claude/HARNESS.md`; the short version:
   anyway, plus a mandatory push at every gate and at session end. Only
   the pushed copy survives the container, so an unpushed context is a
   lost context.
-- `/mergedev` consumes and deletes it at merge time. It never reaches
-  `dev`.
+- `/to-preprod` consumes and deletes it at merge time. It never reaches
+  `preprod`.
 
 ## Phase 0: name and resume
 
@@ -164,7 +164,7 @@ git fetch origin "$FEATURE_BRANCH" 2>/dev/null && git merge "origin/$FEATURE_BRA
 ```
 
 If the merge reports conflicts, resolve them with the merge-conflict
-discipline in `/mergedev` (its "Resolving conflicts" section) instead of
+discipline in `/to-preprod` (its "Resolving conflicts" section) instead of
 aborting.
 
 ### Create or load the feature context
@@ -252,7 +252,7 @@ lands.
 full check. Do not improvise a different loop here.
 
 When the frontier is empty and the full check is green, run
-`/code-review` (fixed point: `origin/dev`). Act on what it finds, or
+`/code-review` (fixed point: `origin/preprod`). Act on what it finds, or
 record in the feature context why a finding is deliberately not
 addressed.
 
@@ -273,14 +273,14 @@ numbers, the `/code-review` findings summary, and any ticket left open.
 
 Then ask the user which exit they want, using `AskUserQuestion`:
 
-- **`/mergedev`**: auto-merge to dev. The default suggestion when
+- **`/to-preprod`**: auto-merge to preprod. The default suggestion when
   `.harness-version` has no `reviewers:` field.
 - **`/review`**: open a PR that waits for human review. The default
   suggestion when `.harness-version` configures `reviewers:`.
-- **`/release`**: merge to dev and ship to production in one go. Offered
+- **`/release`**: merge to preprod and ship to production in one go. Offered
   always, suggested never; the user picks this one deliberately or not at
   all. Its own confirmation still applies, so they will see the release's
-  blast radius (everything queued on `dev`, not just this feature) before
+  blast radius (everything queued on `preprod`, not just this feature) before
   anything reaches `main`.
 
 Suggest the default for this repo, but always ask; never assume.
@@ -293,7 +293,7 @@ in order, to the end**, trigger push included:
 
 | Answer | Follow |
 |---|---|
-| `/mergedev` | `.claude/skills/mergedev/SKILL.md` |
+| `/to-preprod` | `.claude/skills/to-preprod/SKILL.md` |
 | `/review` | `.claude/skills/review/SKILL.md` |
 | `/release` | `.claude/skills/release/SKILL.md` |
 

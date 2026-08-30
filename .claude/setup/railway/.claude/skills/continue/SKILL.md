@@ -30,7 +30,7 @@ For each branch, show the git summary:
       [ -n "$URL" ] && echo "  Preview: $URL"
     done
 
-    gh pr list --base dev --state open --json number,title,headRefName --jq '.[] | "  PR #\(.number): \(.title) (\(.headRefName))"'
+    gh pr list --base preprod --state open --json number,title,headRefName --jq '.[] | "  PR #\(.number): \(.title) (\(.headRefName))"'
 
 (Where `gh` is unavailable, list open PRs per the GitHub MCP note in
 `docs/agents/issue-tracker.md`.)
@@ -61,7 +61,7 @@ branch name you are on, or a short random suffix.
 ### 4. Sweep stale contexts
 
 A context file whose feature branch no longer exists on the remote leaked
-past a merge that bypassed `/mergedev` and the cleanup workflow. Delete
+past a merge that bypassed `/to-preprod` and the cleanup workflow. Delete
 any such file under `.harness/feature-context/` in the working tree now
 (commit the deletion; it rides along with the next push). This is a
 safety net, not the intended path.
@@ -75,7 +75,7 @@ separate resume here.
 
 If the context marks the feature "awaiting human review" (a `/review` PR
 is open), say so: the likely work is addressing review comments, and the
-exit after that is `/mergedev` on the same PR.
+exit after that is `/to-preprod` on the same PR.
 
 ### 6. Ready to work
 

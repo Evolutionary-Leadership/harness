@@ -92,7 +92,7 @@ describe("auth origin", () => {
     setEnv({
       ...REQUIRED,
       BETTER_AUTH_URL: "https://notes.example.com",
-      RAILWAY_PUBLIC_DOMAIN: "notes-dev.up.railway.app",
+      RAILWAY_PUBLIC_DOMAIN: "notes-preprod.up.railway.app",
     });
     expect(getAuthBaseUrl()).toBe("https://notes.example.com");
   });
@@ -144,9 +144,9 @@ describe("auth origin", () => {
 
 describe("switches", () => {
   it("treats production as an environment NAME, never NODE_ENV", () => {
-    // Every deployed environment runs NODE_ENV=production, dev and feature
+    // Every deployed environment runs NODE_ENV=production, preprod and feature
     // environments included, so NODE_ENV cannot answer this question.
-    setEnv({ ...REQUIRED, NODE_ENV: "production", RAILWAY_ENVIRONMENT_NAME: "dev" });
+    setEnv({ ...REQUIRED, NODE_ENV: "production", RAILWAY_ENVIRONMENT_NAME: "preprod" });
     expect(isProductionEnvironment()).toBe(false);
 
     setEnv({ ...REQUIRED, NODE_ENV: "production", RAILWAY_ENVIRONMENT_NAME: "production" });

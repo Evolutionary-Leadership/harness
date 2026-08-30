@@ -132,7 +132,7 @@ describe("seed", () => {
 
   /**
    * The production guard keys on RAILWAY_ENVIRONMENT_NAME, never NODE_ENV: every
-   * deployed environment runs NODE_ENV=production, dev and feature environments
+   * deployed environment runs NODE_ENV=production, preprod and feature environments
    * included. See ADR 0003.
    */
   it("refuses to run on the production environment", async () => {
@@ -144,7 +144,7 @@ describe("seed", () => {
 
   it("still seeds when NODE_ENV is production but the environment is not", async () => {
     // This is the case NODE_ENV cannot distinguish, and the reason it is not used.
-    const result = await runSeed({ NODE_ENV: "production", RAILWAY_ENVIRONMENT_NAME: "dev" });
+    const result = await runSeed({ NODE_ENV: "production", RAILWAY_ENVIRONMENT_NAME: "preprod" });
     expect(result.code).toBe(0);
     expect((await counts()).notes).toBeGreaterThan(0);
   });

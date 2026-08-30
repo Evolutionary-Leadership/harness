@@ -8,10 +8,10 @@ allowed-tools: Bash(git *), Read, Write, Glob, Grep
 
 # Submit for review
 
-Create a PR from the current feature branch to dev for team review. Unlike
-`/mergedev`, this does NOT auto-merge; the PR stays open for human review.
+Create a PR from the current feature branch to preprod for team review. Unlike
+`/to-preprod`, this does NOT auto-merge; the PR stays open for human review.
 
-Uses the same `.pr-description.md` signal file pattern as `/mergedev`, but
+Uses the same `.pr-description.md` signal file pattern as `/to-preprod`, but
 with `review: true` in frontmatter so the workflow skips auto-merge.
 
 This is the harness's *process* review: it requests humans. The *code*
@@ -32,16 +32,16 @@ and falls back to the random session codename, matching the workflows.
 
 ### 2. Gather all changes
 
-Fetch and diff against dev to understand what's being submitted:
+Fetch and diff against preprod to understand what's being submitted:
 
-    git fetch origin dev
-    git log origin/dev..HEAD --oneline
-    git diff origin/dev..HEAD --stat
+    git fetch origin preprod
+    git log origin/preprod..HEAD --oneline
+    git diff origin/preprod..HEAD --stat
 
 Also check if a `feature/<name>` branch exists and include its commits:
 
     git fetch origin feature/<name> 2>/dev/null
-    git log origin/dev..origin/feature/<name> --oneline 2>/dev/null
+    git log origin/preprod..origin/feature/<name> --oneline 2>/dev/null
 
 Review ALL changes (not just the latest commit) to write an accurate PR
 description.
@@ -55,7 +55,7 @@ agent reading them, and review is where a missing ADR is cheapest to catch.
 Launch the docs-updater agent with the Agent tool:
 
     Launch the docs-updater agent with prompt:
-    "Delta audit for a PR being opened for review. Base is origin/dev.
+    "Delta audit for a PR being opened for review. Base is origin/preprod.
      Read docs/README.md as the manifest and route every finding through it.
      Enforce architecture `sources:` globs against the changed paths, verify
      surface-table counts, treat docs/decisions/ as append-only, and flag any
@@ -99,7 +99,7 @@ Format:
     - The findings summary from the /code-review run at the end of phase 4
       (per axis: Standards and Spec), including anything deliberately not
       addressed and why. If /code-review has not run, run it now (fixed
-      point: origin/dev) rather than omitting the section.
+      point: origin/preprod) rather than omitting the section.
 
     ## What's new
     - User-facing changes described in plain language
@@ -128,14 +128,14 @@ this feature to address comments.
 
 Tell the user:
 
-- A PR has been created from `feature/<name>` to `dev` for review
+- A PR has been created from `feature/<name>` to `preprod` for review
 - The PR will NOT be auto-merged; it requires human approval
 - If reviewers were configured, they have been assigned
 - Share the PR URL once the workflow creates it (it will appear in the
   GitHub Actions run)
-- **When the review is approved, land it with `/mergedev`**, not the
-  GitHub merge button: `/mergedev` reuses the open PR, refreshes it, and
+- **When the review is approved, land it with `/to-preprod`**, not the
+  GitHub merge button: `/to-preprod` reuses the open PR, refreshes it, and
   cleans up the feature context. (If someone does click the button, the
-  cleanup workflow removes the leftover context from dev.)
+  cleanup workflow removes the leftover context from preprod.)
 - The feature context carries the state; a colleague can pick this up
   any time with `/continue`

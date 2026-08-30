@@ -44,7 +44,7 @@ jobs:
           # random session codename. Keep this validation identical to
           # .claude/scripts/resolve-feature-name.sh and the other workflows.
           SLUG="$(git show "${{ github.sha }}:.harness-feature" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
-          if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
+          if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != preprod ] && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
           echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
           echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
 
@@ -61,7 +61,7 @@ jobs:
             git checkout "$FEATURE_BRANCH"
             echo "is_new=false" >> "$GITHUB_OUTPUT"
           else
-            git checkout dev
+            git checkout preprod
             git checkout -b "$FEATURE_BRANCH"
             echo "is_new=true" >> "$GITHUB_OUTPUT"
           fi

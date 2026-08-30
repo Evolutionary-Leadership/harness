@@ -13,7 +13,7 @@ if [ -f .harness-feature ]; then
   SLUG="$(head -n1 .harness-feature | tr -d '[:space:]')"
 fi
 if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' &&
-  [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then
+  [ "$SLUG" != preprod ] && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then
   echo "$SLUG"
 else
   echo "$CODENAME"

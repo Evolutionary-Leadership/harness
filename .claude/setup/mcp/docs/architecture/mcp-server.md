@@ -86,7 +86,7 @@ anything but itself.
   `WWW-Authenticate` challenge that tells a client where to start.
 
 **The resource identifier is derived, never configured.** It is
-`getPublicOrigin()` plus `/api/mcp`, so production, dev and every ephemeral
+`getPublicOrigin()` plus `/api/mcp`, so production, preprod and every ephemeral
 feature environment serve a correct endpoint with no variable set by hand.
 This introduces no new environment variable.
 

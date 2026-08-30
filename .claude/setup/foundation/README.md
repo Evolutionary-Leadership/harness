@@ -68,7 +68,7 @@ rejected alternatives: [ADR 0005](docs/decisions/0005-ci-runs-no-tests.md).
 ## Deployment
 
 Railway, built by Railpack with no Dockerfile. `production` deploys from `main`,
-`dev` from `dev`, and every feature branch gets its own ephemeral environment with
+`preprod` from `preprod`, and every feature branch gets its own ephemeral environment with
 its own isolated Postgres. Migrations run automatically on deploy.
 
 Wiring the environment variables takes about two minutes:

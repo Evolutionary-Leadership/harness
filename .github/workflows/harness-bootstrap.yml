@@ -1,6 +1,6 @@
 name: "0. Harness bootstrap (guarantees the three branches)"
 
-# Every harness repository runs on three branches. main and dev carry code.
+# Every harness repository runs on three branches. main and preprod carry code.
 # coordination is an orphan branch that carries no code, is never merged,
 # and holds only state that exists nowhere else yet: a claimed but unwritten
 # ADR number, and (later) the touched-set of a branch that has not merged.
@@ -17,7 +17,7 @@ name: "0. Harness bootstrap (guarantees the three branches)"
 #
 # It also repairs something older: release.yml opens its release PR with
 # --base main, but nothing in a scaffold ever created main, and /setup
-# states that dev is the scaffold's default and only branch. A fresh
+# states that preprod is the scaffold's default and only branch. A fresh
 # scaffold could not run its first release. Guaranteeing three branches
 # fixes that as a side effect, which is why main is handled here.
 #
@@ -53,7 +53,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Guarantee main, dev and coordination
+      - name: Guarantee main, preprod and coordination
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -84,13 +84,13 @@ jobs:
             git push origin "origin/$DEFAULT:refs/heads/main"
           fi
 
-          # 2. dev, the integration branch every feature merges into.
-          if exists dev; then
-            echo "dev: already exists"
+          # 2. preprod, the gate every feature merges into before a release.
+          if exists preprod; then
+            echo "preprod: already exists"
           else
-            echo "dev: creating from main"
+            echo "preprod: creating from main"
             git fetch origin main
-            git push origin "origin/main:refs/heads/dev"
+            git push origin "origin/main:refs/heads/preprod"
           fi
 
           # 3. coordination. Everything below runs only when it is absent,
@@ -110,7 +110,7 @@ jobs:
           cat > README.md <<'EOF'
           # coordination
 
-          This branch carries no code. It is never merged into `main` or `dev`,
+          This branch carries no code. It is never merged into `main` or `preprod`,
           and it shares no history with them.
 
           ## The one rule
@@ -157,9 +157,9 @@ jobs:
 
           The candidate number is always:
 
-              max(numbers already on dev, numbers claimed here) + 1
+              max(numbers already on preprod, numbers claimed here) + 1
 
-          That keeps `dev` the source of truth and this branch a cache over it.
+          That keeps `preprod` the source of truth and this branch a cache over it.
           Losing this branch can therefore never re-issue a number that already
           landed.
 
@@ -168,11 +168,11 @@ jobs:
           | State | Means |
           |---|---|
           | `claimed` | Reserved, written nowhere yet |
-          | `landed` | The ADR is on `dev`. Never modified again |
+          | `landed` | The ADR is on `preprod`. Never modified again |
           | `released` | Returned to the pool, only when provably never used |
 
           A number is released only when its feature branch is gone from the
-          remote AND no ADR carrying that number exists on `dev`. Both true means
+          remote AND no ADR carrying that number exists on `preprod`. Both true means
           nothing ever referenced it.
 
           This branch prevents collisions. It does not guarantee their absence:
@@ -183,7 +183,7 @@ jobs:
           # In-flight features
 
           Reserved. One file per feature slug will record what that branch
-          touches relative to `dev`: capabilities, interfaces and requirements.
+          touches relative to `preprod`: capabilities, interfaces and requirements.
 
           Nothing writes here yet. The directory exists so the layout does not
           shift when that capability is wired.

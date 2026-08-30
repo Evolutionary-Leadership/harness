@@ -24,7 +24,7 @@ export const MCP_SCOPE = "mcp";
  *
  * It is DERIVED, never configured. `getPublicOrigin()` already resolves this
  * environment's own public origin (a custom domain on production, the Railway
- * hostname on dev and on every feature preview), which is what lets an
+ * hostname on preprod and on every feature preview), which is what lets an
  * ephemeral preview environment serve a correct MCP endpoint with no variable
  * set by hand. Introducing an MCP-specific URL variable would reintroduce
  * exactly the per-environment configuration the rest of the app avoids.
