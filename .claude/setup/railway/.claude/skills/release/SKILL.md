@@ -81,19 +81,21 @@ version.** Check once:
 
     test -f .github/workflows/harness-version-bump.yml && test -f VERSION
 
-**If both exist, read the version; do not calculate one.** A version bump
-workflow moves `VERSION` on every merge, and the tag publishes that number
-rather than carrying one of its own, so `v` + `VERSION` **is** the tag. Two
-rules for one number is what makes a release page and a project's own
-version file disagree.
+**If both exist, compute the next version from `VERSION`.** Merges no
+longer move `VERSION`: they add their prose to the changelog's
+`## [Unreleased]` section and leave the number alone, so `VERSION` on
+`preprod` is the *last released* version and this release consumes exactly
+one number (ADR 0024). That is what makes the number knowable here, before
+anything is pushed, which is what the release note has to be named for:
 
-    NEW_VERSION="v$(git show origin/preprod:VERSION | tr -d '[:space:]')"
+    CURRENT=$(git show origin/preprod:VERSION | tr -d '[:space:]')
+    NEW_VERSION="v$(node scripts/release-identity.mjs next-version "$CURRENT" patch)"
 
-`--minor` or `--major` raises it first, because the judgement that a batch
-adds up to a minor is one you can only make here, looking at step 3's blast
-radius. Compute the raised number from `VERSION`, not from `$LAST_TAG`, and
-carry the `VERSION` file itself in step 9 so the tag and the file stay equal.
-Without an argument, publish `VERSION` as it stands.
+Pass `minor` or `major` instead of `patch` when `$ARGUMENTS` asked for one;
+that judgement is one you can only make here, looking at step 3's blast
+radius. Do **not** write `VERSION` yourself: `release.yml` stamps it, the
+migration and the changelog together from the version in the signal file,
+so one step owns all four.
 
 **If either is missing, calculate as before.** Parse the version type from
 `$ARGUMENTS` (default: `patch`):
@@ -194,11 +196,12 @@ Poll that until the merge is an ancestor of `origin/preprod`. Then keep
 fetching until `origin/preprod`'s tip has stopped moving for about a minute.
 Cap the whole wait at about ten minutes.
 
-The settle window is the point, and it is not padding. Where a version bump
-workflow exists it fires on the same merge and moves `VERSION` a moment
-later, so a version read before it lands is the *previous* release's number
-and step 2 would tag a value that is already stale. Repos without a version
-bump settle at once. One rule covers both.
+The settle window is the point, and it is not padding. Where a changelog
+accumulator workflow exists it fires on the same merge and appends that
+merge's prose to `## [Unreleased]` a moment later, so a changelog read
+before it lands is missing the very feature this release is being cut for,
+and the note composed from it says nothing about it. Repos without one
+settle at once. One rule covers both.
 
 **On timeout, stop.** Say plainly which of these happened, and that no
 release was cut either way:
@@ -229,13 +232,15 @@ Keep notes concise. Use commit subject lines only.
 
 ### 7. Build the new CHANGELOG.md content
 
-**Skip this whole step when the version bump owns the changelog**, which is
-the same condition as step 2: a `harness-version-bump.yml` plus a `VERSION`
-file. Such a workflow writes one entry per merge, in the commit that moves
-`VERSION`, so the entries are already on `preprod` and there is nothing to
-compose. Composing one here would mean holding the entire changelog inline
-in step 9's call, which is how three consecutive releases shipped without an
-entry when nobody noticed the step had been skipped.
+**Skip this whole step when the changelog accumulator owns the changelog**,
+which is the same condition as step 2: a `harness-version-bump.yml` plus a
+`VERSION` file. Such a workflow appends one entry per merge to the
+`## [Unreleased]` section, and `release.yml` stamps that whole section with
+the version this release publishes (ADR 0024), so the prose is already on
+`preprod` and there is nothing to compose. Composing one here would mean
+holding the entire changelog inline in step 9's call, which is how three
+consecutive releases shipped without an entry when nobody noticed the step
+had been skipped.
 
 Otherwise, read the current CHANGELOG.md from preprod (in case the working tree
 is stale or the file does not exist locally):
@@ -277,26 +282,35 @@ release when `release-notes/$NEW_VERSION.md` is missing, because a
 release that publishes no note leaves the template repo carrying new
 content under the previous release (forge decision record 0023).
 
-Gather the material rather than recalling it:
+Draft it rather than writing from a blank file:
+
+    node scripts/release-notes-brief.mjs --version <version without the leading v> --draft \
+      > release-notes/<version>.md
+
+That writes a complete five-section note: the brief spans every bump since
+the last published note, drops the versions whose migrations touched
+nothing under `templates/`, drops bullets about the factory (the checkers,
+this repo's own docs and decisions), prefixes a railway-only range, and
+strips the issue references, repo names and em dashes the composer
+rejects. Run it without `--draft` to read the same material as a report:
 
     node scripts/release-notes-brief.mjs --version <version without the leading v>
 
-The brief spans every bump since the last published note and, per
-version, gives the changelog prose plus what the migration says actually
-changed. Two of its markers decide what reaches the note:
+**Then edit what it produced.** The draft is assembled from changelog
+prose written for people who work on the harness, so it will name
+internals and describe changes from the maintainer's side. Rewrite each
+bullet for someone who runs a scaffolded project and has never seen this
+repository, drop anything they cannot act on, and keep the five sections
+in order. Two markers in the report explain what the draft did:
 
 - **`factory only, omit from the note`**: that version changed nothing
   under `templates/`, so a downstream project cannot act on it. Leave its
   prose out entirely.
 - **`railway only`**: prefix those bullets with `**Railway only:** `.
 
-Then write `release-notes/$NEW_VERSION.md` from the brief, following
-`release-notes/README.md`: the five sections in order, omitting any that
-would be empty, saying what a reader can do or must know rather than
-which file moved. The changelog prose is written for maintainers, so
-rewrite it for someone who runs a scaffolded project and has never seen
-this repository. Never carry across an issue reference, a repository
-name, or an em dash; the composer rejects all three.
+Follow `release-notes/README.md` for the rules the draft cannot apply for
+you: say what a reader can do or must know rather than which file moved,
+and omit a section rather than padding it.
 
 Validate before going further, which is the same check `release.yml` and
 the sync will run:
@@ -353,15 +367,13 @@ Call `mcp__github__push_files` with:
   `{ path: ".release-description.md", content: <RELEASE_DESC_CONTENT from step 8> }`,
   plus `{ path: "release-notes/<version>.md", content: <the note from step 7b> }`
   whenever step 7b ran (the release fails without it),
-  plus **exactly one** of:
-  - `{ path: "CHANGELOG.md", content: <CHANGELOG_CONTENT from step 7> }` when
-    step 7 composed one.
-  - `{ path: "VERSION", content: <the raised number, no leading v> }` when the
-    version bump owns the changelog **and** `--minor` or `--major` raised the
-    version in step 2. A few bytes, so this never revives the inline-size
-    problem that step 7 avoids.
-  - Neither, when the bump owns the changelog and the version was published
-    as it stands. The signal file alone is the whole commit.
+  plus `{ path: "CHANGELOG.md", content: <CHANGELOG_CONTENT from step 7> }`
+  when step 7 composed one.
+
+  **Never push `VERSION` from here.** `release.yml` writes it, the migration
+  and the changelog stamp in one commit, from the version in the signal file
+  (ADR 0024). Pushing it here as well would give one number two owners,
+  which is the failure that rule exists to prevent.
 
 The MCP call creates a single commit on origin/preprod. It does not modify the
 local working tree or local refs.

@@ -88,7 +88,13 @@ jobs:
             exit 0
           fi
 
-          VERSION=$(tr -d '[:space:]' < VERSION)
+          # The version being CUT, from the signal file. Reading VERSION here
+          # would name the previous release: it is stamped later in this run
+          # (forge decision record 0024), so the file still holds the last
+          # released number. Checking that one passes green while the note
+          # this release needs is missing, which is the 0.7.2 failure again.
+          VERSION="${{ steps.release.outputs.version }}"
+          VERSION="${VERSION#v}"
           NOTES="release-notes/${VERSION}.md"
 
           if [ ! -f "${NOTES}" ]; then
@@ -101,6 +107,215 @@ jobs:
             exit 1
           fi
           echo "Downstream release note for ${VERSION} is valid." >> "$GITHUB_STEP_SUMMARY"
+
+
+      - name: Stamp the version this release publishes
+        # Authoring repo only. A downstream project has no VERSION file and
+        # no migrations directory: it consumes the harness rather than
+        # publishing it, and its releases are its own. Guarding at the step
+        # level keeps the shell below at the indentation its heredocs need.
+        # Forge decision record 0024.
+        if: >-
+          hashFiles('.release-description.md') != '' &&
+          hashFiles('VERSION') != '' &&
+          hashFiles('scripts/release-identity.mjs') != ''
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # --- Stamp the version this release publishes (forge decision record 0024) ---
+          # Merges no longer bump anything: they add bullets to the
+          # changelog's `## [Unreleased]` section and leave VERSION alone.
+          # The release consumes exactly one number, here, so a version that
+          # exists is a version that shipped, and the note written moments
+          # ago is named for the number this step writes.
+          NEW_VERSION="${{ steps.release.outputs.version }}"
+          NEW_VERSION="${NEW_VERSION#v}"
+          DATE=$(date +%Y-%m-%d)
+
+          # The range this release covers: everything since the previous
+          # published tag, which is what one migration must now describe.
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || true)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RANGE="${PREVIOUS_TAG}..HEAD"
+          else
+            RANGE=$(git rev-list --max-parents=0 HEAD | tail -1)"..HEAD"
+          fi
+          echo "Stamping ${NEW_VERSION} over ${RANGE}"
+
+          # --- Get changed files with their status ---
+          # Format per line: ACTION<TAB>path
+          # Renames/copies report two paths; we keep the post-rename path for routing.
+          CHANGED_FILES=$(git diff --name-status "${RANGE}" | awk -F'\t' '
+            NF == 0 { next }
+            {
+              s = $1
+              if (s == "A")       { print "Added\t" $2 }
+              else if (s == "M")  { print "Updated\t" $2 }
+              else if (s == "D")  { print "Removed\t" $2 }
+              else if (s ~ /^R/)  { print "Renamed\t" $3 }
+              else if (s ~ /^C/)  { print "Updated\t" $3 }
+              else                { print "Updated\t" $2 }
+            }
+          ')
+
+          # The migration's summary names the release, not a merge: one
+          # migration now covers every merge since the previous release.
+          SUMMARY="Release ${NEW_VERSION}"
+
+          # --- Auto-categorize changes into migration file ---
+          MIGRATION_FILE="migrations/${NEW_VERSION}.yaml"
+          DATE=$(date +%Y-%m-%d)
+
+          cat > "$MIGRATION_FILE" << HEADER
+          version: "${NEW_VERSION}"
+          date: "${DATE}"
+          summary: "${SUMMARY}"
+
+          changes:
+          HEADER
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' "$MIGRATION_FILE"
+
+          # Track what we've already added to avoid duplicates
+          declare -A SEEN_ENTRIES
+
+          # Process template file changes. The single template cell is
+          # templates/harness/; the LAYER a file sits in decides which
+          # variants it affects (see migrations/README.md):
+          #   base/**             -> harness-plain, harness-railway
+          #   overlays/railway/** -> harness-railway
+          #   setup/**            -> harness-plain, harness-railway (skills)
+          #   README.md           -> harness-plain, harness-railway (docs)
+          echo "$CHANGED_FILES" | awk -F'\t' '$2 ~ /^templates\//' | while IFS=$'\t' read -r ACTION file; do
+            [ -z "$file" ] && continue
+
+            VARIANTS=""
+            REST=""
+            SCOPE=""
+            case "$file" in
+              templates/harness/base/*)
+                VARIANTS="harness-plain, harness-railway"
+                REST="${file#templates/harness/base/}"
+                ;;
+              templates/harness/overlays/railway/*)
+                VARIANTS="harness-railway"
+                REST="${file#templates/harness/overlays/railway/}"
+                ;;
+              templates/harness/setup/*)
+                VARIANTS="harness-plain, harness-railway"
+                SCOPE="skill"
+                REST="${file#templates/harness/}"
+                ;;
+              templates/harness/README.md)
+                VARIANTS="harness-plain, harness-railway"
+                SCOPE="docs"
+                REST="README.md"
+                ;;
+              *)
+                VARIANTS="harness-plain, harness-railway"
+                SCOPE="docs"
+                REST="${file#templates/}"
+                ;;
+            esac
+
+            # Skip .harness-version (handled separately)
+            echo "$REST" | grep -q '\.harness-version$' && continue
+
+            # Determine scope from the layer-relative path
+            if [ -z "$SCOPE" ]; then
+              case "$REST" in
+                workflows/*)           SCOPE="infrastructure" ;;
+                claude/hooks/*)        SCOPE="infrastructure" ;;
+                claude/scripts/*)      SCOPE="infrastructure" ;;
+                claude/skills/*)       SCOPE="skill" ;;
+                claude/settings.json)  SCOPE="config" ;;
+                claude/HARNESS.md)     SCOPE="docs" ;;
+                railway.json)          SCOPE="config" ;;
+                dependabot.yml)        SCOPE="config" ;;
+                claude-md-snippet.md)  SCOPE="docs" ;;
+                # Forge decision record 0001: scope "starter" means write-once.
+                # creates these on first install and never overwrites them, so
+                # an upgrade cannot revert downstream application code or docs.
+                # Adding a path here is a one-way door for that path.
+                server.js)             SCOPE="starter" ;;
+                package.json)          SCOPE="starter" ;;
+                .gitignore)            SCOPE="starter" ;;
+                # The docs skeleton and its checker are write-once for the same
+                # reason: downstream projects fill them with their own content,
+                # so an upgrade must create only what is missing.
+                docs/*)                SCOPE="starter" ;;
+                scripts/*)             SCOPE="starter" ;;
+                *)                     SCOPE="docs" ;;
+              esac
+            fi
+
+            ENTRY_KEY="${SCOPE}:${file}"
+            if [ -z "${SEEN_ENTRIES[$ENTRY_KEY]:-}" ]; then
+              SEEN_ENTRIES[$ENTRY_KEY]=1
+              BASENAME=$(basename "$REST")
+              cat >> "$MIGRATION_FILE" << ENTRY
+            - scope: ${SCOPE}
+              summary: "${ACTION} ${BASENAME}"
+              affects:
+                variants: [${VARIANTS}]
+              files:
+                - ${file}
+          ENTRY
+              sed -i 's/^          //' "$MIGRATION_FILE"
+            fi
+          done || true
+
+          # Process trait file changes
+          echo "$CHANGED_FILES" | awk -F'\t' '$2 ~ /^stacks\/traits\//' | while IFS=$'\t' read -r ACTION file; do
+            [ -z "$file" ] && continue
+            # Extract trait name from path: stacks/traits/<category>/<name>.md
+            TRAIT_NAME=$(basename "$file" .md)
+            cat >> "$MIGRATION_FILE" << ENTRY
+            - scope: trait
+              summary: "${ACTION} ${TRAIT_NAME} best practices"
+              affects:
+                traits: [${TRAIT_NAME}]
+              files:
+                - ${file}
+          ENTRY
+            sed -i 's/^          //' "$MIGRATION_FILE"
+          done || true
+
+          # Process preset file changes
+          echo "$CHANGED_FILES" | awk -F'\t' '$2 ~ /^stacks\/presets\//' | while IFS=$'\t' read -r ACTION file; do
+            [ -z "$file" ] && continue
+            PRESET_NAME=$(basename "$file" .md)
+            cat >> "$MIGRATION_FILE" << ENTRY
+            - scope: preset
+              summary: "${ACTION} ${PRESET_NAME} preset"
+              affects:
+                presets: [${PRESET_NAME}]
+              files:
+                - ${file}
+          ENTRY
+            sed -i 's/^          //' "$MIGRATION_FILE"
+          done || true
+
+
+          # --- Stamp the changelog accumulator with this version ---
+          # Best effort in the same sense the bump was: a changelog problem
+          # must not strand a release that has already been approved.
+          if node scripts/release-identity.mjs changelog-stamp \
+               "$NEW_VERSION" "$DATE" > "${RUNNER_TEMP}/CHANGELOG.next"; then
+            mv "${RUNNER_TEMP}/CHANGELOG.next" CHANGELOG.md
+          else
+            echo "::warning::Could not stamp the CHANGELOG accumulator for ${NEW_VERSION}."
+          fi
+
+          # --- VERSION, and the stamp the template carries downstream ---
+          echo "$NEW_VERSION" > VERSION
+          if [ -f "templates/harness/base/.harness-version" ]; then
+            sed -i "s/^version: .*/version: ${NEW_VERSION}/" "templates/harness/base/.harness-version"
+          fi
+
 
 
       - name: Remove signal file
@@ -131,8 +346,9 @@ jobs:
           # step declaring `shell: bash`, or a repo setting defaults.run.shell)
           # that aborts the step before the commit below, failing every release
           # in the normal case where nothing leaked.
-          LEAKED=$(git diff --cached --name-only -- ':!.release-description.md' | tr '\n' ' ')
+          LEAKED=$(git diff --cached --name-only -- ':!.release-description.md' ':!VERSION' ':!CHANGELOG.md' ':!migrations' ':!templates' | tr '\n' ' ')
           [ -z "$LEAKED" ] || echo "::warning::Signal files reached preprod and were removed before the release: $LEAKED"
+          git add VERSION CHANGELOG.md migrations/ templates/ 2>/dev/null || true
           git commit -m "chore: remove release signal file"
 
           for i in 1 2 3; do
