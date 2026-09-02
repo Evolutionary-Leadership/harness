@@ -8,9 +8,9 @@ added automated CI/CD infrastructure (feature branches, auto-merge,
 releases), not application code. Understanding what it set up helps you
 work with it instead of against it.
 
-The template content itself is authored in
-[`evolutionary-leadership/harness-forge`](https://github.com/evolutionary-leadership/harness-forge)
-and synced from there into this template repo on every harness release.
+The template content is authored elsewhere and synced into this template
+repo on every harness release. You never need to read the authoring repo:
+everything an upgrade uses is published here, at a tag per release.
 
 ## Architecture
 
@@ -94,9 +94,8 @@ The `.harness-version` file supports these fields:
 
 ```yaml
 harness: harness-plain
-version: 0.3.38
-repo: evolutionary-leadership/harness-forge
-traits: nodejs, typescript, express
+version: 0.7.7
+repo: Evolutionary-Leadership/harness
 check: node scripts/check-docs.mjs && npm test && npm run lint
 reviewers: teammate1, teammate2
 ```
@@ -105,8 +104,11 @@ reviewers: teammate1, teammate2
   (`harness-plain` or `harness-railway`).
 - **`version`**: harness version installed; used by `/harness-upgrade` to
   diff against the latest release.
-- **`repo`**: the upstream forge repo (`evolutionary-leadership/harness-forge`),
-  which hosts `VERSION`, `migrations/`, and `stacks/traits/`.
+- **`repo`**: the published harness template repo
+  (`Evolutionary-Leadership/harness`), which `/harness-upgrade` reads. Each
+  release is a tag there holding the exact tree a scaffold receives, so an
+  upgrade compares your repo against a real tree rather than replaying a
+  list of changes. It is public: upgrades need no credentials.
 - **`check`**: CI command to run on PRs to preprod. Keep
   `node scripts/check-docs.mjs` at the front of the chain so documentation
   drift fails the merge gate like any other error. When configured, the
@@ -115,8 +117,6 @@ reviewers: teammate1, teammate2
   and to-preprod polls the run's conclusion on the PR head, merging only on
   success. The check chain must finish within the gate's 12-minute budget.
 - **`reviewers`**: Default reviewers assigned when using `/review`.
-- **`traits`**: stack-specific best-practice files installed under
-  `.claude/traits/` and managed by `/harness-upgrade`.
 
 **Prerequisites for CI checks:**
 - None: the merge gate polls the check run directly, so it works without
@@ -242,45 +242,32 @@ in the Railway-specific steps of phase 0 (provisioning note) and phase 5
 (preview-URL reporting). Any other difference between the variants'
 skills is a bug; report it upstream rather than working around it.
 
-## Managed trait files
+## How an upgrade decides what to change
 
-Stack-specific best practices live in `.claude/traits/` as separate managed
-files (e.g. `.claude/traits/nodejs.md`, `.claude/traits/typescript.md`).
-These are fetched from the forge repo's `stacks/traits/` directory and
-can be auto-updated via `/harness-upgrade`.
+`/harness-upgrade` compares two real trees: the tag for the version you
+are moving to, and your repository. It does not replay a list of changes,
+which is why it stays correct even when you have edited a managed file by
+hand, and why asking for a specific version gives you exactly that
+version's content.
 
-To install traits, add the trait names to `.harness-version`:
+Every path falls into one of three classes, decided by the path itself:
 
-```
-traits: nodejs, typescript, express, vitest, eslint, pnpm
-```
+- **Managed**: replaced with the new version's content. Workflows, hooks,
+  skills, agents and the harness scripts.
+- **Write-once**: created only when missing, evaluated per file. Your
+  `server.js`, `package.json`, `.gitignore`, `docs/` and `scripts/` are
+  yours once they exist. They are never overwritten, and never recreated
+  if you delete them.
+- **Never written**: one-shot setup and bootstrap machinery, plus this
+  template repo's own `README.md`. Restoring the setup spine would leave
+  it armed in a repo that must never run it again, and the template's
+  README is not your project's README. `LICENSE` and `NOTICE` are
+  write-once instead, so a project that never received them still can.
 
-Then run `/harness-upgrade`. It will fetch the matching trait files from
-the forge and install them in `.claude/traits/`. On future upgrades, it will
-show diffs and let you update to the latest best practices.
+Files the harness has retired can be removed, but only inside directories
+the harness owns outright, and only after you confirm.
 
-Add this line to your project's `CLAUDE.md` so the AI reads them:
-
-```
-Read `.claude/traits/` for stack-specific best practices before writing code.
-```
-
-Available traits and presets are listed in the forge repo's `stacks/` directory.
-
-## Migration system
-
-Each harness version has a structured migration file
-(`migrations/X.Y.Z.yaml` in the forge repo) describing what changed. The
-`/harness-upgrade` skill uses these to:
-
-- **Filter by relevance**: only show changes that affect your variant and traits
-- **Categorize by priority**: REQUIRED (infrastructure), RECOMMENDED (traits),
-  INFORMATIONAL (other)
-- **Show context**: what changed and why, not just raw diffs
-
-Migration files are auto-generated in the forge by `release.yml`, one per
-released version, covering everything that landed since the previous
-release. They are never manually authored.
+The upgrade reads only public data and needs no credentials.
 
 ## Harness-managed files
 
@@ -330,7 +317,6 @@ These files are maintained by the harness and replaced on
 | `.claude/agents/docs-updater.md` | Documentation auditor agent (runs during `/to-preprod` and `/review`) |
 | `.claude/HARNESS.md` | This file |
 | `.harness-version` | Version tracking |
-| `.claude/traits/*.md` | Stack best practices (managed per `traits:` in `.harness-version`) |
 
 ## Harness-provided starting points
 
@@ -433,10 +419,8 @@ harness-managed ones. New files won't be touched by upgrades.
 
 ## Variants
 
-One template repo ships from the forge
-([evolutionary-leadership/harness](https://github.com/evolutionary-leadership/harness));
-the variant is chosen by the one-shot `/setup` skill on first run and
-recorded in `.harness-version`:
+This template repo ships one tree; the variant is chosen by the one-shot
+`/setup` skill on first run and recorded in `.harness-version`:
 
 | Variant | What you get |
 |---------|--------------|
@@ -451,16 +435,15 @@ application code over.
 ## Upgrading (same variant)
 
 Run `/harness-upgrade` to check for version updates within your current
-variant. The skill uses structured migration files from the forge
-(`evolutionary-leadership/harness-forge`) to show you exactly what
-changed, filtered by your variant and installed traits. See
-`.harness-version` for current version info.
+variant. It shows what changed and why, drawn from the published release
+notes, with any breaking items above the confirmation prompt, and then the
+exact list of files it would write. Nothing is changed until you approve
+it. See `.harness-version` for current version info.
 
 ### Version numbering
 
 Harness versions use semver (`MAJOR.MINOR.PATCH`):
-- **PATCH** bumps automatically on each feature merge to the forge's
-  `preprod` branch
+- **PATCH** bumps automatically on each feature merge upstream
 - **MINOR** bumps are a developer decision for significant releases
 - **MAJOR** is reserved for breaking architecture changes
 

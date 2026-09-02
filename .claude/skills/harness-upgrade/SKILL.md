@@ -1,436 +1,377 @@
 ---
 name: harness-upgrade
-description: Upgrade harness infrastructure (workflows, skills, hooks, settings, traits) to the latest version using migration-aware filtering.
+description: Upgrade harness infrastructure (workflows, skills, hooks, settings) to a target version, planned against the published template repo.
 disable-model-invocation: true
-argument-hint: "[optional: target version, e.g. 0.3.0]"
+argument-hint: "[optional: target version, e.g. 0.7.7]"
 ---
 
 # Upgrade Harness
 
-Upgrade the project's harness infrastructure and stack traits to a target
-version from the upstream harness repo. Uses structured migration files to
-understand what changed, filter by relevance, and present a smart upgrade plan.
+Upgrade this project's harness infrastructure to a target version.
+
+The upgrade source is the **published template repo**, which carries a
+tagged snapshot of exactly the tree a scaffold receives. Every tagged
+version is a byte-exact picture of what your repo should look like at that
+version, so the plan is a comparison of two real trees rather than a replay
+of change descriptions. That is what makes it correct even when you have
+edited a managed file by hand.
+
+Everything the upgrade reads is public and needs no credentials.
 
 ## Steps
 
-### 1. Read current version info
+### 1. Read the current stamp
 
 Read `.harness-version` in the project root:
 
 ```
-harness: harness-railway
-version: 0.3.35
-repo: evolutionary-leadership/harness-forge
-companion_url: https://your-companion-site.up.railway.app
-traits: nodejs, typescript, express, vitest, eslint, pnpm
+harness: harness-plain
+version: 0.7.5
+repo: Evolutionary-Leadership/harness
+check: ...
 ```
 
-Extract five values:
-- `VARIANT`: the harness variant (`harness-plain` or `harness-railway`)
-- `CURRENT_VERSION`: the currently installed version (semver: `MAJOR.MINOR.PATCH`)
-- `REPO`: the GitHub repo (`owner/name`)
-- `COMPANION_URL`: the companion site URL for fetching upgrades (may be empty)
-- `TRAITS`: comma-separated list of installed trait names (may be empty)
+Extract three values:
 
-If `.harness-version` is missing, tell the user this project doesn't appear
-to be harnessed and stop.
+- `VARIANT`: `harness-plain` or `harness-railway`. A repo stamped before
+  0.4.4 carries a retired spelling instead; pass it through unchanged, the
+  planner normalises it.
+- `CURRENT`: the installed version
+- `REPO`: the published template repo, `owner/name`
+
+If `.harness-version` is missing, tell the user this project does not
+appear to be harnessed and stop.
 
 If the `harness:` line says `unconfigured`, this repository was scaffolded
 from the template but `/setup` never ran. Tell the user to run `/setup`
 first and stop.
 
-If the `repo` field is missing, ask the user for the harness repo
-(`owner/name` format) and proceed.
+If `repo:` names a repository you cannot read, say so plainly and stop.
+The usual cause is a repo stamped before the upgrade source moved to the
+published template repo. The fix is one line, and saying it is more useful
+than reporting a 404:
 
-If the `traits` field is missing or empty, note this. You'll show all trait
-changes later and suggest the user configure their traits.
+> Your `.harness-version` points at `<REPO>`, which this upgrade cannot
+> read. The harness now publishes upgrades from
+> `Evolutionary-Leadership/harness`. Change the `repo:` line to that and
+> run `/harness-upgrade` again.
 
-### 2. Fetch upgrade data
+Do not rewrite the line yourself. `repo:` is the user's configuration, and
+silently repointing it would hide where upgrades come from.
 
-There are two methods to fetch upgrade data. Try them in order:
+### 2. Resolve the target version
 
-#### Method A: Companion site API (preferred)
-
-If `COMPANION_URL` is set (non-empty), fetch the upgrade manifest in a single
-request:
-
-```bash
-MANIFEST=$(curl -sf "$COMPANION_URL/api/harness/upgrade?from=$CURRENT_VERSION&variant=$VARIANT&traits=$TRAITS")
-```
-
-If `$ARGUMENTS` specifies a target version, you'll filter the manifest
-response to only include migrations up to that version.
-
-The manifest returns JSON:
-```json
-{
-  "latest_version": "0.2.16",
-  "up_to_date": false,
-  "migrations": [
-    {
-      "version": "0.2.2",
-      "date": "2026-03-20",
-      "summary": "...",
-      "changes": [{ "scope": "...", "summary": "...", "affects": {...}, "files": [...] }]
-    }
-  ],
-  "files": {
-    "templates/harness/base/workflows/file.yml": "<base64-encoded content>",
-    "stacks/traits/runtime/nodejs.md": "<base64-encoded content>"
-  }
-}
-```
-
-If `up_to_date` is true, tell the user they're already up to date and stop.
-
-The `files` map contains base64-encoded content of all relevant files. Decode
-them when needed for diffing and applying changes.
-
-If the companion site request succeeds, skip to step 4 (categorize changes).
-
-#### Method B: GitHub API (fallback)
-
-If `COMPANION_URL` is not set, or the companion site request fails, fall back
-to the GitHub API:
+List the published tags. This is a git operation, not an API call, so it
+costs nothing against any rate limit:
 
 ```bash
-LATEST_VERSION=$(curl -sf "https://raw.githubusercontent.com/$REPO/main/VERSION" | tr -d '[:space:]')
+git ls-remote --tags "https://github.com/$REPO" 'v*' \
+  | sed 's|.*refs/tags/||' | grep -v '\^{}' | sort -V
 ```
 
-If `$ARGUMENTS` specifies a target version, use that instead of latest.
+Pick the target:
 
-Compare `CURRENT_VERSION` with the target version. If they match, tell the
-user they're already up to date and stop.
+- If `$ARGUMENTS` names a version, that is `TARGET`. If no tag matches it,
+  say which versions are published and stop.
+- Otherwise `TARGET` is the newest published tag.
 
-If the target version is older than the current version, warn the user and
-stop (downgrades are not supported).
+Compare `CURRENT` with `TARGET` by semver:
 
-If both methods fail, tell the user:
-> Could not reach the harness upgrade server. You can either:
-> 1. Set `companion_url` in `.harness-version` to your companion site URL
-> 2. Ensure the harness repo (`$REPO`) is accessible on GitHub
+- Equal: tell the user they are up to date and stop.
+- `TARGET` older than `CURRENT`: warn that downgrades are not supported and
+  stop.
 
-### 3. Fetch migration files (GitHub fallback only)
+A tag exists for a version only when that release published a note, so the
+newest tag is the newest *released* version. That is the right target: an
+untagged version is content that was synced without a release.
 
-This step only applies when using Method B (GitHub API). When using Method A
-(companion site), the migrations are already included in the manifest response.
+### 3. Fetch the target tree
 
-List all migration files from the upstream repo:
+Shallow-clone the target tag into a temporary directory:
 
 ```bash
-MIGRATION_FILES=$(curl -sf "https://api.github.com/repos/$REPO/git/trees/main?recursive=1" \
-  | jq -r '.tree[] | select(.path | startswith("migrations/") and endswith(".yaml") and (. path != "migrations/README.md")) | .path')
+WORK=$(mktemp -d)
+git clone --quiet --depth 1 --branch "v$TARGET" \
+  "https://github.com/$REPO" "$WORK/target"
 ```
 
-Filter to only versions between `CURRENT_VERSION` (exclusive) and the target
-version (inclusive) using semver comparison. For each matching migration file,
-fetch and parse it:
+This is a few megabytes and about a second. It costs no API calls, so
+neither the unauthenticated rate limit nor any per-response file cap
+applies, and the tree it gives you is the exact content of that version
+rather than whatever is currently at the head of a branch.
+
+Also clone the **installed** version, when it has a tag:
 
 ```bash
-curl -sf "https://raw.githubusercontent.com/$REPO/main/migrations/$VERSION.yaml"
+PREVIOUS=""
+if git clone --quiet --depth 1 --branch "v$CURRENT" \
+     "https://github.com/$REPO" "$WORK/previous" 2>/dev/null; then
+  PREVIOUS="$WORK/previous"
+fi
 ```
 
-If no migration files exist for the version range, fall back to the legacy
-upgrade method (step 3-legacy below).
+This one is optional and is only used to detect files the harness has
+retired. When `CURRENT` has no tag the clone fails harmlessly, `PREVIOUS`
+stays empty and deletions are simply not offered. Say so in the plan
+rather than guessing: without this tree, a file missing from the target
+cannot be told apart from a file the user wrote.
 
-### 3-legacy. Fall back: fetch template listing and diff (for pre-migration versions)
+If the target clone fails, report the failure and stop. Do not fall back to
+another source.
 
-If no migration files cover the version range (upgrading from a version
-before migrations existed), use the legacy approach:
+### 4. Build the file plan
 
-Fetch the template file listing using the GitHub API:
+Run the planner that ships with the harness:
 
 ```bash
-curl -sf "https://api.github.com/repos/$REPO/git/trees/main?recursive=1" \
-  | jq -r '.tree[] | select(.path | startswith("templates/harness/base/")) | .path'
+node .claude/scripts/harness-upgrade-plan.mjs \
+  --target "$WORK/target" \
+  --local . \
+  --variant "$VARIANT" \
+  ${PREVIOUS:+--previous "$PREVIOUS"} \
+  --pretty
 ```
 
-For the `harness-railway` variant, also list
-`templates/harness/overlays/railway/`; wherever both layers carry the same
-layer-relative path, the overlay file wins.
+Add `--verbose` only if you need the full per-path refused list. By default
+the planner omits it and gives you `blockedSummary` instead, because on a
+real tree that list runs to well over a hundred entries and the summary is
+what you render.
 
-Map template paths to local paths, fetch each file, diff against local, and
-categorize as Infrastructure (replace) / Configuration (merge) / Skills
-(replace). Also check for trait files: if `.claude/traits/` exists locally,
-diff those against upstream `stacks/traits/`.
+It returns JSON with `variant`, `update`, `create`, `delete`, `skipped`,
+`blocked`, `blockedSummary`, `stamp` and `deletionsDetected`.
 
-**Skip these paths entirely in the legacy diff.** They are starter scaffold
-files (write-once) and the legacy upgrade path must never overwrite them:
+`deletionsDetected` is false when no previous tree was available. Say so in
+the plan when it is: "retired files were not checked for, because the
+version you are on was never tagged" is honest, and silence reads as
+"nothing was retired".
 
-- `server.js`
-- `package.json`
-- `.gitignore`
-- `docs/**` (the documentation skeleton; create only what is missing)
-- `scripts/check-docs.mjs`
+`variant` is the normalised name, which differs from your stamp when the
+repo was stamped before 0.4.4.
 
-Then skip to step 6 (present the upgrade plan in the legacy format).
+**The planner owns the rules, not you.** It decides which paths are
+managed, which are write-once, and which must never be written. Do not
+second-guess it, do not add a path it left out, and do not write anything
+it classified as blocked or skipped, however reasonable it looks. Those
+classifications are the contracts the upgrade exists to keep:
 
-### 4. Categorize changes by relevance
+- **Config** files (`.claude/settings.json`, `.github/dependabot.yml`,
+  `railway.json`, `.env.example`) arrive as defaults a project extends.
+  An update entry for one carries `merge: true`: merge it, never copy over
+  it, or you silently drop the entries the project added.
+- **Write-once** files are created only when missing, per file, and are
+  never overwritten and never resurrected once deleted. A create entry
+  marked `unverified` means there was no previous tree to tell "you
+  deleted this" from "this was never installed"; offer it, and say which
+  it is you could not determine.
+- **Blocked** paths are one-shot setup and bootstrap machinery, plus the
+  template repo's own README. A restored setup spine would sit armed in a
+  repo that must never run it again, and the template repo's README is not
+  your project's README. LICENSE and NOTICE are write-once rather than
+  blocked, so a project that never received them still can.
+- **Deletions** are only ever proposed for paths in trees the harness owns
+  outright, and only when the installed version's tree was available.
 
-Collect all `changes` entries from all fetched migration files. For each
-entry, determine its relevance to this project:
+**Exit 3 means the target tree is the wrong tree.** The planner refuses to
+plan against the repository that *authors* the harness rather than a
+rendered release of it, because doing so would propose writing authoring
+files (`CLAUDE.md`, `VERSION`, `CHANGELOG.md`, publishing workflows) into
+this project. It is the failure a stale `repo:` line produces for anyone
+who happens to be able to read that repository, where an external user
+would simply have got a 404. Report the planner's message and stop.
 
-**MUST APPLY**: changes matching the repo's variant:
-- `scope: infrastructure` where `VARIANT` appears in `affects.variants`
-- `scope: config` where `VARIANT` appears in `affects.variants`
-- `scope: skill` where `VARIANT` appears in `affects.variants` (base
-  skills list both variants; overlay skills list `harness-railway` only)
-- `scope: docs` where `VARIANT` appears in `affects.variants`
+If the planner is missing (an older scaffold), say so and stop: it ships at
+`.claude/scripts/harness-upgrade-plan.mjs` and arrives with the upgrade
+itself, so the fix is to copy that one file from the target clone first.
 
-Exception: changes whose files live under `templates/harness/setup/`,
-plus the spine script `templates/harness/base/claude/scripts/setup.sh`
-(landing at `.claude/scripts/setup.sh`), describe the one-shot `/setup`
-skill, its deterministic spine, and the pre-built foundation payload it
-materializes. In a configured repository the skill has already run and
-deleted itself (taking the quarantine AND the spine with it), and any
-materialized foundation files are user-owned application code, so treat
-these changes as **INFORMATIONAL** regardless of scope. Never write
-`setup/` payload files or `.claude/scripts/setup.sh` into a configured
-repository; a restored spine would sit armed in a repo that must never
-run it again.
+### 5. Build the narrative
 
-**STARTER (skip-if-exists)**: write-once scaffold files for this variant:
-- `scope: starter` where `VARIANT` appears in `affects.variants`
-- These are seed files the harness ships as a starting point: the app
-  scaffold (`server.js`, `package.json`, `.gitignore`), the documentation
-  skeleton (`docs/README.md`, `docs/GLOSSARY.md`, `docs/SECURITY.md`,
-  `docs/TESTING.md`, the `TEMPLATE.md` files, the seed ADR), and the docs
-  checker (`scripts/check-docs.mjs`). They are created once, never
-  overwritten on upgrade, and never recreated if the user has deleted them.
-- Treated separately from MUST APPLY: only included in the upgrade plan when
-  the local file is missing.
-- Skip-if-exists is **per file**, not per directory. A project that already
-  has `docs/README.md` but no `docs/SECURITY.md` gets exactly the missing
-  file, and its existing content is never touched.
+The file plan says what will change. It does not say why. Fetch the
+published release notes so the user gets both:
 
-**RECOMMENDED**: trait changes matching the repo's installed traits:
-- `scope: trait` where any trait in `affects.traits` appears in the repo's
-  `TRAITS` list
-- These update `.claude/traits/<name>.md` files
+```bash
+curl -sf "https://api.github.com/repos/$REPO/releases?per_page=100"
+```
 
-**INFORMATIONAL**: other changes that don't directly apply:
-- `scope: trait` or `scope: preset` for traits/presets NOT in the repo's
-  `TRAITS` list
-- Show briefly so the user is aware of what's new
+This is the only API call the upgrade makes. If it fails, note that the
+narrative is unavailable and carry on with the file plan. A missing
+narrative never blocks an upgrade.
 
-**SKIP**: changes for other variants:
-- `scope: infrastructure` or `scope: config` where `VARIANT` is NOT in
-  `affects.variants`
-- Do not show these at all
+Keep the releases whose version is greater than `CURRENT` and at most
+`TARGET`, ordered oldest first.
 
-If `TRAITS` is empty (not configured), treat ALL trait changes as
-**RECOMMENDED** and inform the user they can configure `traits:` in
-`.harness-version` to filter in future upgrades.
+Each body carries the same five H3 sections in a fixed order: **Breaking**,
+**Features**, **Fixes**, **Improvements**, **Notes**. The publisher rejects
+anything else, so parse by those headings rather than guessing at structure.
+Collect the items under each heading across the whole range, keeping the
+version each came from.
 
-### 5. Fetch and diff relevant files
+**Resolve the current stamp honestly.** If `CURRENT` has no tag, the range
+cannot start where the user actually is. Fall back to the nearest older
+tag and say which one you used. Never present a narrative that silently
+starts somewhere other than where the user is.
 
-For each **MUST APPLY** change:
-- Determine the local file path using these mapping rules. `$LAYER` is
-  `templates/harness/base` for every project, plus
-  `templates/harness/overlays/railway` for the `harness-railway` variant.
-  When both layers ship the same layer-relative path, the overlay file
-  wins:
+**Report coverage, and only from what you can actually count.** A version
+ships a note only when its release published one, so a range is often
+narrated in part.
 
-  | Template path prefix | Local destination |
-  |---|---|
-  | `$LAYER/workflows/` | `.github/workflows/` |
-  | `$LAYER/dependabot.yml` | `.github/dependabot.yml` |
-  | `$LAYER/claude/` | `.claude/` |
-  | `$LAYER/server.js` | `server.js` |
-  | `$LAYER/package.json` | `package.json` |
-  | `$LAYER/.gitignore` | `.gitignore` |
-  | `$LAYER/railway.json` | `railway.json` (overlay only) |
-  | `$LAYER/docs/` | `docs/` |
-  | `$LAYER/scripts/` | `scripts/` |
-  | `$LAYER/.harness-version` | `.harness-version` (keep the local `harness:` line) |
-  | `$LAYER/claude-md-snippet.md` | *(reference only; see step 7)* |
+You can count exactly two things: the number of releases you fetched that
+fall in the range, and the endpoints of the range itself. You **cannot**
+enumerate the versions that shipped without notes, because an untagged
+version leaves no public trace: no tag, no release, nothing to list.
+So report the first and name the second as unknown:
 
-- **If using Method A (companion site):** the file content is already in the
-  manifest's `files` map (base64-encoded). Decode it and diff against the
-  local file.
-- **If using Method B (GitHub API):** fetch the upstream file:
-  ```bash
-  curl -sf "https://raw.githubusercontent.com/$REPO/main/$FILE_PATH"
-  ```
-  Then diff against the local file.
-- If the file has changed across multiple versions in the range, only show
-  the final state (diff local vs latest upstream). Note which versions
-  contributed changes.
+> 3 releases carry notes between 0.6.1 and 0.7.7. Versions released
+> without a note leave no public record, so there may be changes below
+> this list does not describe.
 
-For each **RECOMMENDED** trait change:
-- The upstream file is at `stacks/traits/<category>/<name>.md`
-- The local file is at `.claude/traits/<name>.md`
-- If the local file doesn't exist, it's a new trait to install
-- If the local file exists, show the diff
-- File content comes from the manifest `files` map (Method A) or GitHub
-  raw URL (Method B)
+Never state a count of noteless versions. There is no source for it, and
+inventing one turns an honesty measure into a fabrication.
 
-For each **STARTER** change:
-- Resolve the local destination from the path-mapping table above
-  (`server.js`, `package.json`, `.gitignore`, `docs/**`,
-  `scripts/check-docs.mjs`).
-- If the local file already exists, **skip this change entirely**: do not
-  diff, do not fetch the upstream content, do not include it in the upgrade
-  plan. The user has either kept the starter as-is or replaced it with their
-  own code; either way the harness must not touch it.
-- If the local file is missing, fetch the upstream content (manifest or
-  GitHub raw URL) and queue it for creation. Include it in the plan under
-  the STARTER section.
+### 6. Present the plan, Breaking first
 
-For `claude-md-snippet.md`: fetch the upstream version and compare against
-the project's `CLAUDE.md`. Note new sections or updates.
+Show the narrative above the file plan, and show **Breaking items above the
+confirmation prompt**, before the file list.
 
-### 6. Present the smart upgrade plan
-
-Present a clear, prioritized upgrade plan:
+This ordering is the point. Breaking items usually need manual action that
+copying files does not perform, so a user who approves without reading them
+gets a half-applied upgrade and no signal that anything is outstanding.
 
 ```
-━━ Harness upgrade: v{CURRENT} → v{TARGET} ({N} versions) ━━
+Harness upgrade: {CURRENT} to {TARGET} ({N} versions)
 
-━━ REQUIRED ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BREAKING
+  {version}: {item}
+  {version}: {item}
 
-Infrastructure ({VARIANT}):
-  • {filename}: {summary} ({version})
+  These need action from you. Applying this upgrade does not perform them.
+
+What changed
+  Features
+    {version}: {item}
+  Fixes
+    {version}: {item}
+  Improvements
+    {version}: {item}
+  Notes
+    {version}: {item}
+
+  Coverage: {narrated} of {total} versions in this range shipped a note.
+
+Files to update ({n})
+  {path}
     {diff}
 
-Skills:
-  • {filename}: {summary} ({version})
+Config to merge ({n})   <- never copied over; your entries are kept
+  {path}
     {diff}
 
-Configuration (merge carefully):
-  • {filename}: {summary} ({version})
-    {diff showing new entries}
+Files to create ({n})
+  {path}   (missing locally)
 
-━━ RECOMMENDED: Stack best practices ━━━━━━━━━━━━━━━━━━━━━
-⚠ Review carefully, may affect existing code patterns
+Files to remove ({n})
+  {path}   (retired by the harness)
 
-  {trait_name} ({version}):
-    {diff of .claude/traits/{name}.md vs upstream}
+Left alone
+  {n} write-once file(s) already present
+  {n} path(s) never written into a configured repo: {rule} and others
 
-━━ STARTER: missing scaffold files ━━━━━━━━━━━━━━━━━━━━━━━━
-Only shown when a starter file is missing locally. Existing starter files
-are never touched. Skip-if-exists is per file, so a partial docs/ tree is
-completed rather than replaced.
-
-  • {filename}: would be created from upstream ({version})
-
-━━ INFORMATIONAL ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Also new since {CURRENT}:
-  • New trait: {name} ({version})
-  • Updated: {name} ({version})
-
-━━ CLAUDE.md ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Suggestions from updated claude-md-snippet.md:
-  {changes if any}
-Router-ification (only when CLAUDE.md exceeds ~500 lines):
-  {catalog sections that would move to docs/architecture/}
+Version stamp
+  .harness-version: version line {CURRENT} -> {TARGET}
 ```
 
-After presenting the plan, **ask the user for confirmation** before making
-any changes. The user may choose to:
-- Apply all changes
-- Apply selectively (skip specific files or categories)
-- Abort entirely
+Render `blockedSummary` as one line per rule rather than listing every
+refused path; a setup payload runs to well over a hundred files and the
+detail is noise.
 
-**Do NOT modify any files until the user confirms.**
+Show a real diff for each file to be updated. Where a file changed across
+several versions in the range, show only the final state; the narrative
+already carries the story of how it got there.
 
-### 7. Apply approved changes
+Then **ask for confirmation**. The user may apply everything, apply
+selectively, or abort. **Change nothing until they confirm.**
 
-Once the user approves, apply only the confirmed changes:
+Deletions are always confirmed separately, even inside "apply everything".
+Removing a file is the one action here the user cannot undo by re-running
+the upgrade.
 
-**Infrastructure files** (workflows, hooks, scripts): replace with upstream.
+### 7. Apply what was approved
 
-**Configuration files** (settings.json): merge new entries into the existing
-config. Preserve any user-added hooks or settings. Do not remove entries the
-user added.
+Copy each approved file from the target clone to its path in the project.
+The planner has already resolved which layer each file comes from, so
+apply its `source` rather than recomputing a path.
 
-**Skills**: replace with upstream version.
+Two kinds of entry are not plain copies:
 
-**Starter files** (`scope: starter`, e.g. `server.js`, `package.json`,
-`.gitignore`):
-- If the local file does NOT exist, create it from the upstream content.
-- If the local file exists, leave it untouched. Do not prompt, do not diff,
-  do not overwrite.
-- Never delete a starter file, even if it has been removed from the upstream
-  template.
+**Anything marked `merge: true`** (the config class): add what the target
+introduced and keep everything the project added. Never drop a key the
+project has and the target does not. `.claude/settings.json` is the usual
+case, but `.github/dependabot.yml`, `railway.json` and `.env.example` are
+the same: a project that added an ecosystem, a deploy setting or a variable
+loses it if you copy over the file.
 
-**Trait files** (`.claude/traits/<name>.md`):
-- If the file exists locally: replace with upstream content from
-  `stacks/traits/<category>/<name>.md`
-- If the file is new: create `.claude/traits/<name>.md` with upstream content
-- To find the upstream path for a trait name, search the GitHub API tree for
-  files matching `stacks/traits/*/<name>.md`
+**`CLAUDE.md`**: never overwrite. Compare against the target's
+`claude-md-snippet.md` and *suggest* additions for the user to apply.
 
-**CLAUDE.md**: do NOT overwrite. Only suggest additions for the user to
-apply manually. If `.claude/traits/` is newly added, suggest adding this
-line to CLAUDE.md:
+Everything else in the plan is a straight copy of the target's content.
+
+### 8. Update the version stamp
+
+Rewrite **only** the `version:` line of `.harness-version`:
+
 ```
-Read `.claude/traits/` for stack-specific best practices before writing code.
+version: {TARGET}
 ```
 
-**CLAUDE.md router-ification** (suggest only, never apply automatically):
+Never replace the file wholesale. It carries fields this upgrade knows
+nothing about (the check command, reviewers, anything the project added),
+and they must all survive.
+
+### 9. Offer to route an oversized CLAUDE.md
 
 Count the lines in the project's `CLAUDE.md`. If it exceeds **500 lines**,
 it has almost certainly accumulated catalog content that is being paid for
 on every session. Offer the extraction:
 
 ```
-━━ CLAUDE.md is {N} lines ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CLAUDE.md is {N} lines.
 
 CLAUDE.md loads on every session. Under the harness docs standard it is a
 router with a ~300-line budget: conventions, one-way decisions, definition
 of done, don't-touch list, writing rules, and a map of which doc to read.
 
-Catalog sections I found that belong in docs/architecture/:
-  • "{heading}" (lines {a}-{b}) -> docs/architecture/{suggested}.md
+Catalog sections that belong in docs/architecture/:
+  "{heading}" (lines {a}-{b}) -> docs/architecture/{suggested}.md
     sources: [{globs covering the files that section describes}]
-
-Want me to extract them? Each extracted file gets YAML front-matter with
-`sources:` globs, an index row in docs/README.md, and CLAUDE.md keeps a one
-line pointer in its map table. Nothing is deleted without a new home.
 ```
 
-Identify candidate sections by shape, not by topic: a section is a catalog
-if it is mostly a table or list enumerating routes, tools, components,
-tables, env vars, or files. Conventions, invariants, and rules stay in the
-router no matter how long they are.
+Identify candidates by shape, not by topic: a section is a catalog if it is
+mostly a table or list enumerating routes, tools, components, tables, env
+vars, or files. Conventions, invariants and rules stay in the router no
+matter how long they are.
 
-**Only extract if the user says yes.** When they do:
-- create `docs/architecture/<name>.md` with the `sources:` front-matter
-- move the content verbatim, do not rewrite it in the same pass
-- delete the section from `CLAUDE.md` (one home per fact) and leave a row in
-  its map table pointing at the new file
-- add the index row to `docs/README.md`
-- run `node scripts/check-docs.mjs` and fix what it reports
+**Only extract if the user says yes.** When they do: create
+`docs/architecture/<name>.md` with the `sources:` front-matter, move the
+content verbatim without rewriting it in the same pass, delete the section
+from `CLAUDE.md` and leave a row in its map table pointing at the new file,
+add the index row to `docs/README.md`, then run `node
+scripts/check-docs.mjs` and fix what it reports.
 
-### 8. Update the version stamp
+### 10. Summarize
 
-Update `.harness-version` to reflect the new version, preserving the
-existing variant, repo, companion_url, and traits:
+Report, in this order:
 
+- **Breaking items still outstanding**, repeated from the narrative. This
+  is the last chance the user has to see them, and copying files did not
+  perform them.
+- **Applied**: files updated, created and removed.
+- **Left alone**: write-once files already present, and refused paths.
+- **Manual review**: the settings merge, and any `CLAUDE.md` suggestions.
+
+Then remind the user to review `git diff`, check that workflows and hooks
+still run, and commit when satisfied.
+
+Finally, remove the temporary clones:
+
+```bash
+rm -rf "$WORK"
 ```
-harness: <VARIANT>
-version: <TARGET_VERSION>
-repo: <REPO>
-companion_url: <COMPANION_URL>
-traits: <TRAITS>
-```
-
-### 9. Summary
-
-Present a summary organized by category:
-
-- **Required, applied**: infrastructure, skill, and config files updated
-- **Starter, created**: missing scaffold files restored from upstream
-- **Recommended, applied**: trait files updated
-- **Recommended, skipped**: trait changes the user chose not to apply
-- **Informational**: other changes in this release
-- **Manual review**: CLAUDE.md suggestions or config files where local
-  customizations were preserved
-
-Remind the user to:
-- Review the changes (`git diff`)
-- Test that workflows and hooks still work
-- Commit when satisfied
-- If traits were updated, review `.claude/traits/` to ensure the new
-  practices align with the project's codebase

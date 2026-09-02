@@ -7,8 +7,8 @@ Add the following to your project's `CLAUDE.md`. Adapt project-specific details.
 ## Harness infrastructure
 
 This project's CI/CD was set up by the
-[harness-forge](https://github.com/Evolutionary-Leadership/harness-forge)
-harness. Read `.claude/HARNESS.md` for details on which files are
+[Harness Companion](https://www.harnesscompanion.com). Read
+`.claude/HARNESS.md` for details on which files are
 harness-managed (don't edit; they get overwritten on upgrade) and how to
 extend the setup.
 
@@ -367,17 +367,3 @@ package ecosystem to the project (e.g., npm, pip, Docker, Bundler), add a
 corresponding entry to `.github/dependabot.yml` so Dependabot monitors it.
 
 
-## Stack best practices
-
-If you have installed managed traits via the harness, add this line:
-
-```
-Read `.claude/traits/` for stack-specific best practices before writing code.
-```
-
-Trait files in `.claude/traits/` are managed by the harness and updated via
-`/harness-upgrade`. Configure which traits to track in `.harness-version`:
-
-```
-traits: nodejs, typescript, express, vitest, eslint, pnpm
-```
