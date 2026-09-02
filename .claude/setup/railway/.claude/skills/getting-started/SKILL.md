@@ -97,6 +97,64 @@ Red flags that you are about to violate this rule:
 - "This is simple enough to do directly": check anyway
 - "The skill is overkill for this": check anyway
 
+## Step 3b: Close every reply the same way
+
+Every reply you give the user ends with one **closing block**. It is the
+same shape in every skill and in no skill at all, so a reader learns it
+once and then never has to hunt for what they must do:
+
+```
+---
+
+**💡 Good to know**
+
+1. ...
+
+**🗓️ Act later**
+
+1. ...
+
+**➡️ Act next**
+
+1. ...
+```
+
+The rules:
+
+- **`Act next` is always present.** There is always a next thing, even when
+  it is "answer Q7". It holds what should happen right now, given this
+  prompt and this session.
+- **`Good to know` and `Act later` are omitted when they would be empty.**
+  Never pad them with "nothing here"; padding is what teaches a reader to
+  skip the block. `Good to know` is the bare minimum the prompting human
+  benefits from knowing. `Act later` is work that is real but can wait, and
+  every item says where it should be done.
+- **Numbered items, never bullets**, in every section, so an item can be
+  answered or referred to by its number.
+- **One block per reply.** When skills chain, the outermost skill the user
+  invoked owns the block; inner skills contribute items into it and never
+  emit one of their own. Where no skill is running, the reply carries one
+  anyway.
+- **The block compresses, it does not append.** The prose above it carries
+  only what the block cannot, and anything that fits in a list item moves
+  into the block. A reply that gained a block and kept all its old prose
+  has made the problem worse, not better.
+
+### Questions are `Act next` items
+
+A question you put to the user is itself an `Act next` item and carries its
+own question number as its list number, so that section renders `Q9.`,
+`Q10.` during a question stage and `1.`, `2.` otherwise. One section never
+mixes the two.
+
+A **question stage** is one question-asking step of a session: a `/grilling`
+round set, the `/to-tickets` granularity quiz, the `/feature` phase 5 exit
+choice. Numbering runs continuously inside a stage, so a round following one
+that ended at Q6 opens at Q7. Each new stage advances the prefix by one
+letter, in the order the session reaches stages, starting at Q and wrapping
+from Z back to A. The prefix never resets mid-session. Explain each shift in
+one brief sentence, so a jump from Q17 to R1 does not read as a mistake.
+
 ## Step 4: Act
 
 Run `bash .claude/scripts/list-skills.sh` RIGHT NOW, then proceed with

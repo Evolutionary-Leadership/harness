@@ -24,6 +24,10 @@ including multiple choices>
 Recommended: <your recommended answer>
 ```
 
+The questions are the round's `Act next` items and carry these numbers as
+their list numbers. The closing block that holds them is defined in
+`getting-started`; do not restate it here.
+
 Every round also carries one **standing option**, offered alongside the
 numbered questions, in these words or close to them:
 
@@ -39,6 +43,18 @@ frontier outward and unblock the questions that depended on them. Recompute
 the frontier and ask the next round. A question whose answer depends on
 another question still open in this round belongs to a *later* round, not
 this one.
+
+## Numbering
+
+**Numbers run continuously across the rounds of one grill.** A round that
+follows one ending at Q6 opens at Q7, never back at Q1. That is what makes
+"Q7" name exactly one question for the whole grill, so a user answering by
+number after scrolling back means something unambiguous. One section never
+mixes those numbers with plain `1.`, `2.` numbering.
+
+**A grill is one question stage.** Which letter the prefix carries, when it
+advances, and the one sentence that explains the shift are part of the
+closing-block contract in `getting-started`; do not restate them here.
 
 ## Grill autonomy
 

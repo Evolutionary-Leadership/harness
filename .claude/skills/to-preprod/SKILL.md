@@ -20,6 +20,23 @@ It is also how a `/review` PR lands after humans approve it. The workflow
 reuses the open PR instead of opening a second one, so run `/to-preprod`
 rather than clicking the GitHub merge button.
 
+## The closing block
+
+Every reply carries one, per the contract in `getting-started`. Here it
+carries the merge:
+
+- `Good to know`: what the signal push set in motion on the remote (the PR
+  the Action opens, the auto-merge, the branch deletions that follow), and
+  the docs audit result.
+- `Act later`: anything this merge deliberately left undone, naming where it
+  should be done.
+- `Act next`: what the user must watch or do now, and plainly whether this
+  session is finished with them. If the workflow is still running, say that
+  is what `Act next` is waiting on.
+
+Run inside `/feature` phase 5, this skill contributes those items into that
+skill's block rather than emitting a second one.
+
 ## Steps
 
 ### 1. Determine the feature name

@@ -385,6 +385,15 @@ never reaches `preprod`. If a merge bypasses `/to-preprod` (the GitHub merge
 button), `feature-merge-cleanup.yml` removes the leftover from preprod, and
 `/continue` and `/to-preprod` also sweep strays as a safety net.
 
+### The closing block
+
+Every reply a session gives the user ends with one closing block: the same
+three sections in the same order, whichever skill is running and whether or
+not one is. The contract is defined in
+`.claude/skills/getting-started/SKILL.md`, which the session start hook
+forces every session to read. It is not repeated here, because a second copy
+is the thing that drifts.
+
 ### The two reviews
 
 - **`/code-review` reviews code**: two axes (Standards, Spec) in parallel

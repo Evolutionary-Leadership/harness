@@ -31,6 +31,22 @@ api.github.com using the harness's PAT and bypasses the proxy. The
 same call also works in a non-sandboxed checkout, so the skill has a
 single code path for both environments.
 
+## The closing block
+
+Every reply carries one, per the contract in `getting-started`. A release is
+the one place the block is load-bearing rather than convenient:
+
+- `Good to know`: the **blast radius** first, always. Everything queued on
+  `preprod`, not just this feature, and the number the release will consume.
+  Nobody should approve a release from prose alone.
+- `Act later`: anything this release does not carry, naming where it belongs.
+- `Act next`: the single confirmation the user owes, or, once the release is
+  away, what to watch and where (the workflow, the tag, the template sync).
+
+Run as `/feature` phase 5's exit, or chained after `/to-preprod`, this skill
+contributes items into the outermost skill's block rather than emitting a
+second one.
+
 ## Steps
 
 ### 1. Preflight and situation

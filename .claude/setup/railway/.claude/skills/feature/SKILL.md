@@ -114,6 +114,29 @@ live in `.claude/HARNESS.md`; the short version:
 - `/to-preprod` consumes and deletes it at merge time. It never reaches
   `preprod`.
 
+## The closing block through the phases
+
+Every reply carries one closing block, defined in `getting-started`. Only
+its content changes from phase to phase:
+
+| Phase | What the block carries |
+|---|---|
+| 0 | The feature name and branch, and whether this is a resume and into which phase. `Act next` is the phase you are entering |
+| 1 | The grill's questions as the `Act next` items, numbered per `/grilling`. Facts a sub-agent found belong in `Good to know` |
+| 2 | The spec issue number in `Good to know`; the gate decision in `Act next` |
+| 3 | The ticket numbers and their blocking edges in `Good to know`; the gate decision in `Act next`, and say plainly that approving starts the build |
+| 4 | The ticket that just landed and the check result in `Good to know`; any finding you deliberately did not act on in `Act later`; the next frontier ticket in `Act next` |
+| 5 | The diff summary, the code-review findings and any ticket left open in `Good to know`; the exit choice in `Act next` |
+
+At every gate the block carries what the phase produced and the decision
+now owed, so the `AskUserQuestion` that follows is never the first place the
+user learns what happened.
+
+**Phase 5's exit choice is a question stage**, so it takes the next letter
+prefix (see `/grilling`). When you then run the chosen exit, the reply still
+carries exactly one block: this skill owns it, and `/to-preprod`, `/review`
+or `/release` contributes items into it rather than emitting its own.
+
 ## Phase 0: name and resume
 
 ### Check preconditions

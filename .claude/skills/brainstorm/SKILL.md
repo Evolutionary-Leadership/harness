@@ -34,6 +34,20 @@ the vocabulary sharp. Both apply in full, with one override each:
 Keep interviewing until the frontier is empty or the user calls it: every
 branch of the design tree visited, nothing silently assumed.
 
+## The closing block
+
+Every reply carries one, per the contract in `getting-started`. The
+interview rounds carry theirs through `/grilling`, whose questions become
+the `Act next` items. What is specific to this skill is the landing below:
+it is a question stage of its own, so it takes the next letter prefix, and
+its three options are that block's `Act next` items.
+
+Vocabulary that crystallised and decisions that settled belong in
+`Good to know` as they land, so the user sees the picture accumulating
+rather than only at the end. A one-way decision made here ships its ADR with
+the feature that implements it, which is an `Act later` item naming that
+feature, not something to do now.
+
 ## Land the thinking
 
 When the interview winds down, state the settled picture back in a short
