@@ -257,9 +257,20 @@ one line for the disposition (`true-drift` where the row was a real regression,
 `--disposition-url=<that comment's URL>` so the record points at where the
 answer will be written. Commit the record with the context retirement in 4c.
 
-### 4c. Retire the feature context, and keep any run record
+### 4c. Retire the feature context and the touched set, and keep any run record
 
-Delete the context, and commit the gate run alongside it where there is one:
+**The touched set goes first**, because it lives on another branch and a
+merge that races ahead would leave it behind. Delete
+`features/<FEATURE_NAME>.md` on the `coordination` branch with
+`mcp__github__delete_file`. The declaration exists only while the branch
+does: once this merges, the code is on `preprod` and GitHub owns it, so the
+record would be the second copy that branch forbids. If the file is already
+gone, or the branch or the tool is unreachable, say so in one line and carry
+on; the next `/feature` session sweeps a record whose branch has left the
+remote. Nothing here is worth stalling a merge for.
+
+Then delete the context, and commit the gate run alongside it where there is
+one:
 
     git rm .harness/feature-context/"$FEATURE_NAME".md
     git add .harness/gate-runs 2>/dev/null || true

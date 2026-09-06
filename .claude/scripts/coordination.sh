@@ -45,6 +45,19 @@ usage: coordination.sh <command> [args]
   adr-numbers-on-preprod    Print the ADR numbers present on preprod, one per
                             line. Falls back to the local working tree
                             when preprod cannot be read.
+
+  features                  Print the slugs of the features that have
+                            declared a touched set, one per line, sorted.
+                            Empty when the branch, the namespace or the
+                            remote is absent.
+
+  feature <slug>            Print one feature's touched-set record. Empty
+                            when that feature has declared none.
+
+  feature-branches          Print the feature/* branches that exist on the
+                            remote, one per line. The staleness rule reads
+                            it, so an empty answer means "could not read"
+                            and never "nothing is live".
 USAGE
 }
 
@@ -88,11 +101,43 @@ cmd_adr_numbers_on_preprod() {
   printf '%s\n' "$listing" | sed -n 's|.*/\{0,1\}\([0-9]\{4\}\)-.*|\1|p' | sort -u
 }
 
+# The features/ namespace: one record per in-flight feature, named by the
+# feature slug, holding what that branch declares it will touch. One file per
+# slug means one writer per file, so nothing here needs a compare-and-swap;
+# only claims/ does. Reading it is best-effort like every other read here.
+cmd_features() {
+  cmd_fetch
+  git ls-tree -r --name-only "$REMOTE/$BRANCH" "features/" 2>/dev/null \
+    | sed -n 's|^features/\(.*\)\.md$|\1|p' \
+    | grep -v '^README$' \
+    | sort || true
+}
+
+cmd_feature() {
+  local slug="${1-}"
+  [ -n "$slug" ] || { usage; return 2; }
+  cmd_fetch
+  git show "$REMOTE/$BRANCH:features/$slug.md" 2>/dev/null || true
+}
+
+# Which feature branches are alive. A touched-set record whose branch is gone
+# from the remote has no writer left, so any reader may sweep it; that is the
+# same rule claims/adr uses before it releases a number. Printing nothing on a
+# failed read is what keeps the sweep from mistaking an outage for a merge.
+cmd_feature_branches() {
+  git ls-remote --heads "$REMOTE" 'refs/heads/feature/*' 2>/dev/null \
+    | sed -n 's|.*refs/heads/\(feature/.*\)$|\1|p' \
+    | sort || true
+}
+
 case "${1-}" in
   next-adr)            shift; cmd_next_adr "$@" ;;
   fetch)               shift; cmd_fetch "$@" ;;
   list)                shift; cmd_list "$@" ;;
   adr-numbers-on-preprod)  shift; cmd_adr_numbers_on_preprod "$@" ;;
+  features)            shift; cmd_features "$@" ;;
+  feature)             shift; cmd_feature "$@" ;;
+  feature-branches)    shift; cmd_feature_branches "$@" ;;
   -h|--help|help|"")   usage; exit 2 ;;
   *)                   echo "unknown command: $1" >&2; usage; exit 2 ;;
 esac

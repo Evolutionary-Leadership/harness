@@ -140,6 +140,19 @@ live in `.claude/HARNESS.md`; the short version:
   lost context.
 - `/to-preprod` consumes and deletes it at merge time. It never reaches
   `preprod`.
+- **The touched set rides this same beat**, and is one habit with it, not a
+  second one. Whenever you refresh this file, refresh the declaration on the
+  `coordination` branch too, and report anything new the overlap shows:
+
+      R=$(mktemp -d)
+      bash .claude/scripts/coordination.sh feature "$FEATURE_NAME" > "$R/mine.md"
+      node .claude/scripts/touched-set.mjs refresh --from="$R/mine.md" \
+        --path=<anything the plan now reaches>
+
+  Write the result back with `mcp__github__create_or_update_file`, with the
+  `sha`. `refresh` unions the paths and moves `updated_at`, so a declaration
+  only ever widens while the branch lives, and never narrows behind a reader
+  who has already looked. `/to-preprod` deletes it at the merge.
 
 ## The closing block through the phases
 
@@ -310,6 +323,72 @@ aborting.
 Read `.harness/feature-context/$FEATURE_NAME.md` if it exists (the merge
 above just brought it in). If it does not, create it now with what you
 know so far and commit it.
+
+### Declare the touched set, and read the namespace
+
+The `coordination` branch carries one record per in-flight feature saying
+what that branch is going to touch, so a parallel feature sees the collision
+before the merge rather than at it. The contract (the fields, the two halves,
+the lifecycle) is in `.claude/HARNESS.md`; these are the steps.
+
+**Declare what you expect to touch**, at whatever granularity you can state
+honestly. A prefix with a `**` tail is a fine entry, and a wide honest
+declaration beats a narrow wrong one: this is a claim about work not yet
+done, never a mirror of a diff. **(connected)** Add the nodes the change
+means to touch, or the single node `none` where it touches none.
+
+    R=$(mktemp -d) && mkdir -p "$R/others"
+    SPEC=$(sed -n 's/^spec_product: *//p' .harness-version | tail -1)
+    node .claude/scripts/touched-set.mjs render \
+      --slug="$FEATURE_NAME" --branch="$FEATURE_BRANCH" \
+      --author="$(git config user.email)" --spec="${SPEC:-none}" \
+      --path=<a prefix> --path=<another> > "$R/mine.md"
+
+Connected repositories add `--key=<KEY>` and one `--node=<slug>` per node.
+`render` refuses to print a record it cannot read back, and says why. Keep
+the record under `mktemp -d` rather than a fixed path: two sessions share one
+`/tmp`, and the namespace copy below must not contain your own record twice.
+
+**Declare the work, not the harness's own bookkeeping.** `.harness-feature`
+and `.harness/feature-context/**` are touched by every feature there has ever
+been, so declaring them would put a collision in every report and teach the
+next reader to skim past it. Everything else the branch will reach belongs in
+the list.
+
+Then write `$R/mine.md` to `features/$FEATURE_NAME.md` on the `coordination`
+branch with `mcp__github__create_or_update_file`. Pass the `sha`, read with
+`mcp__github__get_file_contents` on the same path and branch, when the path
+already exists, which a resumed session's does: this is an update by the
+file's one writer, and the deliberate opposite of the ADR claim in
+`/document`, where omitting the sha IS the reservation.
+
+**Read the namespace and report:**
+
+    C="bash .claude/scripts/coordination.sh"
+    for slug in $($C features); do $C feature "$slug" > "$R/others/$slug.md"; done
+    $C feature-branches > "$R/branches.txt"
+    node .claude/scripts/touched-set.mjs overlap --mine="$R/mine.md" \
+      --dir="$R/others" --branches-file="$R/branches.txt"
+
+Put what it prints in the closing block, and copy it into the feature
+context under `## Parallel work` when it found an overlap: name the other
+branch, say what overlaps, and carry on. It is advisory and it stops
+nothing, so an overlap is a thing to know, never a thing to wait on.
+
+**Sweep what has no writer left.** A record the report calls stale belongs to
+a branch that is gone from the remote and has not been touched in a day, so
+nobody is coming back to update it: remove it with `mcp__github__delete_file`
+on the `coordination` branch. Sweep only what the report names. Two guards
+sit behind that word and neither is yours to second-guess: an empty branch
+list means the remote could not be read, so nothing is stale; and a record
+younger than a day is never stale, because your own was written before this
+feature's branch existed.
+
+**Every step here warns in one line and continues.** No coordination branch,
+no network, no MCP tool, a malformed record: say so and go on with the
+feature. Nothing about the touched set is fail-closed, and the contrast with
+the change-key mint above is deliberate: a guessed key welds two changes
+together forever, while a missing declaration costs one advisory warning.
 
 ### Work out which phase you are resuming into
 
@@ -507,8 +586,15 @@ Ensure everything is committed and pushed:
 git push -u origin "$BRANCH"
 ```
 
+Refresh the touched set one last time: widen the declaration wherever the
+work reached outside what phase 0 claimed, and leave it alone where it was
+right. It stays a declaration of the branch's scope, never a copy of the
+diff. Then re-run the overlap report from phase 0, because both sides of
+every overlap have moved since, and put what it says in the summary.
+
 Summarize: what was built, which files changed, the spec and ticket issue
-numbers, the `/code-review` findings summary, and any ticket left open.
+numbers, the `/code-review` findings summary, any in-flight feature that
+overlaps this one, and any ticket left open.
 
 Then ask the user which exit they want, using `AskUserQuestion`:
 

@@ -288,6 +288,75 @@ never reaches `preprod`. If a merge bypasses `/to-preprod` (the GitHub merge
 button), `feature-merge-cleanup.yml` removes the leftover from preprod, and
 `/continue` and `/to-preprod` also sweep strays as a safety net.
 
+### The touched set
+
+`features/<feature-slug>.md` on the `coordination` branch is what this
+feature declares it is going to touch. It is the feature context's opposite
+half: the context is this feature's reasoning, private to the branch and
+deleted at the merge; the touched set is a handful of facts, public to every
+other session in the repository from phase 0, so a parallel feature sees a
+collision before the merge rather than at it.
+
+**A declaration, never a mirror of the diff.** What a branch has already
+changed is derivable from GitHub (compare `preprod` against the feature
+branch), and the coordination branch never keeps a second copy of something
+GitHub owns. What does not exist anywhere else is what a branch says it is
+*about to* touch, which is also the only half a branch that has pushed
+nothing can offer.
+
+**Format.** Front matter and no body, the shape `claims/adr/NNNN.md` already
+uses. `.claude/scripts/touched-set.mjs` composes it, reads it back and
+computes the overlap.
+
+| Field | Holds |
+|---|---|
+| `slug` | The feature slug, which is also the filename |
+| `branch` | `feature/<slug>`, the handle a reader acts on |
+| `key` | The change key, unpadded, where the repository mints one |
+| `author` | Provenance, the same field a claim carries |
+| `declared_at`, `updated_at` | ISO 8601 UTC. The pair is how stale a declaration is |
+| `spec` | The `spec_product`, or the literal `none` |
+| `paths` | Repository-relative paths or prefixes. A `**` tail is compared by its literal segments |
+| `nodes` | Specification node slugs, or the single `none`. Only where `spec` names a product |
+
+**Two halves, and one of them is dormant.** `paths` is written by every
+repository, because two sessions collide over files whether or not a
+specification is connected. `nodes` is written only where `.harness-version`
+names a `spec_product`. The absence is declared and never silent (`spec:
+none`, and a connected change touching no node writes the single node
+`none`), which is the rule `Spec: support` already applies to anchors.
+
+**The beat is the feature context's beat.** `/feature` phase 0 declares it
+once the branch is named; every refresh of the feature context refreshes it;
+phase 5 reports the overlap again with the diff in hand. Writing on every
+push instead would buy a mirror, which is the thing this is not. The reason
+is not the one `feature-branch-checks.yml` gives for rationing context
+pushes: no workflow triggers on `coordination` at all, so a write here costs
+one API call and no CI.
+
+**One writer per file, which is why there is one file per feature.** Nothing
+here needs the compare-and-swap `claims/` needs. Writes go through the
+contents API with the sha, because they are updates by the file's owner.
+
+**It dies at the merge.** `/to-preprod` deletes the record in the step that
+retires the feature context. After that the code is on `preprod` and GitHub
+owns it, so keeping the record would be the second copy the branch forbids. A
+record whose branch is gone from the remote **and** which has not been
+touched in a day has no writer left, so the next reader sweeps it; that is
+the same rule `claims/adr` uses before it releases a number, and it is what
+covers a merge that went around `/to-preprod`. The day is not caution for its
+own sake: phase 0 writes the record before `feature/<slug>` exists, because
+the branch is created by a workflow moments after the naming push, and
+without the guard the first reader through that window would sweep the record
+of a branch that has pushed nothing, which is the exact case this exists for.
+
+**Nothing here blocks anything.** An overlap is reported to a person, in the
+closing block and in the feature context, and never to a gate. A missing
+branch, a dead network, an absent tool or a malformed record is one warning
+line and the flow continues. This is deliberately not the change-key mint's
+fail-closed rule: a guessed key welds two changes together forever, while an
+unwritten touched set costs one advisory warning.
+
 ### The gate run record
 
 `.harness/gate-runs/<KEY>-<n>.json` is the opposite of the feature context and
@@ -386,6 +455,8 @@ These files are maintained by the harness and replaced on
 | `.claude/scripts/resolve-feature-name.sh` | Resolves the feature name (slug from `.harness-feature`, else session codename); shared by the hooks, scripts, and workflows |
 | `.claude/scripts/set-feature-name.sh` | Names the session's feature: sanitizes a slug, writes `.harness-feature`, commits, and pushes to trigger branch creation |
 | `.claude/SPEC-LOOP.md` | The spec loop: how to connect it, the anchor grammar, the judge, the gate, the claim flow, and which file owns each mechanism. Read it only once `spec_product` is set |
+| `.claude/scripts/coordination.sh` | Reads the `coordination` branch: the claimed ADR numbers, the in-flight touched sets, and the live feature branches. Every read is best-effort and exits 0 |
+| `.claude/scripts/touched-set.mjs` | The touched-set record: composes it, reads it back, and computes the overlap between two in-flight features. Advisory; nothing it returns is an exit code |
 | `.claude/scripts/spec-universe.sh` | The one `/v1` client every skill shares for Spec Universe: reads, proposes, patches, claims and promotes with `SPEC_UNIVERSE_URL` and `SPEC_UNIVERSE_TOKEN`, fails closed with three distinguishable exits, and offers no generic pass-through. Inert while `spec_product` is unset |
 | `scripts/check-spec.mjs`, `gate-run.mjs`, `judge-plan.mjs`, `retrieval.mjs`, `spec-test-claims.mjs` | The spec loop: the anchor gate, the preprod gate, the judge, the interview's retrieval, and the test-basis claims. Managed rather than write-once, unlike everything else under `scripts/`, so a fix reaches you. All five are inert while `spec_product` is unset |
 | `.claude/skills/code-review/judge-prompt.md` | The Spec axis judge's brief, below its horizontal rule sent verbatim. Managed on purpose: the shape was measured, and a brief that drifts silently changes every verdict downstream |
