@@ -107,4 +107,18 @@ jobs:
 
       - name: Run checks
         if: steps.config.outputs.cmd != ''
+        # Unconditional, and deliberately so. The spec loop's anchor gate reads
+        # the specification live, and it is fail closed: it cannot pass on a
+        # specification it could not read. It is also dormant unless
+        # `.harness-version` names a `spec_product`, and an unset secret arrives
+        # as an empty string, which a dormant checker never looks at. So a
+        # project that has not connected a specification pays nothing for this
+        # block, and one that has does not have to add it by hand to a
+        # harness-managed file that the next upgrade would silently overwrite.
+        # Two secrets and no third: `.harness-version` carries no `spec_url`
+        # key, because the base URL travels with the credential and so arrives
+        # here as a secret beside it.
+        env:
+          SPEC_UNIVERSE_URL: ${{ secrets.SPEC_UNIVERSE_URL }}
+          SPEC_UNIVERSE_TOKEN: ${{ secrets.SPEC_UNIVERSE_TOKEN }}
         run: ${{ steps.config.outputs.cmd }}

@@ -19,11 +19,32 @@ set -euo pipefail
 #
 # Output (stdout, stable lines for the calling skill):
 #   deploy-verified: <url> sha=<short>
+#   deploy-equivalent: <url> serving=<short> expected=<short>
 #   deploy-pending: <url> serving=<short|none>
 # Progress goes to stderr. Exit 0 always, so callers never hard-fail.
+#
+# EQUIVALENCE. Railway rebuilds only when a changed path matches a
+# watchPattern in railway.json. A change confined to .claude/ or docs/
+# matches none of them, so the environment goes on serving the previous
+# commit and a sha compare waits forever for a deploy that will never
+# happen. That is not a pending deploy: the running build is the build the
+# expected commit would produce. So when the served commit and the expected
+# one differ in NO watched path, this reports deploy-equivalent instead of
+# polling out, and the caller may treat it as verified.
+#
+# The patterns are read from railway.json, never copied here, so the two
+# cannot drift apart. railway.json itself counts as watched even when its
+# patterns do not name it, because a change to the start command alters the
+# deploy without rebuilding it.
+#
+# Equivalence is a claim about two commits producing the same build. It is
+# never a way to skip the check: no answer, no served sha, no readable
+# patterns, or a commit git cannot resolve all stay pending.
 
-ATTEMPTS=32   # x 15s = 8 minutes; a first push provisions a whole environment
-INTERVAL=15
+# x 15s = 8 minutes; a first push provisions a whole environment. Both are
+# overridable so the poll can be exercised in a test without waiting it out.
+ATTEMPTS="${VERIFY_DEPLOY_ATTEMPTS:-32}"
+INTERVAL="${VERIFY_DEPLOY_INTERVAL:-15}"
 
 URL="${1:-}"
 EXPECTED="${2:-}"
@@ -63,6 +84,57 @@ sha_match() {
   [[ "$a" == "$b"* || "$b" == "$a"* ]]
 }
 
+# Every path that differs between two commits, filtered to the watched set.
+# Prints nothing when the two builds are equivalent; prints the offending
+# paths otherwise. Returns non-zero when the question cannot be answered at
+# all, which is never equivalence.
+watched_diff() {
+  local got="$1" want="$2" config="$SCRIPT_DIR/../../railway.json"
+  [[ -f "$config" ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  # mapfile carries its own status, never the process substitution's, so the
+  # empty array below is the guard and the exits inside python only shape it.
+  local -a patterns
+  mapfile -t patterns < <(python3 -c '
+import json, sys
+try:
+    build = json.load(open(sys.argv[1])).get("build", {})
+except Exception:
+    sys.exit(1)
+patterns = build.get("watchPatterns")
+if not isinstance(patterns, list) or not patterns:
+    sys.exit(1)   # no patterns means every change rebuilds: never equivalent
+for p in patterns:
+    if isinstance(p, str) and p.strip():
+        print(p.strip())
+' "$config")
+  [[ ${#patterns[@]} -gt 0 ]] || return 1
+
+  # A commit git cannot resolve cannot be diffed. Try one fetch (the feature
+  # branch too, since its merge commit is what a preview serves), then give up.
+  local sha
+  for sha in "$got" "$want"; do
+    if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+      git fetch -q origin main preprod ${FEATURE_BRANCH:+"$FEATURE_BRANCH"} 2>/dev/null || true
+      git cat-file -e "$sha^{commit}" 2>/dev/null || return 1
+    fi
+  done
+
+  # railway.json is watched whether or not it names itself: changing the
+  # start command changes the deploy without changing the build.
+  local -a spec=(":(glob)railway.json")
+  local pattern
+  for pattern in "${patterns[@]}"; do
+    # A negation would reach git as a literal path and silently WIDEN
+    # equivalence, which is the one direction this must never fail in.
+    [[ "$pattern" == !* ]] && return 1
+    spec+=(":(glob)$pattern")
+  done
+
+  git diff --name-only "$got" "$want" -- "${spec[@]}" 2>/dev/null || return 1
+}
+
 SEEN="none"
 for i in $(seq 1 "$ATTEMPTS"); do
   WANT=$(expected_sha)
@@ -73,6 +145,12 @@ for i in $(seq 1 "$ATTEMPTS"); do
     if sha_match "$GOT" "$WANT"; then
       echo "deploy-verified: $URL sha=${GOT:0:7}"
       exit 0
+    fi
+    if [[ -n "$GOT" && -n "$WANT" ]] && DIFFERS=$(watched_diff "$GOT" "$WANT"); then
+      if [[ -z "$DIFFERS" ]]; then
+        echo "deploy-equivalent: $URL serving=${GOT:0:7} expected=${WANT:0:7}"
+        exit 0
+      fi
     fi
   fi
   if (( i % 4 == 0 )); then

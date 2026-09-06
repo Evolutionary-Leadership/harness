@@ -32,7 +32,7 @@ Offer to scaffold it: `docs/README.md`, `docs/GLOSSARY.md`,
 
 1. Claim the number before you write anything. Two sessions cut from the
    same `preprod` tip otherwise compute the same number, and because the
-   filenames differ git merges both without a conflict (ADR 0015).
+   filenames differ git merges both without a conflict.
 
    Read both views and take the successor of the higher one:
 

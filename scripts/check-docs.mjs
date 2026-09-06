@@ -216,7 +216,7 @@ if (!fileSet.has(INDEX)) {
 const adrFiles = docFiles.filter(
   (f) => f.startsWith("docs/decisions/") && /\/\d{4}-/.test(f)
 );
-// ADR 0015: a number is claimed on the coordination branch before the ADR
+// A number is claimed on the coordination branch before the ADR
 // is written, which prevents most collisions. This check refuses the ones
 // that get through anyway, including a hand-written ADR that never claimed.
 // Keying a Map by number without this guard silently drops the first entry.

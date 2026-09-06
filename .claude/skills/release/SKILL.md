@@ -3,7 +3,7 @@ name: release
 description: Ship preprod to production. Create a release PR, tag a version, and generate a GitHub Release.
 disable-model-invocation: true
 argument-hint: "[optional: major|minor|patch (default: patch)] [--quick]"
-allowed-tools: Bash(git *), Read, Write, Edit, Glob, Grep, AskUserQuestion, mcp__github__push_files
+allowed-tools: Bash(git *), Bash(bash .claude/scripts/*), Bash(node scripts/*), Read, Write, Edit, Glob, Grep, AskUserQuestion, mcp__github__push_files, mcp__github__list_pull_requests, mcp__github__pull_request_read, mcp__github__issue_write, mcp__github__add_issue_comment
 ---
 
 # Release to production
@@ -42,6 +42,12 @@ the one place the block is load-bearing rather than convenient:
 - `Act later`: anything this release does not carry, naming where it belongs.
 - `Act next`: the single confirmation the user owes, or, once the release is
   away, what to watch and where (the workflow, the tag, the template sync).
+- **(connected)** Once step 10b has run, `Good to know` also carries what was
+  promoted, then the claim write-back: how many criteria were claimed, every
+  `drifted` claim by node and criterion, and which change issues were closed
+  under this version. The same item carries the test claims: how many criteria
+  a passed test claimed, and how many anchored tests did not pass and so
+  claimed nothing, with the link to the evidence comment.
 
 Run as `/feature` phase 5's exit, or chained after `/to-preprod`, this skill
 contributes items into the outermost skill's block rather than emitting a
@@ -101,7 +107,7 @@ version.** Check once:
 longer move `VERSION`: they add their prose to the changelog's
 `## [Unreleased]` section and leave the number alone, so `VERSION` on
 `preprod` is the *last released* version and this release consumes exactly
-one number (ADR 0024). That is what makes the number knowable here, before
+one number, by decision. That is what makes the number knowable here, before
 anything is pushed, which is what the release note has to be named for:
 
     CURRENT=$(git show origin/preprod:VERSION | tr -d '[:space:]')
@@ -252,7 +258,7 @@ Keep notes concise. Use commit subject lines only.
 which is the same condition as step 2: a `harness-version-bump.yml` plus a
 `VERSION` file. Such a workflow appends one entry per merge to the
 `## [Unreleased]` section, and `release.yml` stamps that whole section with
-the version this release publishes (ADR 0024), so the prose is already on
+the version this release publishes, so the prose is already on
 `preprod` and there is nothing to compose. Composing one here would mean
 holding the entire changelog inline in step 9's call, which is how three
 consecutive releases shipped without an entry when nobody noticed the step
@@ -387,9 +393,9 @@ Call `mcp__github__push_files` with:
   when step 7 composed one.
 
   **Never push `VERSION` from here.** `release.yml` writes it, the migration
-  and the changelog stamp in one commit, from the version in the signal file
-  (ADR 0024). Pushing it here as well would give one number two owners,
-  which is the failure that rule exists to prevent.
+  and the changelog stamp in one commit, from the version in the signal file.
+  Pushing it here as well would give one number two owners, which is the
+  failure that rule exists to prevent.
 
 The MCP call creates a single commit on origin/preprod. It does not modify the
 local working tree or local refs.
@@ -427,6 +433,139 @@ Tell the user:
   fact, "what shipped" has to be answerable.
 - If main has branch protection with required checks, the merge will
   wait for checks to pass (auto-merge).
+
+- **(connected)** That step 10b follows: the session stays open until
+  production serves the release, then claims conformance and closes the
+  change issues.
+
+### 10b. Claim conformance and close the changes **(connected)**
+
+**This step forks on one key.** Read it first:
+
+    SPEC_PRODUCT=$(sed -n 's/^spec_product: *//p' .harness-version | tail -1)
+
+**Empty or absent: skip this whole step.** This repository has not connected a
+specification, there is nothing to claim and no change issue to close, and
+nothing about the loop is mentioned to the user. The release ends at step 10.
+
+The release is not done when the workflow is: it is done when production
+SERVES it. Only then is a conformance claim honest, and only then is a change
+issue closed, so that closed means live means promoted in Spec Universe.
+Branch and preprod results are never claimed, from here or anywhere.
+
+**Wait for the release to land on `main`.** Poll:
+
+    git fetch origin main
+    git merge-base --is-ancestor <the release commit from step 9> origin/main
+
+until it is an ancestor, capped at about ten minutes. On timeout stop and say
+so: the release workflow has not finished or has failed, nothing is claimed,
+and re-running this step by hand once `main` carries the release is the
+recovery.
+
+**Verify production.** This variant configures no deploy, so there is no
+environment to poll and nothing to verify against: the release is live when
+`main` carries it, which the poll above has just established. A variant that
+does deploy verifies here first and claims nothing on a pending deploy.
+
+**Gather the verdicts.** They travel in the PR bodies, because the feature
+context is deleted at the merge. For every pull request in the step 3 blast
+radius (the `(#NN)` references, plus the release PR itself), read its body
+(`mcp__github__pull_request_read`) and take its `## Spec verdicts` table and
+the change key and work item from its `## Spec` section. Union the tables. A
+PR with neither section shipped without a verdict (a `/to-preprod` older than
+this step, or a merge around it): list it as unclaimed rather than inventing
+rows.
+
+**Promote each change, before claiming anything.** A change whose
+specification moved ships its amendments as part of shipping its code, so that
+"live" and "current in the specification" are one statement rather than two
+that drift. Promotion comes FIRST, so every claim below describes the text
+that is now current instead of text the release has already superseded:
+
+    SU="bash .claude/scripts/spec-universe.sh"
+    IDEMPOTENCY_KEY="release-$NEW_VERSION-promote-<KEY>" $SU release <KEY>
+
+once per change key the PR bodies named. The call is idempotent and is never
+refused: it promotes what it can and returns what it left behind, as
+`promoted`, `unacceptedAtRelease` and `notPromoted`.
+
+Read that answer and report it. **`promoted` is named node by node** in the
+report. **`unacceptedAtRelease` and `notPromoted` are named too, never
+swallowed**: a proposal nobody accepted is a decision that was never taken,
+and a release that promoted around it must say so, because the preprod gate
+only guards drifted-vs-current and a proposal can reach production unaccepted.
+A non-zero exit from the client stops this step exactly as a failed
+verification does, with nothing claimed and no issue closed.
+
+**Claim, per criterion, over `/v1`.** Through the shared client, which fails
+closed on any non-zero exit (`.claude/SPEC-LOOP.md`). The
+idempotency key makes a re-run after a stop safe:
+
+    RELEASE_PR=<the URL of the preprod-to-main PR the workflow merged>
+    IDEMPOTENCY_KEY="release-$NEW_VERSION-<node>-<criterion>" \
+      $SU claim <node slug> <matched|drifted> source-code <criterion id> "$RELEASE_PR"
+
+One claim per verdict row: the value from the verdict, basis `source-code`
+(the judge read the code and ran nothing), the criterion the row's `ac-N`
+(omitted for a whole-node row), evidence the release PR URL. **A `drifted`
+verdict is claimed `drifted`, honestly**, and every drifted claim is reported
+to the user by node and criterion: a release that carries known drift is a
+fact Spec Universe must show, never one the claim step tidies away.
+`unverifiable` rows are claimed as nothing (neither value can be claimed) and
+listed as anchors to repair.
+
+**Claim by test, from a run at the release commit.** The harness asks CI to
+run no suite, so the run that says which anchored tests passed is this
+session's own, at the commit production serves, in a worktree that is thrown
+away afterwards. A criterion anchor (`fr-14/ac-3`) on a test file that PASSED
+is claimed `matched` with basis `test`; a file that failed, was skipped or
+never ran claims nothing and is listed, because a session without a database
+fails the integration tier for want of one, and that is not drift.
+
+    RELEASE_SHA=$(git rev-parse origin/main)
+    WT=$(mktemp -d) && git worktree add --detach "$WT" "$RELEASE_SHA"
+    REPORT=$(mktemp -t run-report-XXXXXX.json)
+    (cd "$WT" && <the project's install command> \
+      && node scripts/check-spec.mjs --quiet \
+      && <the project's test command, writing a Vitest-shaped JSON report to "$REPORT">) || true
+
+The `|| true` is deliberate: a red tier is expected in a session without a
+database, and the script below is what decides what a red file means. The
+report's shape is the contract: `{ testResults: [{ name, status }] }`, which
+is what `vitest run --reporter=json --outputFile` writes; a runner that emits
+something else needs converting to it before this step, not a second format
+here. Then run the intersection twice, because the evidence is a comment whose
+URL the claims carry:
+
+1. Once to produce the evidence. The markdown goes to stderr:
+
+        node scripts/spec-test-claims.mjs --coverage="$WT/.harness/spec-coverage.json" \
+          --report="$REPORT" --root="$WT" --version="$NEW_VERSION" --sha="$RELEASE_SHA" \
+          --evidence=pending 2> /tmp/evidence.md > /dev/null
+
+   Post `/tmp/evidence.md` as a comment on the release PR
+   (`mcp__github__add_issue_comment`, the PR number is an issue number) and
+   take the comment's URL.
+
+2. Once more with that URL as `--evidence`. Stdout is one shared-client call
+   per claim, each under the key `release-<version>-<node>-<criterion>-test`
+   (distinct from the `source-code` key for the same criterion, so both bases
+   stand). Run every line as printed.
+
+Then `git worktree remove --force "$WT"`. A non-zero exit from the client
+stops the claims where they are; the keys make the re-run safe. Report the
+count claimed, the count not claimed, and the evidence URL.
+
+**Close the changes.** For every change key the PR bodies named, close its
+work item (`<KEY>: ...`) with a comment naming the version:
+
+    Shipped in <NEW_VERSION>; production serves it and its conformance is
+    claimed in Spec Universe.
+
+`/release` is the only skill that closes a work item. Tickets were closed by
+`/implement` as they landed; the work item closes here, on the strength of
+production, and nowhere earlier.
 
 ### 11. Best-effort orphan branch cleanup
 

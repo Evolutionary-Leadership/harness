@@ -89,6 +89,34 @@ const BLOCKED_FILES = new Set([
 // them must keep its own.
 const STARTER_PREFIXES = [`docs${sep}`, `scripts${sep}`];
 
+// Harness-managed files that sit inside a starter prefix, so they must be
+// named to escape it.
+//
+// `scripts/` is write-once because the documentation checker that lives
+// there is a scaffold a project adapts. The spec loop is the opposite: it
+// is machinery the harness maintains on the project's behalf, so a fix to
+// the judge, the gate or the anchor checker has to reach every scaffold
+// that carries one. Write-once would leave a project running the version
+// of the judge it happened to scaffold with, forever, with nobody able to
+// see that it had.
+//
+// This is a list rather than a prefix on purpose. A `scripts/spec/`
+// directory would classify by shape and would then quietly claim any file
+// a project later put there; naming the five files means the harness owns
+// exactly what it ships and nothing else under `scripts/`.
+//
+// The loop's other files need no entry: `.claude/scripts/` and
+// `.claude/skills/` are managed trees that no starter prefix reaches, so
+// the shared client, the judge prompt and the conflict protocol are
+// already managed. That is the same decision, reached by the default.
+const MANAGED_FILES = new Set([
+  join("scripts", "check-spec.mjs"),
+  join("scripts", "gate-run.mjs"),
+  join("scripts", "judge-plan.mjs"),
+  join("scripts", "retrieval.mjs"),
+  join("scripts", "spec-test-claims.mjs"),
+]);
+
 const STARTER_FILES = new Set([
   "server.js",
   "package.json",
@@ -152,6 +180,7 @@ export function isBlocked(path) {
 }
 
 export function isStarter(path) {
+  if (MANAGED_FILES.has(path)) return false;
   return (
     STARTER_FILES.has(path) ||
     STARTER_PREFIXES.some((prefix) => path.startsWith(prefix))
@@ -164,7 +193,9 @@ export function inManagedTree(path) {
 
 // The three classes plus the stamp. Order matters: the blocklist wins over
 // everything, so a path that is both blocked and starter-shaped (a docs
-// file inside a quarantine, say) is still refused.
+// file inside a quarantine, say) is still refused. MANAGED_FILES is read
+// inside isStarter for the same reason, one rung lower: it lifts a path
+// out of a starter prefix and can never lift one out of the blocklist.
 export function classify(path) {
   if (isBlocked(path)) return "blocked";
   if (path === STAMP) return "stamp";

@@ -109,6 +109,9 @@ version: 0.3.38
 repo: Evolutionary-Leadership/harness
 check: node scripts/check-docs.mjs && npm test && npm run lint
 reviewers: teammate1, teammate2
+spec_product: myproduct
+change-prefix: MYPR
+gate-mode: evaluate
 ```
 
 - **`harness`**: variant identifier, written by `/setup` on first run
@@ -128,6 +131,52 @@ reviewers: teammate1, teammate2
   and to-preprod polls the run's conclusion on the PR head, merging only on
   success. The check chain must finish within the gate's 12-minute budget.
 - **`reviewers`**: Default reviewers assigned when using `/review`.
+
+### The spec loop's three keys
+
+All three are absent from a fresh scaffold, and the loop is asleep while
+`spec_product` is. See `.claude/SPEC-LOOP.md` for the whole
+mechanism; this is what the file holds and what each key switches.
+
+- **`spec_product`**: the Spec Universe product slug this repository's
+  specification lives under, and the switch for the whole loop. Absent or
+  blank, `check:spec` prints one line, `spec loop not connected`, and exits 0
+  before it reads a credential or walks the tree, and every spec section of
+  every skill is skipped: `/code-review`'s Spec axis falls back to the
+  tracker's spec issue, `/to-spec` writes a spec issue rather than proposals,
+  and `/feature` neither captures a change key nor retrieves. Naming a product
+  wakes all of it at once.
+- **`change-prefix`**: the registry-issued prefix every change key of this
+  repository carries (`MYPR-7`, never `MYPR-007`, never a padded form). It is
+  a cached copy of an immutable fact: a prefix is issued once and never
+  released, because the keys minted under it exist forever, and a copy of a
+  value that cannot change is a cache rather than a second authority. It is
+  verified against the registry once, when the line is written, and never
+  again. Reading it live instead would put a registry credential in every
+  repository that mints a key, and would fail a Capture on a registry outage.
+- **`gate-mode`**: how the preprod gate treats drift, `evaluate` or `enforce`.
+  **An absent key reads `evaluate`**, which is the shipped default and not an
+  oversight: a scaffold has no recorded conformance yet, so every baseline
+  reads `pending` and `enforce` would block nothing, while `evaluate` still
+  writes the ledger the decision to enforce is later made from. Both modes
+  compute identical rows and print identical words; `evaluate` adds one line
+  saying the merge proceeded. Only drift the branch INTRODUCED is ever a
+  blocking row. A feature context may TIGHTEN this to `enforce` for one branch
+  and may never loosen it, because a branch that can switch off the gate it is
+  failing is not a gate. Two things ignore the mode and stop in both: a
+  proposal on a `legal` or `contractual` node accepted by an identity that is
+  not a `user`, and a specification that could not be read.
+
+**There is no `spec_url`, and there never will be.** The base URL travels with
+the credential, as `SPEC_UNIVERSE_URL` beside `SPEC_UNIVERSE_TOKEN` in the
+environment, so a session and a CI job are configured identically and no
+checked-in file names a host. `feature-branch-checks.yml` passes both from
+repository secrets to the check step unconditionally; an unset secret is an
+empty string, which a dormant checker never reads. The three faults those two
+variables can produce are told apart by what fixes each: an unset variable and
+a refused token are configuration faults and say so, and only a genuine failure
+to read reports an outage.
+
 
 **Prerequisites for CI checks:**
 - None: the merge gate polls the check run directly, so it works without
@@ -363,6 +412,36 @@ staleness is not. Sections:
   so a reader knows why a phase carries no approvals. It is a record, not a
   setting: a resumed session never re-arms either.
 
+Where the spec loop is connected (`spec_product:` above), the same file also
+carries, and a dormant repository carries none of them:
+
+- **The change**: the change key, its work item, and the Spec Universe change
+  view.
+- **Retrieved specification**: the block `/feature` phase 1 wrote, holding the
+  three to six nodes the change's own words reached, with the read timestamp,
+  the terms and each node's version. It is INTERVIEW CONTEXT and never the
+  text a write is built from: `/to-spec` re-reads live the node it is about to
+  propose against, because this block ages while the specification moves. It
+  is scoped to one feature and dies with this file at the merge, which is what
+  keeps it from becoming a second copy of the specification. A run that could
+  not read Spec Universe records the client's fault here by its code, so an
+  interview that proceeded blind says so rather than looking like one that
+  found nothing.
+- **Conflict decisions**: every conflict card answered, with the option taken
+  (amend, retire, conform) and the reason; and a **strict pause waiting** line
+  while an amendment on a legal or contractual node waits for a person to
+  accept it in Spec Universe.
+- **Spec verdicts**, then **Suspect rows**, then **Tier disagreements**: the
+  three sections `/code-review` wrote, in that order and no other. The first
+  is the fixed six-column table `/to-preprod` gates on and copies into the PR
+  body. The second holds `drifted` verdicts that showed no concrete input and
+  wrong result, which gate nothing and are never claimed, and travels into the
+  PR body because this file is deleted at the merge. The third is calibration
+  and nothing parses it. **The order is load bearing**: the gate's parser
+  stops at the next heading and faults on a fourth verdict, so a suspect row
+  above or inside the verdict table makes every gate run report a malformed
+  table.
+
 Link issues by `#number` or URL; never use relative markdown links in
 this file.
 
@@ -384,6 +463,26 @@ description, promotes anything permanent into `docs/`, and deletes it: it
 never reaches `preprod`. If a merge bypasses `/to-preprod` (the GitHub merge
 button), `feature-merge-cleanup.yml` removes the leftover from preprod, and
 `/continue` and `/to-preprod` also sweep strays as a safety net.
+
+### The gate run record
+
+`.harness/gate-runs/<KEY>-<n>.json` is the opposite of the feature context and
+the one thing under `.harness/` that MUST reach `preprod`. `/to-preprod`
+writes one file per gate run (`scripts/gate-run.mjs`) holding the mode and
+where it came from, the head sha and merge base, rows by verdict, the drifted
+rows split into new, known and pending, the blocking rows with their reasons,
+the outcome, and a `dispositionUrl` pointing at the work-item comment where a
+person writes `true-drift` or `false-drift`.
+
+It exists to make one number: after ten features, the rate at which the gate
+would have stopped a merge that should have merged, which is what the decision
+to run `gate-mode: enforce` is made from. So it is committed, never
+gitignored, and never deleted at the merge. A ledger that dies at the merge is
+not a ledger. A dormant repository never has one.
+
+`.harness/spec-coverage.json`, by contrast, is derived from the tree and a
+live read, so it belongs in `.gitignore`: a committed copy would be the second
+copy the anchor convention exists to prevent.
 
 ### The closing block
 
@@ -464,6 +563,11 @@ These files are maintained by the harness and replaced on
 | `.claude/scripts/list-skills.sh` | Skill discovery script |
 | `.claude/scripts/resolve-feature-name.sh` | Resolves the feature name (slug from `.harness-feature`, else session codename); shared by the hooks, scripts, and workflows |
 | `.claude/scripts/set-feature-name.sh` | Names the session's feature: sanitizes a slug, writes `.harness-feature`, commits, and pushes to trigger provisioning |
+| `.claude/SPEC-LOOP.md` | The spec loop: how to connect it, the anchor grammar, the judge, the gate, the claim flow, and which file owns each mechanism. Read it only once `spec_product` is set |
+| `.claude/scripts/spec-universe.sh` | The one `/v1` client every skill shares for Spec Universe: reads, proposes, patches, claims and promotes with `SPEC_UNIVERSE_URL` and `SPEC_UNIVERSE_TOKEN`, fails closed with three distinguishable exits, and offers no generic pass-through. Inert while `spec_product` is unset |
+| `scripts/check-spec.mjs`, `gate-run.mjs`, `judge-plan.mjs`, `retrieval.mjs`, `spec-test-claims.mjs` | The spec loop: the anchor gate, the preprod gate, the judge, the interview's retrieval, and the test-basis claims. Managed rather than write-once, unlike everything else under `scripts/`, so a fix reaches you. All five are inert while `spec_product` is unset |
+| `.claude/skills/code-review/judge-prompt.md` | The Spec axis judge's brief, below its horizontal rule sent verbatim. Managed on purpose: the shape was measured, and a brief that drifts silently changes every verdict downstream |
+| `.claude/skills/feature/CONFLICT-PROTOCOL.md` | The conflict card, the A/B/C fork, where a decision is recorded, and the strict pause. Read from `/feature` at any phase and from `/to-spec`'s conflict sweep |
 | `.claude/scripts/get-railway-url.sh` | On-demand Railway preview URL fetcher (polls; usable both from the post-push hook and as a manual recovery command) |
 | `.claude/scripts/verify-deploy.sh` | Confirms an environment serves the pushed code: polls the URL for the `x-harness-sha` header and matches it against the `feature/<name>` tip |
 | `.claude/hooks/post-push-railway-url.sh` | Runs after `git push`; delegates to `get-railway-url.sh` to fetch the Railway preview URL |

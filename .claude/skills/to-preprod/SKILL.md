@@ -3,13 +3,13 @@ name: to-preprod
 description: Merge the current feature branch into preprod, the gate before production. Use when the user says "merge to preprod", "ship it to the gate", or invokes /to-preprod.
 disable-model-invocation: true
 argument-hint: "[optional: PR title]"
-allowed-tools: Bash(git *), Read, Write, Glob, Grep
+allowed-tools: Bash(git *), Bash(bash .claude/scripts/*), Bash(node scripts/*), Read, Write, Glob, Grep
 ---
 
 # To preprod
 
 Take the current feature through the gate. `preprod` is the branch between
-feature branches and production (ADR 0021): a feature that has been built
+feature branches and production: a feature that has been built
 and tested waits there until a release promotes it to `main`.
 
 This skill does not merge anything itself. It writes the `.pr-description.md`
@@ -26,8 +26,9 @@ Every reply carries one, per the contract in `getting-started`. Here it
 carries the merge:
 
 - `Good to know`: what the signal push set in motion on the remote (the PR
-  the Action opens, the auto-merge, the branch deletions that follow), and
-  the docs audit result.
+  the Action opens, the auto-merge, the branch deletions that follow), the
+  docs audit result, and, where the spec loop is connected, the preprod
+  gate's result (how many drifted rows, each covered by which proposal).
 - `Act later`: anything this merge deliberately left undone, naming where it
   should be done.
 - `Act next`: what the user must watch or do now, and plainly whether this
@@ -137,7 +138,7 @@ Act on the two parts of its report that are not self-resolving:
   could not resolve. Handle it, or carry it into the PR description under a
   **Docs** heading so it is visible after the merge. Do not drop it silently.
 
-### 4. Consume and retire the feature context
+### 4. Consume the feature context
 
 Read `.harness/feature-context/$FEATURE_NAME.md` (contract in
 `.claude/HARNESS.md`) if it exists. It is the input for the PR
@@ -145,14 +146,133 @@ description: the decisions, rejections, and scope boundary it records
 belong in the body below, and the docs audit above should have promoted
 anything permanent into `docs/`.
 
-Then delete it, in its own commit:
+**(connected)** Also hold its `## Spec verdicts` table, its `## Suspect rows`
+table and its change key (the Tracker section): step 4b gates on the first
+and step 5 copies all three into the PR body, and the file is deleted in 4c.
+
+A suspect row is a `drifted` verdict the judge could not evidence
+(`.claude/SPEC-LOOP.md`, the judge section). It never gates
+anything and never becomes a claim, so the gate below does not read it; it
+goes into the PR body because the context that held it is about to be
+deleted, and a person still has to see it.
+
+### 4b. Run the preprod gate **(connected)**
+
+**This step forks on one key.** Read it first:
+
+    SPEC_PRODUCT=$(sed -n 's/^spec_product: *//p' .harness-version | tail -1)
+
+**Empty or absent: skip this whole step and go to 4c.** This repository has
+not connected a specification, there are no verdicts to gate on, and nothing
+about the loop is mentioned to the user. The rest of this step is the
+connected shape.
+
+The gate refuses a merge that carries drift **the branch itself introduced**
+and nobody decided. It does not refuse drift that was already recorded before
+the branch existed: an audit of an existing product routinely records dozens
+of drifted criteria at once, and gating on those stops merges that never
+touched them.
+
+It has two modes, and both compute the same rows and print the same words:
+
+| Mode | What it does with a row that would stop the merge |
+|---|---|
+| `evaluate` | Prints it in full, under the same heading, and merges anyway |
+| `enforce` | Prints it in full, under the same heading, and stops |
+
+The mode is `gate-mode:` in `.harness-version`; an absent key reads
+`evaluate`. A feature context may **tighten** it to `enforce` for one branch
+and may never loosen it, because a branch that can switch off the gate it is
+failing is not a gate. Say which file the mode came from before anything else.
+
+**Read the change's proposals and the baseline.** The baseline is not a new
+artifact: Spec Universe already records conformance per criterion, and
+`/release` refreshes it at every release, so the record IS the state as of the
+last release. Read it live, one call per distinct node carrying a `drifted`
+row:
+
+    SU="bash .claude/scripts/spec-universe.sh"
+    KEY=<the change key, from .harness-feature or the context's Tracker section>
+    $SU change-proposals "$KEY"                 > /tmp/proposals.json
+    for NODE in <every node with a drifted row>; do $SU node "$NODE"; done \
+      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.stringify(s.trim().split(/(?<=})\s*(?={)/).map(JSON.parse))))' \
+      > /tmp/nodes.json
+
+**Any non-zero exit from the client stops the merge in BOTH modes** and writes
+no signal file, because a gate cannot pass on a specification it could not
+read. Report what the client printed;
+`.claude/SPEC-LOOP.md` tells the three faults apart. The mode
+governs drift tolerance and nothing else.
+
+If the verdict table is missing and the branch changes anything under the
+domain roots, run `/code-review` now (fixed point `origin/preprod`) rather
+than merging unjudged; a branch that touches no domain file passes the gate
+vacuously, and the PR body says so.
+
+**Run the gate.** The classification and the copy live in the script, so the
+two modes cannot drift apart in wording:
+
+    node scripts/gate-run.mjs --key="$KEY" \
+      --verdicts=.harness/feature-context/"$FEATURE_NAME".md \
+      --nodes=/tmp/nodes.json --proposals=/tmp/proposals.json \
+      --head-sha="$(git rev-parse HEAD)" \
+      --merge-base="$(git merge-base origin/preprod HEAD)" \
+      --branch="$FEATURE_BRANCH" --work-item=<the work item URL>
+
+Report its output verbatim. Exit `1` means the merge stops: end the skill here,
+before step 4c, with nothing retired and nothing pushed. Exit `2` is a
+configuration fault in the mode or a missing key; fix it and run again.
+
+How it classifies, so a reader of the report knows what they are looking at:
+
+| Recorded conformance | Baseline | A `drifted` row on it |
+|---|---|---|
+| `drifted` | `known` | reported, never blocks: the branch did not cause it |
+| `matched` | `matched` | **new drift**, and it blocks under `enforce` |
+| absent, or anything else | `pending` | an absence, not a regression, never blocks |
+
+A row judged against a proposal is always new drift: the proposed text has no
+prior conformance record to have drifted from. `unverifiable` rows never block
+and go into the PR body under `Act later` as anchors to repair. New drift is
+covered, and so does not block, by an `accepted` or `promoted` proposal under
+the change key whose node is that row's node; a `draft` or `declined` proposal
+and no proposal at all each block, naming the one missing piece.
+
+**One row is exempt from the mode and stops in both.** A proposal on a node
+whose effective strictness is `legal` or `contractual`, accepted by an identity
+that is not a `user`, stops the merge under `evaluate` too: Spec Universe
+refuses that acceptance over MCP and `/v1`, so it is a security control and not
+drift. The script marks it `[stops in both modes]`.
+
+Every stop names exactly one missing piece and one deep link
+(`{SPEC_UNIVERSE_URL}/nodes/<node key>` for a proposal to decide,
+`{SPEC_UNIVERSE_URL}/changes/<KEY>` for the change as a whole).
+
+**Record the run.** The script writes `.harness/gate-runs/<KEY>-<n>.json`,
+which is COMMITTED and reaches `preprod`: it is the ledger the false-drift rate
+is computed from after ten features, and a ledger that dies at the merge is no
+ledger. Post the same rows as one comment on the change's work item, asking in
+one line for the disposition (`true-drift` where the row was a real regression,
+`false-drift` where it was not), and re-run the command with
+`--disposition-url=<that comment's URL>` so the record points at where the
+answer will be written. Commit the record with the context retirement in 4c.
+
+### 4c. Retire the feature context, and keep any run record
+
+Delete the context, and commit the gate run alongside it where there is one:
 
     git rm .harness/feature-context/"$FEATURE_NAME".md
+    git add .harness/gate-runs 2>/dev/null || true
     git commit -m "chore: retire feature context for $FEATURE_NAME"
 
 The context lives only while the feature is in flight; it never passes the
 gate. (If someone merges around this skill, the cleanup workflow removes the
-leftover from `preprod`.)
+leftover from `preprod`; it names that one file and touches nothing else under
+`.harness/`.)
+
+**`.harness/gate-runs/` is the opposite case and MUST pass the gate.** It is
+the ledger the false-drift rate is computed from after ten features. Never
+delete it here, and never gitignore it.
 
 ### 5. Write `.pr-description.md`
 
@@ -169,7 +289,32 @@ Format:
     - 3-5 bullet points explaining what changed and why
 
     ## Spec
-    - Link to the spec issue on the tracker, if the feature has one
+    - Dormant: a link to the spec issue on the tracker, if the feature has
+      one. Connected: the change key, its work item (`<KEY>: <title>`, #N),
+      and the Spec Universe change view `{SPEC_UNIVERSE_URL}/changes/<KEY>`
+
+    ## Spec verdicts
+    - Connected only. The verdict table from the feature context, verbatim
+      and unaltered (its shape is `/code-review`'s). `/release` reads this
+      section to claim conformance once production serves the release, so it
+      is the one place the verdicts survive the merge. Say "no domain file
+      changed; no node implicated" when the gate passed vacuously.
+
+    ## Suspect rows
+    - Connected only. The `## Suspect rows` table from the feature context,
+      verbatim, or "no suspect row" when there was none. These are drifted
+      verdicts that showed no concrete input and wrong result, so they gate
+      nothing and are never claimed; the PR body is the only place they
+      survive the merge. Never move one into `## Spec verdicts`.
+
+    ## Preprod gate
+    - Connected only. The mode and the file it came from, the row counts by
+      verdict, the drifted rows split into new, known and pending, and either
+      every row that would have stopped this merge or "nothing would have
+      stopped this merge". Name the run record's path and link the
+      disposition comment. This section is how the false-drift rate is
+      computable from GitHub alone, so it is written even when the gate
+      passed vacuously.
 
     ## Code review findings
     - The /code-review findings summary from the end of /feature phase 4,
@@ -188,7 +333,7 @@ Format:
 ### 6. Commit and push
 
 Push any pending feature work **first**, so the whole branch (including the
-conflict resolution from step 2 and the context retirement from step 4) is
+conflict resolution from step 2 and the context retirement from step 4c) is
 on the remote before the signal file triggers the workflow:
 
     git push -u origin <current-branch>

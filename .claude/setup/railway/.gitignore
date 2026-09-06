@@ -9,3 +9,10 @@ node_modules/
 # feature/<name> by the workflow's own cleanup before the PR merges.
 # It must never reach preprod or main.
 .pr-description.md
+
+# The spec loop's coverage artifact, written by check:spec on every run that
+# reaches evaluation. It is derived from the tree and a live read of the
+# specification, and a committed copy would be the second copy the anchor
+# convention exists to prevent. `.harness/gate-runs/` is the opposite case and
+# is deliberately NOT ignored: it is the ledger that must reach preprod.
+.harness/spec-coverage.json

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Read the coordination branch, and choose the next free ADR number.
 #
-# ADR 0014: the coordination branch carries only what exists nowhere else.
-# ADR 0015: an ADR number is claimed here before the file is written, and
-# the candidate is always max(numbers on preprod, numbers claimed) + 1, which
-# keeps preprod the source of truth and this branch a cache over it.
+# The coordination branch carries only what exists nowhere else (forge
+# decision record 0014). An ADR number is claimed here before the file is
+# written, and the candidate is always max(numbers on preprod, numbers
+# claimed) + 1, which keeps preprod the source of truth and this branch a
+# cache over it (forge decision record 0015). Both ids are spelled out
+# because this file lands in a downstream scaffold, where a bare `ADR 0014`
+# would name that project's own record and not this one.
 #
 # This script only READS. Writing a claim needs the GitHub contents API,
 # whose per-path SHA check is the compare-and-swap, and a shell script
