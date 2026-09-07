@@ -310,10 +310,23 @@ jobs:
             echo "::warning::Could not stamp the CHANGELOG accumulator for ${NEW_VERSION}."
           fi
 
-          # --- VERSION, and the stamp the template carries downstream ---
+          # --- VERSION, and the two stamps that must move with it ---
           echo "$NEW_VERSION" > VERSION
           if [ -f "templates/harness/base/.harness-version" ]; then
+            # The stamp the template carries downstream.
             sed -i "s/^version: .*/version: ${NEW_VERSION}/" "templates/harness/base/.harness-version"
+
+            # And this repository's OWN install stamp. A repo that authors a
+            # cell dogfoods what it publishes, so the version it ships and the
+            # version it runs are the same number; the dogfood gate fails when
+            # they disagree. Nested inside the cell check on purpose: only a
+            # repo carrying a cell has an install to stamp from it, so a
+            # downstream project can never have its harness stamp overwritten
+            # with its own application version. Only the version line moves;
+            # every other field the file carries survives.
+            if [ -f ".harness-version" ]; then
+              sed -i "s/^version: .*/version: ${NEW_VERSION}/" ".harness-version"
+            fi
           fi
 
 
@@ -346,9 +359,14 @@ jobs:
           # step declaring `shell: bash`, or a repo setting defaults.run.shell)
           # that aborts the step before the commit below, failing every release
           # in the normal case where nothing leaked.
-          LEAKED=$(git diff --cached --name-only -- ':!.release-description.md' ':!VERSION' ':!CHANGELOG.md' ':!migrations' ':!templates' | tr '\n' ' ')
+          LEAKED=$(git diff --cached --name-only -- ':!.release-description.md' ':!VERSION' ':!CHANGELOG.md' ':!migrations' ':!templates' ':!.harness-version' | tr '\n' ' ')
           [ -z "$LEAKED" ] || echo "::warning::Signal files reached preprod and were removed before the release: $LEAKED"
+          # .harness-version is staged here or the stamp above never lands: the
+          # step writes the file but this is the commit. It is excluded above
+          # for the same reason the others are, so a reordering that stages it
+          # earlier does not report the release's own work as a leak.
           git add VERSION CHANGELOG.md migrations/ templates/ 2>/dev/null || true
+          git add .harness-version 2>/dev/null || true
           git commit -m "chore: remove release signal file"
 
           for i in 1 2 3; do
