@@ -1,6 +1,6 @@
 # coordination
 
-This branch carries no code. It is never merged into `main` or `dev`,
+This branch carries no code. It is never merged into `main` or `preprod`,
 and it shares no history with them.
 
 ## The one rule
