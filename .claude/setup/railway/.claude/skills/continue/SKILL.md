@@ -70,8 +70,15 @@ safety net, not the intended path.
 
 Delegate to `/feature`'s resume logic (its phase 0): it merges the
 feature branch, loads the feature context, verifies the phase against the
-tracker artifacts, and gates before continuing. Do not improvise a
-separate resume here.
+tracker artifacts, writes the journey position it landed in to the
+touched-set record (the record is the one field a crashed session leaves
+wrong, and this is the cheapest moment to correct it; `.claude/JOURNEY.md`),
+and gates before continuing. Do not improvise a separate resume here.
+
+A `parked` label on the work item means the change was parked at a gate:
+say so, and continue only if the user un-parks it. A `## Blocked` section in
+the context means the last session stood down: read it first, and clear it
+(with the `blocked` label) only once the block is actually gone.
 
 If the context marks the feature "awaiting human review" (a `/review` PR
 is open), say so: the likely work is addressing review comments, and the

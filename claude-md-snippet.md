@@ -154,10 +154,15 @@ the input to `/feature`.
 `/feature` does NOT start coding on invocation. It drives five phases
 with a stop-and-ask gate between each one:
 
-0. name and resume (`set-feature-name.sh` slugs the branch, feature
-   context created)
-1. `/grilling` + `/domain-modeling`: interview until the frontier is
-   empty, glossary and ADRs written
+0. capture the change (title, description, why), mint its change key
+   from `change-prefix:` in `.harness-version` (required: without the line
+   `/feature` stops here and says so), open its work item, then name and
+   resume (`set-feature-name.sh` slugs the branch, feature context created)
+1. four journey transitions with two gates: 1a challenge the why (a short
+   `/grilling`; pursue, drop or park), 1b `/grilling` + `/domain-modeling`
+   on the how until the frontier is empty, 1c assess the impact (touched
+   set, retrieved specification, conflicts decided), 1d decide (build, drop
+   or park)
 2. `/to-spec`: publish the spec to the tracker
    (`docs/agents/issue-tracker.md`)
 3. `/to-tickets`: tracer-bullet tickets with blocking edges
@@ -168,7 +173,7 @@ with a stop-and-ask gate between each one:
 **Two ways to say "stop asking me".** In a grilling round, the standing
 option grants **grill autonomy**: take the recommended answer on every
 remaining question of that grill, breaking out only for a one-way decision
-or where the recommendation would be a guess. At the phase 1 gate, the
+or where the recommendation would be a guess. At the phase 1d gate, the
 "go all the way to implement" option grants **phase autopilot**: advance
 the phase 2, 3 and 4 gates without stopping, and stop at phase 5. They are
 separate switches, neither survives the session, and neither ever runs an
@@ -178,6 +183,10 @@ Never advance a gate on silence, and never skip phases 1 to 3 on your own
 judgement. Quick mode (straight to phase 4) requires an explicit
 `--quick` or the user saying so in words; you may propose it for a typo
 or a config tweak, never take it.
+
+Every phase writes the feature's journey position into its touched-set
+record on `coordination`, so a person or the Product Cockpit can see where
+it is; `.claude/JOURNEY.md` is the one home for what each position means.
 
 Throughout, the **feature context**
 (`.harness/feature-context/<slug>.md`, contract in `.claude/HARNESS.md`)

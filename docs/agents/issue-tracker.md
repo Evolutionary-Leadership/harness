@@ -27,7 +27,31 @@ sub-issue read/write, search); the conventions below are tool-agnostic.
 Infer the repo from `git remote -v`; `gh` does this automatically when run
 inside a clone.
 
-## The three issue kinds the flow uses
+## The four issue kinds the flow uses
+
+### Work items (`/feature` phase 0)
+
+One issue per change, created at Capture and titled exactly
+`<KEY>: <title>`, where the key is `<change-prefix>-<n>` from
+`.harness-version` and the counter on the `coordination` branch. Its body
+has five sections in this order: **Why** (verbatim from Capture),
+**Challenge** (written by phase 1a: the why as it stands after the
+challenge, what was rejected, the verdict), **Change key**, and
+**Specification** (written by `/to-spec`: the spec issue, or the Spec
+Universe change view), then **Tickets**. It is the journey's `captured`
+artefact and the home of every gate verdict, so the labels below mean
+exactly one thing each:
+
+| Label | Means | Applied by |
+|---|---|---|
+| `pursue` | The why survived the challenge | Phase 1a, on the `pursue` verdict |
+| `parked` | A gate answered park. The issue stays OPEN, the branch and the touched-set record stay too; removing the label un-parks | Phase 1a or 1d |
+| `blocked` | A session stood down on something it could not get past; the feature context's `## Blocked` says what. Removed when the block clears | Any phase, per `.claude/JOURNEY.md` |
+
+A `drop` verdict closes the work item as **not planned** with a comment
+saying why; nothing else ever closes it as not planned, and `/release` is
+the only skill that closes it as completed. Tickets are its sub-issues, the
+frontier query hangs off it, and it is never deleted.
 
 ### Idea issues (`/brainstorm`)
 
@@ -82,9 +106,11 @@ frontier).
 
 ## Resumed sessions
 
-A resumed session reads the durable artifacts in order (spec issue, then
+A resumed session reads the durable artifacts in order (the work item, its
+`## Challenge`, the feature context's settled decisions, the spec, then
 ticket issues, then open tickets among them) and re-enters the first
-`/feature` phase whose artifact is missing. The tracker holds the *state*;
+`/feature` phase whose artifact is missing, writing that position to the
+touched-set record. The tracker holds the *state*;
 the *reasoning* (decisions, rejections, open questions) lives in the
 feature context file on the feature branch, per `.claude/HARNESS.md`. An
 idea issue, if one started the feature, holds the pre-feature thinking.

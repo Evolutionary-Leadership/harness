@@ -1,6 +1,6 @@
 ---
 name: feature
-description: Build a feature end to end through gated phases. Names the branch, grills the requirements, writes the spec, cuts the tickets, then implements. Accepts a brainstorm idea issue as input.
+description: Build a feature end to end through gated phases. Captures the change, challenges the why, grills the how, writes the spec, cuts the tickets, then implements, writing its journey position as it goes. Accepts a brainstorm idea issue as input.
 disable-model-invocation: true
 argument-hint: "<description of what to build, or #<idea-issue-number>> [--quick]"
 ---
@@ -15,7 +15,12 @@ must be mirrored verbatim in the other copy. See .claude/HARNESS.md.
 # Feature
 
 Drive a feature from a one-line description to merged-ready code through
-five phases, with a stop-and-ask gate between each one.
+five phases, with a stop-and-ask gate between each one. Every phase is a
+position on the journey the Product Cockpit draws, and this skill writes
+that position into the touched-set record as it moves. `.claude/JOURNEY.md`
+is the one home for what each position means, which artefact it leaves, and
+when a transition is ready and done; where this file says "write the phase",
+it means that file's recipe.
 
 `$ARGUMENTS` contains the description of what to build, or a `#<number>`
 reference to a brainstorm idea issue.
@@ -33,34 +38,47 @@ Parts of phases 0, 1, 2 and 4 fork on one key. Read it before phase 0:
 
 **Empty or absent: this repository has not connected a specification.** Take
 every step marked **(dormant)** below and skip every step marked
-**(connected)**. The flow is exactly what it has always been, and nothing
-about the loop is mentioned to the user.
+**(connected)**. Nothing about the loop is mentioned to the user.
 
-**Set: the loop is awake.** Phase 0 also captures the change and mints its
-key, phase 1 retrieves the nodes the change's own words reach, phase 2 writes
-proposals rather than a spec issue, and phase 4's review judges against Spec
-Universe. `.claude/SPEC-LOOP.md` is the whole mechanism.
+**Set: the loop is awake.** Phase 1b retrieves the nodes the change's own
+words reach, phase 2 writes proposals rather than a spec issue, and phase 4's
+review judges against Spec Universe. `.claude/SPEC-LOOP.md` is the whole
+mechanism.
+
+**Capture, the change key and the work item do not fork on this key.** Every
+repository mints a key and opens a work item, connected or not: the work item
+is where the journey's first artefacts live (the why, the challenge, the
+verdict), and a change without a key is one the cockpit can see and never
+place. What forks is only where the specification goes.
 
 ## Phase map
 
-| Phase | What happens | Skill |
-|---|---|---|
-| 0 | Name the feature, create the feature context, resume previous work; **(connected)** capture the change, mint its key and open its work item first | this skill |
-| 1 | Interview the user until the design tree is settled | `/grilling` + `/domain-modeling` |
-| 2 | Synthesize the conversation into a spec on the tracker; **(connected)** into proposals in Spec Universe, pointed at from the work item | `/to-spec` |
-| 3 | Slice the spec into blocking-ordered tickets | `/to-tickets` |
-| 4 | Build it, test-first at agreed seams, then review it | `/implement`, `/code-review` |
-| 5 | Push, choose the exit, hand over | this skill |
+| Phase | What happens | Skill | Journey |
+|---|---|---|---|
+| 0 | Capture the change, mint its key and open its work item; name the feature, create the feature context, resume previous work | this skill | `captured` |
+| 1a | Challenge the why: a short grill ending in pursue, drop or park | `/grilling` | `challenging` to `challenged` |
+| 1b | Interview the user on the how until the design tree is settled | `/grilling` + `/domain-modeling` | `shaping` to `shaped` |
+| 1c | Assess the impact: the touched set in full, the retrieved specification, every conflict decided | this skill | `assessing` to `assessed` |
+| 1d | Decide: build, drop or park, put to the user | this skill | `deciding` to `committed` |
+| 2 | Synthesize the conversation into a spec on the tracker; **(connected)** into proposals in Spec Universe, pointed at from the work item | `/to-spec` | `planning` |
+| 3 | Slice the spec into blocking-ordered tickets | `/to-tickets` | `planned` |
+| 4 | Build it, test-first at agreed seams, then review it | `/implement`, `/code-review` | `building` to `built` |
+| 5 | Push, choose the exit, hand over | this skill | from `verifying` on, read from GitHub, never written |
 
 You run all five in this one session. You do NOT run them back to back
 unprompted: every arrow between phases is a gate (see "Gates").
 
 ## Gates
 
-At the end of each of phases 1 to 4, STOP and ask the user to approve
+At the end of each of phases 1a to 4, STOP and ask the user to approve
 moving on. Use `AskUserQuestion` with the options "continue to <next
 phase>", "stay in <current phase>" and (where it makes sense) "revise
-<current output>".
+<current output>". Two of these are journey gates with their own verdicts,
+put to the user in those words: the end of 1a (**worth pursuing**: pursue,
+drop or park) and 1d (**build it**: build, drop or park). What each verdict
+does to the work item, the branch and the record is in `.claude/JOURNEY.md`
+under "Gate verdicts"; a park or a drop ends this skill there, after doing
+what that table says.
 
 Rules for a gate:
 
@@ -69,13 +87,13 @@ Rules for a gate:
 - Wait for the answer. Never assume approval, never advance on silence.
 - "Stay" means keep working in the current phase, then gate again.
 - Going backwards is allowed and cheap. If phase 3 exposes a hole, return
-  to phase 1 for that branch of the tree rather than guessing.
+  to phase 1b for that branch of the tree rather than guessing.
 - At every gate, refresh the feature-context file and push (see "The
   feature context" below).
 
 ### Phase autopilot
 
-The phase 1 gate carries a fourth option: **from here on out, go all the
+The phase 1d gate carries a fourth option: **from here on out, go all the
 way to implement**. Taking it auto-advances the phase 2, 3 and 4 gates and
 stops at the phase 5 exit gate.
 
@@ -101,15 +119,15 @@ autopilot the session still stops there, renders the card or the pause, and
 waits.
 
 **Autopilot and grill autonomy are two switches, not one.** Autonomy (in
-`/grilling`) answers questions *inside* phase 1. Autopilot advances phase
-*gates*. Granting autonomy mid-grill still brings the user the phase 1
+`/grilling`) answers questions *inside* phases 1a and 1b. Autopilot advances
+phase *gates*. Granting autonomy mid-grill still brings the user the phase 1d
 gate, because that gate is the one place the whole settled design is
 visible in one piece before it becomes tickets and code. **(connected)** Grill
 autonomy carries the same two carve-outs: a conflict card or a strict pause
 reached during the grill is put to the user, never self-answered.
 
 Going backwards stays allowed under autopilot. If phase 3 exposes a hole,
-return to phase 1 for that branch of the tree; autopilot is a reason to
+return to phase 1b for that branch of the tree; autopilot is a reason to
 keep moving, never a reason to build on a gap.
 
 **Autopilot does not survive the session.** Record in the feature context
@@ -127,7 +145,9 @@ live in `.claude/HARNESS.md`; the short version:
   log: current phase, next step, decisions settled (with what was
   rejected and why), open frontier, scope boundary, tracker links, exit
   route once chosen, and whether autopilot or grill autonomy was granted.
-  **(connected)** It also carries the change key and its work item, the
+  It also carries the change key and its work item, the challenge verdict
+  and the build verdict, a `## Blocked` section while the session is
+  standing down (`.claude/JOURNEY.md`, "Blocked"), and **(connected)** the
   retrieved specification, any conflict decision or strict pause waiting, and
   the three sections `/code-review` writes.
 - Refresh it whenever finished work changes what a fresh reader would
@@ -142,7 +162,11 @@ live in `.claude/HARNESS.md`; the short version:
   `preprod`.
 - **The touched set rides this same beat**, and is one habit with it, not a
   second one. Whenever you refresh this file, refresh the declaration on the
-  `coordination` branch too, and report anything new the overlap shows:
+  `coordination` branch too, and report anything new the overlap shows. The
+  journey position rides the same write: at a phase boundary add
+  `--phase=<position>` to the refresh below, and the record says where the
+  feature is (`.claude/JOURNEY.md` lists the positions and the two writes
+  each transition gets):
 
       R=$(mktemp -d)
       bash .claude/scripts/coordination.sh feature "$FEATURE_NAME" > "$R/mine.md"
@@ -161,8 +185,10 @@ its content changes from phase to phase:
 
 | Phase | What the block carries |
 |---|---|
-| 0 | The feature name and branch, and whether this is a resume and into which phase; **(connected)** the change key and its work item too. `Act next` is the phase you are entering, or the Capture questions |
-| 1 | The grill's questions as the `Act next` items, numbered per `/grilling`. Facts a sub-agent found belong in `Good to know` |
+| 0 | The feature name and branch, the change key and its work item, and whether this is a resume and into which phase. `Act next` is the phase you are entering, or the Capture questions |
+| 1a, 1b | The grill's questions as the `Act next` items, numbered per `/grilling`. Facts a sub-agent found belong in `Good to know`; so does the challenge verdict once it is given |
+| 1c | The overlap report and any conflict card in `Good to know`; the gate decision in `Act next` |
+| 1d | The settled picture in `Good to know`; the build, drop or park verdict in `Act next` |
 | 2 | The spec issue number, or **(connected)** the change view link and the proposal count, in `Good to know`; the gate decision in `Act next` |
 | 3 | The ticket numbers and their blocking edges in `Good to know`; the gate decision in `Act next`, and say plainly that approving starts the build |
 | 4 | The ticket that just landed and the check result in `Good to know`; any finding you deliberately did not act on in `Act later`; the next frontier ticket in `Act next` |
@@ -193,14 +219,21 @@ works on `claude/` branches and stop.
 If `$ARGUMENTS` is a `#<number>`, fetch that issue per
 `docs/agents/issue-tracker.md`. It is a brainstorm idea issue with four
 sections: treat **Decisions so far** as settled (do not re-ask them),
-**Not yet specified** as the phase 1 frontier, and **Destination** and
+**Not yet specified** as the phase 1b frontier, and **Destination** and
 **Out of scope** as the feature description. Comment on the issue that a
 feature session picked it up, and link the issue in the feature context.
 
-### Capture the change, and mint its key **(connected)**
+### Capture the change, and mint its key
 
-Skip this whole section when `SPEC_PRODUCT` is empty; the dormant flow names
-the feature straight from the description.
+This section runs in every repository, connected or not: the work item it
+opens is where the journey's first artefacts live, and the key is what joins
+the branch to the change on the cockpit. The one precondition is a
+`change-prefix:` line in `.harness-version`. **Without one, stop here and say
+so**: "This repository has no `change-prefix:`. Add the prefix the System
+Registry issued for it to `.harness-version` and run `/feature` again." A
+made-up prefix would mint keys that collide with the real ones later, so this
+is fail-closed like the mint below, and nothing else in this skill runs
+before it.
 
 A change exists from the moment someone can say what it is and why it is
 wanted, and everything after (the key, the work item, the branch, the
@@ -249,7 +282,7 @@ on branch `coordination`; a shell script cannot call MCP):
 
 Record the key in the feature context the moment it is minted.
 
-### Create the work item **(connected)**
+### Create the work item
 
 Create the tracker issue immediately, per `docs/agents/issue-tracker.md`,
 titled exactly `<KEY>: <title>`, with the why as its opening section:
@@ -259,25 +292,37 @@ titled exactly `<KEY>: <title>`, with the why as its opening section:
 
 <the why, verbatim>
 
+## Challenge
+
+Filled in by phase 1a: the why as it stands after the challenge, what was
+rejected, and the verdict.
+
 ## Change key
 
-`<KEY>`. Every proposal this change drafts carries `changeId = <KEY>` and
-`changeUrl` = this issue.
+`<KEY>`. **(connected)** Every proposal this change drafts carries
+`changeId = <KEY>` and `changeUrl` = this issue.
 
 ## Specification
 
-Filled in by /to-spec: the Spec Universe change view and a short summary.
+Filled in by /to-spec: the spec issue, or **(connected)** the Spec Universe
+change view and a short summary.
 
 ## Tickets
 
 Sub-issues of this issue.
 ```
 
-This is a **thin work item**: the specification itself lives in Spec Universe
-under the key, and this issue holds the title, the why, the key, the pointer,
-and the tickets as sub-issues. `/to-spec` UPDATES it; nothing else ever
-rewrites it. It is never deleted: the tickets are its sub-issues and the
-frontier query hangs off it.
+This is a **thin work item**: the specification lives in the spec issue or
+**(connected)** in Spec Universe under the key, and this issue holds the
+title, the why, the challenge, the key, the pointer, the tickets as
+sub-issues, and the labels the journey's gates apply (`pursue`, `parked`,
+`blocked`). Phase 1a writes `## Challenge` and `/to-spec` writes
+`## Specification`; nothing else rewrites it. It is never deleted: the
+tickets are its sub-issues, the frontier query hangs off it, and closing it
+as not planned is how a change is dropped.
+
+The work item is the `captured` artefact. The touched-set record declared
+below carries `phase: captured` for that reason, from its first write.
 
 Comment on an idea issue, if one was passed, that a feature session picked it
 up under `<KEY>`, and link both in the feature context.
@@ -285,8 +330,8 @@ up under `<KEY>`, and link both in the feature context.
 ### Name the feature
 
 Derive a short kebab-case slug from the description (for example "fix the
-login seed bug" becomes `fix-login-seed`). **(connected)** Prefix it with the
-lowercase key (`mypr-1-fix-login-seed`), so the feature branch, every later
+login seed bug" becomes `fix-login-seed`). Prefix it with the lowercase key
+(`mypr-1-fix-login-seed`), so the feature branch, every later
 `claude/<name>` branch and every environment start with the key, and a reader
 can go from a branch name to the change view without a lookup. Then set it:
 
@@ -348,11 +393,21 @@ means to touch, or the single node `none` where it touches none.
     R=$(mktemp -d) && mkdir -p "$R/others"
     SPEC=$(sed -n 's/^spec_product: *//p' .harness-version | tail -1)
     node .claude/scripts/touched-set.mjs render \
-      --slug="$FEATURE_NAME" --branch="$FEATURE_BRANCH" \
+      --slug="$FEATURE_NAME" --branch="$FEATURE_BRANCH" --key="$KEY" \
       --author="$(git config user.email)" --spec="${SPEC:-none}" \
+      --phase=captured \
       --path=<a prefix> --path=<another> > "$R/mine.md"
 
-Connected repositories add `--key=<KEY>` and one `--node=<slug>` per node.
+`--phase` is the journey position (`.claude/JOURNEY.md`), and `captured` is
+right only for a FRESH feature. **A resumed session skips the render**: its
+record already exists on `coordination`, and "Work out which phase you are
+resuming into" below refreshes it once, with the position the session lands
+in, so a resume never writes `captured` over a later position or resets
+`declared_at`. Read the existing record for `$R/mine.md` instead:
+
+    bash .claude/scripts/coordination.sh feature "$FEATURE_NAME" > "$R/mine.md"
+
+Connected repositories add one `--node=<slug>` per node.
 `render` refuses to print a record it cannot read back, and says why. Keep
 the record under `mktemp -d` rather than a fixed path: two sessions share one
 `/tmp`, and the namespace copy below must not contain your own record twice.
@@ -405,15 +460,29 @@ feature context says where things stood; verify it against the durable
 artifacts on the tracker (see `docs/agents/issue-tracker.md`), in this
 order, and enter the first phase whose artifact is missing:
 
-1. **Spec issue** whose title carries the feature slug. Missing means
-   phase 1. **(connected)** The artifact is instead the **work item** titled
-   `<KEY>: ...`, found by the key (the leading part of `.harness-feature`);
-   missing means Capture has not happened, so this is a fresh feature, and a
-   work item whose `## Specification` section carries no change view link
-   means phase 1.
-2. **Ticket issues** referencing that spec. Missing means phase 3.
-3. **Open tickets** among them. Any open means phase 4; all closed means
+1. **The work item** titled `<KEY>: ...`, found by the key (the leading part
+   of `.harness-feature`). Missing means Capture has not happened, so this is
+   a fresh feature.
+2. **`## Challenge` on it, with a verdict.** Empty means phase 1a. A `parked`
+   label means the change is parked: say so, and continue only if the user
+   un-parks it (remove the label, then carry on from the phase the rest of
+   this list names).
+3. **The feature context's settled decisions and scope boundary.** Missing
+   means phase 1b; present with no build verdict recorded means 1c or 1d,
+   whichever the context names.
+4. **The specification**: a spec issue whose title carries the feature slug,
+   or **(connected)** a `## Specification` section carrying a change view
+   link. Missing means phase 2.
+5. **Ticket issues** referencing it. Missing means phase 3.
+6. **Open tickets** among them. Any open means phase 4; all closed means
    phase 5.
+
+Then **write the phase** for the position you landed in, whatever the record
+says: the record is the one field a crashed session leaves wrong, and a
+resume is the cheapest moment to correct it. A `## Blocked` section in the
+context means the last session stood down; read it before anything else, and
+clear it (the section, and the `blocked` label on the work item) only once
+the block is actually gone.
 
 **(connected)** Then check the feature context for a **strict pause waiting**
 (see "The conflict protocol"): if one is recorded, re-read that proposal
@@ -438,7 +507,40 @@ open, before the phase continues.
 **The card and the pause are the user's decisions**, exempt from phase
 autopilot and from grill autonomy, and never self-answered.
 
-## Phase 1: grill the requirements
+## Phase 1: challenge, shape, assess, decide
+
+Phase 1 is four journey transitions with four artefacts, so a reader can see
+which question has been answered without reading the transcript. Each starts
+by writing its transition's key and ends by writing its state's key
+(`.claude/JOURNEY.md`, "two writes per transition").
+
+### Phase 1a: challenge the why (`challenging`)
+
+Write `phase: challenging`. Then run a **short** `/grilling` on the WHY
+alone: what is wrong or missing today, who feels it, what happens if nothing
+is built, and whether this change is the right answer to that. Not the how,
+and nothing about the design tree. Two or three questions is the usual size.
+This transition exists so a change gets asked "why do you want this?" once,
+in the open, before anyone invests in "what exactly".
+
+If phase 0 loaded an idea issue whose **Decisions so far** already settle
+the why, restate it in one line and put the verdict to the user without
+re-asking.
+
+Post each round (the questions and the answers) as one comment on the work
+item as it lands: the rounds are history the tracker keeps, and they are
+what a reader sees while this transition is in progress.
+
+Then gate: the **worth pursuing** gate, verdicts `pursue`, `drop` or `park`,
+put to the user with `AskUserQuestion`. On `pursue`, rewrite `## Challenge`
+on the work item (the why as it stands now, what the challenge rejected, the
+verdict), apply the `pursue` label, record the verdict in the feature
+context, and write `phase: challenged`. On `park` or `drop`, do what
+`.claude/JOURNEY.md` says under "Gate verdicts" and stop.
+
+### Phase 1b: shape the how (`shaping`)
+
+Write `phase: shaping`.
 
 **Retrieve the specification first, and never snapshot it. (connected)** Load
 the three to six nodes the change's own words reach, not the whole product: a
@@ -515,7 +617,7 @@ This is an interview, not a research task. Facts are yours to find
 If phase 0 loaded an idea issue, grill only the **Not yet specified**
 frontier; the settled decisions are settled.
 
-Phase 1 is done when the grill is **satisfied**, which means all of:
+Phase 1b is done when the grill is **satisfied**, which means all of:
 
 - The frontier is empty: no question left whose prerequisites are
   settled.
@@ -525,15 +627,55 @@ Phase 1 is done when the grill is **satisfied**, which means all of:
   has an ADR under `docs/decisions/`, per `/domain-modeling`.
 - You can state the scope boundary: what this feature does NOT do.
 - **(connected)** Every conflict the grill surfaced has a recorded A/B/C
-  decision.
+  decision. A conflict can surface in any phase; 1c is where the settled
+  decisions are checked as a set.
 
 If you cannot say all of those, you are not done. Keep asking.
 
-Then gate. This gate offers four options, not three: continue to phase 2,
-**go all the way to implement** (phase autopilot, above), stay in phase 1,
-or revise a settled decision.
+Then write `phase: shaped` and gate: continue to phase 1c, stay in 1b, or
+revise a settled decision.
+
+### Phase 1c: assess the impact (`assessing`)
+
+Write `phase: assessing`. The question is "where is the impact?", and the
+answer is three artefacts:
+
+1. **The touched set, in full.** Refresh the declaration with every path the
+   settled decisions now reach and, **(connected)**, one `--node` per
+   implicated node (or the single node `none`). Re-run the overlap report
+   from phase 0 and put what it says in the closing block and, where it
+   found an overlap, under `## Parallel work` in the feature context.
+2. **The settled decisions against the specification. (connected)** For each
+   decision, the nodes it touches in the retrieved block: a decision that
+   contradicts a node's text is a collision, and the conflict card is
+   rendered now (see "The conflict protocol"). A collision with a node
+   retrieval did not reach is still caught by `/to-spec`'s sweep, which reads
+   live.
+3. **Every conflict with a recorded A/B/C decision. (connected)**
+
+Then write `phase: assessed` and gate: continue to phase 1d, or stay.
+
+### Phase 1d: decide (`deciding`)
+
+Write `phase: deciding`, then put the **build it** gate to the user with the
+settled picture in front of them, using `AskUserQuestion`: `build` (continue
+to phase 2), `build` under **phase autopilot** (go all the way to implement,
+see above), `park`, or `drop`. "Stay in phase 1" and "revise a settled
+decision" remain available and send the flow back to 1b.
+
+On `build`: comment the verdict on the work item, record it in the feature
+context, and write `phase: committed`. On `park` or `drop`: do what
+`.claude/JOURNEY.md` says under "Gate verdicts" and stop.
+
+**Phase 1 is done** when `committed` has been written. Under autopilot the
+next three gates are advanced; this one is never skipped, because it is the
+one place the whole settled design is visible in one piece before it becomes
+tickets and code.
 
 ## Phase 2: spec
+
+Write `phase: planning`: the spec and the tickets are one transition on the
+journey, and this is where it starts.
 
 Run `/to-spec`. It synthesizes this conversation, so do NOT re-interview
 the user. It publishes to the tracker and puts the feature slug in the
@@ -558,12 +700,17 @@ issue referencing the spec issue as parent.
 `/to-tickets` quizzes the user on granularity itself. That quiz is part of
 this phase, not a substitute for the gate that follows it.
 
-Record the ticket issue numbers in the feature context.
+Record the ticket issue numbers in the feature context, and write
+`phase: planned`: the tickets with their blocking edges are the `planned`
+artefact, and they now exist.
 
 Then gate. This is the last gate before code gets written, so make it
-explicit that approving means building starts.
+explicit that approving means building starts: it is the journey's **plan
+accepted** gate.
 
 ## Phase 4: implement
+
+Write `phase: building`.
 
 Run `/implement` against the tickets, working the frontier: any ticket
 whose blockers are all closed. Commit per ticket and close each as it
@@ -581,6 +728,17 @@ addressed.
 Universe and writes the three verdict sections into the feature context. A
 `drifted` verdict against current text that no decision explains is a
 conflict: render the card.
+
+Then write `phase: built`, and record in the feature context the full
+check's result and the **code sha** it ran against: the last commit that
+touched anything outside `.harness/`. Commits after it that touch only the
+feature context or a signal file do not move that sha, and the record says
+so, because phase 5 adds exactly such commits before the push and a reader
+comparing the recorded sha to the pushed head must know why they differ.
+That record is half of what `verified` means on the journey
+(`.claude/JOURNEY.md`); the check run on the pushed head is the other half,
+and a repository whose CI runs fewer checks than its `check:` line cannot
+claim more than this record says.
 
 Then gate: show the diff summary, the check result, and the
 `/code-review` findings summary before asking to move to phase 5. Carry
@@ -647,7 +805,10 @@ Refresh the touched set one last time: widen the declaration wherever the
 work reached outside what phase 0 claimed, and leave it alone where it was
 right. It stays a declaration of the branch's scope, never a copy of the
 diff. Then re-run the overlap report from phase 0, because both sides of
-every overlap have moved since, and put what it says in the summary.
+every overlap have moved since, and put what it says in the summary. The
+phase stays `built`: from here the journey is read from GitHub (the check on
+the pushed head, the pull request, the merge, the release), and
+`/to-preprod` deletes the record at the merge.
 
 Summarize: what was built, which files changed, the spec and ticket issue
 numbers, the `/code-review` findings summary, any in-flight feature that
@@ -695,6 +856,18 @@ skill's frontmatter changes, and nothing here fires without that answer.
 Autopilot, if it was granted at the phase 1 gate, ends at this question.
 It advances gates; it never picks an exit.
 
+## Standing down
+
+A phase can hit something it cannot get past: a red check, a conflict card
+or strict pause waiting on the user, a merge conflict this session cannot
+resolve, a question only the author can answer. When that happens and the
+session is going to end without clearing it, follow "Blocked" in
+`.claude/JOURNEY.md`: `## Blocked` in the feature context, the `blocked`
+label on the work item, and one Board ask through `.claude/scripts/board.sh`
+only when a person is what unblocks it. Do NOT rewrite the phase: the record
+keeps naming the transition that was in progress, and its staleness is what
+tells the cockpit the work stopped. Push the context before ending.
+
 ## Quick mode (escape hatch)
 
 Skip phases 1 to 3 and go straight to phase 4 ONLY when the user opts out
@@ -706,6 +879,8 @@ one-line config tweak, a dependency bump) but you may never take it on
 your own. Ask, then wait for the answer. Anything that changes behavior,
 schema, or a public interface is not trivial, whatever its diff size.
 
-In quick mode, still do phases 0 and 5, including the feature context, and
-**(connected)** including Capture, the key and the work item. A change too
-small to specify is still a change, and its key is what `/release` closes.
+In quick mode, still do phases 0 and 5, including the feature context,
+Capture, the key and the work item. A change too small to specify is still a
+change, and its key is what `/release` closes. The record goes from
+`captured` straight to `building`: write both, and let the gap show. A change
+that skipped four states should look like it did.

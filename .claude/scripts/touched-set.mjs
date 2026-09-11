@@ -40,12 +40,51 @@ const SCALARS = [
   "declared_at",
   "updated_at",
   "spec",
+  "phase",
 ];
 const LISTS = ["paths", "nodes"];
 // Every scalar but this one is required. Derived rather than re-listed, so a
 // field added above cannot become optional by omission.
 const OPTIONAL = new Set(["key"]);
 const REQUIRED = SCALARS.filter((field) => !OPTIONAL.has(field));
+
+// The journey, in layout order: a state (a milestone reached, named in the
+// past participle) then the transition leaving it (work in progress, named
+// as an activity). `phase` is the position the feature is at, spelled
+// exactly as the Product Cockpit's lifecycle spells it, so a reader of this
+// record and a binding on that screen agree without a lookup table. A state
+// means its artefact exists; a transition means a session is working on it.
+// The record only ever carries the front half through `built`: from
+// `verified` on, the evidence is a check run, a pull request, a merge or a
+// release, which the cockpit reads from GitHub directly, and `/to-preprod`
+// deletes this record at the merge. The later keys are listed so a record
+// can never be refused for naming a position the journey has, and so the
+// list is the whole journey rather than the half one reader uses.
+export const POSITIONS = [
+  "captured",
+  "challenging",
+  "challenged",
+  "shaping",
+  "shaped",
+  "assessing",
+  "assessed",
+  "deciding",
+  "committed",
+  "planning",
+  "planned",
+  "building",
+  "built",
+  "verifying",
+  "verified",
+  "reviewing",
+  "reviewed",
+  "releasing",
+  "released",
+  "adoption",
+  "used",
+  "evaluating",
+  "evaluated",
+];
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const NODE = /^[a-z][a-z0-9-]*$/;
@@ -163,6 +202,9 @@ function validate(record) {
   }
   if (record.key !== undefined && !KEY.test(record.key)) {
     return `change keys are unpadded, like the fr-N slugs they follow: ${record.key}`;
+  }
+  if (!POSITIONS.includes(record.phase)) {
+    return `phase is not a journey position: ${record.phase}`;
   }
   if (!Array.isArray(record.paths) || record.paths.length === 0) {
     return "paths is missing or empty";
@@ -283,7 +325,7 @@ export function report(mine, others, liveBranches = [], now = Date.now()) {
     }
     const found = overlap(mine, theirs);
     if (found.paths.length > 0 || found.nodes.length > 0) {
-      collisions.push({ slug, branch: theirs.branch, ...found });
+      collisions.push({ slug, branch: theirs.branch, phase: theirs.phase, ...found });
     }
   }
   return { collisions, stale, malformed };
@@ -295,7 +337,7 @@ export function renderReport(result) {
     lines.push("No in-flight feature overlaps this declaration.");
   }
   for (const hit of result.collisions) {
-    lines.push(`${hit.slug} (${hit.branch}) overlaps:`);
+    lines.push(`${hit.slug} (${hit.branch}, at ${hit.phase}) overlaps:`);
     for (const path of hit.paths) lines.push(`  path  ${path}`);
     for (const node of hit.nodes) lines.push(`  node  ${node}`);
   }
@@ -315,12 +357,13 @@ export function renderReport(result) {
 
 const USAGE = `usage: touched-set.mjs <command> [flags]
 
-  render    Compose a record. --slug --branch --author --spec are required;
-            --key, --path (repeatable) and --node (repeatable) are optional.
-            Prints the record on stdout.
+  render    Compose a record. --slug --branch --author --spec --phase are
+            required; --key, --path (repeatable) and --node (repeatable) are
+            optional. Prints the record on stdout.
 
-  refresh   Read a record from --from, add any --path and --node given, and
-            bump updated_at. Prints the record on stdout.
+  refresh   Read a record from --from, add any --path and --node given, move
+            --phase when one is given, and bump updated_at. Prints the record
+            on stdout.
 
   overlap   Read --mine and every *.md in --dir, and print the report.
             --branches-file holds the live branch names, one per line; an
@@ -359,6 +402,7 @@ async function main(argv) {
       declared_at: stamp,
       updated_at: flag["updated-at"] || stamp,
       spec: flag.spec || "none",
+      phase: flag.phase,
       paths: flag.paths,
       nodes: flag.nodes.length > 0 ? flag.nodes : undefined,
     };
@@ -373,7 +417,19 @@ async function main(argv) {
   }
 
   if (command === "refresh") {
-    const read = parseTouchedSet(readFileSync(flag.from, "utf8"));
+    // A record written before the journey position existed has no `phase`
+    // line and cannot be parsed. A refresh that BRINGS a phase is the one
+    // reader allowed to complete such a record, because the alternative is
+    // an in-flight feature that can never be refreshed again after an
+    // upgrade. Any other fault still refuses. The line goes in after `spec`,
+    // which every record has, where `renderTouchedSet` would put it. This
+    // shim has the same lifetime as the optional `key`: one release, until
+    // no record from before the field can be in flight.
+    let text = readFileSync(flag.from, "utf8");
+    if (flag.phase && !/^phase:/m.test(text)) {
+      text = text.replace(/^(spec: .*)$/m, `$1\nphase: ${flag.phase}`);
+    }
+    const read = parseTouchedSet(text);
     if (!read.ok) {
       process.stderr.write(`touched set not refreshed: ${read.reason}\n`);
       return;
@@ -384,8 +440,15 @@ async function main(argv) {
       const nodes = [...new Set([...(record.nodes ?? []), ...flag.nodes])];
       record.nodes = nodes.filter((n) => n !== "none" || nodes.length === 1).sort();
     }
+    if (flag.phase) record.phase = flag.phase;
     record.updated_at = flag["updated-at"] || nowStamp();
-    process.stdout.write(renderTouchedSet(record));
+    const text2 = renderTouchedSet(record);
+    const back = parseTouchedSet(text2);
+    if (!back.ok) {
+      process.stderr.write(`touched set not refreshed: ${back.reason}\n`);
+      return;
+    }
+    process.stdout.write(text2);
     return;
   }
 

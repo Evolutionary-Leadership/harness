@@ -348,6 +348,13 @@ means live means promoted.
 
 ## The change key
 
+**Minted by every `/feature`, connected or not.** The key and the work item
+sit outside the `spec_product` switch, because the work item is where the
+journey's first artefacts live (`.claude/JOURNEY.md`) and a change without a
+key is one the Product Cockpit can see and never place. What the switch
+governs is where the specification goes: proposals under the key when
+connected, a spec issue otherwise.
+
 `<PREFIX>-<n>`. The prefix is `change-prefix:`, a cached copy of an immutable
 fact. The number comes from `counters/change-key` on the `coordination`
 branch, one bare integer, advanced by a sha-guarded write through the contents
@@ -362,9 +369,11 @@ key.
 ## The thin work item
 
 The tracker issue for a change holds the title (`<KEY>: <title>`), the why,
-the key, the Spec Universe change view, a short summary, and the tickets as
-sub-issues. The specification is the proposals under the key, and nothing
-else. `/to-spec` updates it, `/release` closes it, nothing deletes it.
+the challenge (phase 1a's verdict on the why), the key, the Spec Universe
+change view, a short summary, the tickets as sub-issues, and the labels the
+journey's gates apply. The specification is the proposals under the key, and
+nothing else. `/to-spec` updates it, `/release` closes it, nothing deletes it;
+closing it as not planned is a dropped change.
 
 ## The conflict protocol
 

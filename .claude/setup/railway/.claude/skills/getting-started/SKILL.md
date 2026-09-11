@@ -58,7 +58,9 @@ is the index-manifest naming every doc and what it owns.
 fact is undocumented.** It is how you find the one home for a fact instead of
 creating a second copy. `/document` operates on the same manifest. All
 issue-tracker operations go through the contract in
-`docs/agents/issue-tracker.md`.
+`docs/agents/issue-tracker.md`. Where a feature IS on its journey, which
+artefact each position leaves, and when a transition is done live in
+`.claude/JOURNEY.md`; `/feature` writes that position as it moves.
 
 ## Step 2: Know the two reviews apart
 

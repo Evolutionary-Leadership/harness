@@ -143,6 +143,11 @@ mechanism; this is what the file holds and what each key switches.
   verified against the registry once, when the line is written, and never
   again. Reading it live instead would put a registry credential in every
   repository that mints a key, and would fail a Capture on a registry outage.
+  **Unlike the other two, this key is not switched by `spec_product`**: every
+  `/feature` mints a change key and opens a work item, connected or not,
+  because the work item is where the journey's first artefacts live
+  (`.claude/JOURNEY.md`). A repository without a `change-prefix:` line cannot
+  start a feature; `/feature` phase 0 stops and says which line to add.
 - **`gate-mode`**: how the preprod gate treats drift, `evaluate` or `enforce`.
   **An absent key reads `evaluate`**, which is the shipped default and not an
   oversight: a scaffold has no recorded conformance yet, so every baseline
@@ -209,6 +214,14 @@ thinking lands: nowhere, an idea issue, or straight into `/feature`.
 `/feature #<issue>` consumes an idea issue and grills only the remaining
 frontier. All tracker conventions live in `docs/agents/issue-tracker.md`.
 
+Every `/feature` is also a change on the journey the Product Cockpit draws:
+twelve states alternating with eleven transitions, from `captured` to
+`evaluated`. `.claude/JOURNEY.md` is the one home for what each position
+means in harness terms (which skill, which artefact, when a transition is
+ready and done, what blocked means), and `/feature` writes the position it is
+at into the touched-set record as it moves, so a person or the cockpit can see
+where a feature is without inferring it.
+
 ### The feature context
 
 `.harness/feature-context/<feature-slug>.md`, committed on the feature
@@ -238,12 +251,18 @@ staleness is not. Sections:
 - **Autonomy granted**: whether grill autonomy or phase autopilot was used,
   so a reader knows why a phase carries no approvals. It is a record, not a
   setting: a resumed session never re-arms either.
+- **The change**: the change key and its work item, the challenge verdict
+  from phase 1a and the build verdict from phase 1d, each with its reasoning.
+- **Blocked**: present only while a session has stood down on something it
+  could not get past: what blocks, since when, and what would unblock it.
+  Rewritten, never appended; deleted when the block clears, together with the
+  `blocked` label on the work item (`.claude/JOURNEY.md`, "Blocked").
 
 Where the spec loop is connected (`spec_product:` above), the same file also
 carries, and a dormant repository carries none of them:
 
-- **The change**: the change key, its work item, and the Spec Universe change
-  view.
+- **The change view**: the Spec Universe change view, beside the key and the
+  work item every repository records.
 - **Retrieved specification**: the block `/feature` phase 1 wrote, holding the
   three to six nodes the change's own words reached, with the read timestamp,
   the terms and each node's version. It is INTERVIEW CONTEXT and never the
@@ -316,6 +335,7 @@ computes the overlap.
 | `author` | Provenance, the same field a claim carries |
 | `declared_at`, `updated_at` | ISO 8601 UTC. The pair is how stale a declaration is |
 | `spec` | The `spec_product`, or the literal `none` |
+| `phase` | The journey position the feature is at, one of the 23 keys `touched-set.mjs` lists, spelled as the Product Cockpit's lifecycle spells them. A state key means that state's artefact exists; a transition key means a session is working on it. Written at phase 0 as `captured` and at every phase boundary after, twice per transition (`.claude/JOURNEY.md`). The record only ever carries the front half, through `built`: it dies at the merge, and from `verified` on the evidence is on GitHub |
 | `paths` | Repository-relative paths or prefixes. A `**` tail is compared by its literal segments |
 | `nodes` | Specification node slugs, or the single `none`. Only where `spec` names a product |
 
@@ -328,7 +348,13 @@ none`, and a connected change touching no node writes the single node
 
 **The beat is the feature context's beat.** `/feature` phase 0 declares it
 once the branch is named; every refresh of the feature context refreshes it;
-phase 5 reports the overlap again with the diff in hand. Writing on every
+every phase boundary refreshes it with `--phase`; phase 5 reports the overlap
+again with the diff in hand. `updated_at` moving is therefore also the signal
+that a session is working: a reader (the cockpit above all) treats a record
+older than four working hours as no longer in progress, and shows the change
+back at the last state it completed. That fallback is deliberate, and it is
+why there is no `blocked_since` field: a stalled session must not keep
+claiming a transition it is not working on. Writing on every
 push instead would buy a mirror, which is the thing this is not. The reason
 is not the one `feature-branch-checks.yml` gives for rationing context
 pushes: no workflow triggers on `coordination` at all, so a write here costs
@@ -455,6 +481,8 @@ These files are maintained by the harness and replaced on
 | `.claude/scripts/resolve-feature-name.sh` | Resolves the feature name (slug from `.harness-feature`, else session codename); shared by the hooks, scripts, and workflows |
 | `.claude/scripts/set-feature-name.sh` | Names the session's feature: sanitizes a slug, writes `.harness-feature`, commits, and pushes to trigger branch creation |
 | `.claude/SPEC-LOOP.md` | The spec loop: how to connect it, the anchor grammar, the judge, the gate, the claim flow, and which file owns each mechanism. Read it only once `spec_product` is set |
+| `.claude/JOURNEY.md` | The journey: the twelve states and eleven transitions the Product Cockpit draws, what each means in harness terms (skill, artefact, ready, done, how it is seen), the gate verdicts, what blocked means, and the `phase` write recipe. Read from `/feature`, `/continue` and `/to-preprod` |
+| `.claude/scripts/board.sh` | The one Board client for the Product Cockpit: posts the stand-down ask the journey defines (marker `blocked`) and reads the board, with `BOARD_URL` and `BOARD_TOKEN`, failing with the same three exits as `spec-universe.sh`. Never carries a position |
 | `.claude/scripts/coordination.sh` | Reads the `coordination` branch: the claimed ADR numbers, the in-flight touched sets, and the live feature branches. Every read is best-effort and exits 0 |
 | `.claude/scripts/touched-set.mjs` | The touched-set record: composes it, reads it back, and computes the overlap between two in-flight features. Advisory; nothing it returns is an exit code |
 | `.claude/scripts/spec-universe.sh` | The one `/v1` client every skill shares for Spec Universe: reads, proposes, patches, claims and promotes with `SPEC_UNIVERSE_URL` and `SPEC_UNIVERSE_TOKEN`, fails closed with three distinguishable exits, and offers no generic pass-through. Inert while `spec_product` is unset |
