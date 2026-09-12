@@ -56,12 +56,12 @@ frontier query hangs off it, and it is never deleted.
 ### Idea issues (`/brainstorm`)
 
 One issue per brainstorm the user chose to keep. Label: `idea`. The body
-has exactly four sections: **Destination**, **Decisions so far**, **Not
-yet specified**, **Out of scope** (the format is in the `/brainstorm`
-skill). `/feature #<number>` consumes an idea issue: settled decisions are
-honored, and only the "Not yet specified" frontier gets grilled. When a
-feature session picks an idea up, it comments on the issue; close the idea
-issue when the feature that came from it merges.
+has exactly five sections: **Why**, **Destination**, **Decisions so
+far**, **Not yet specified**, **Out of scope** (the format is in the
+`/brainstorm` skill). `/feature #<number>` consumes an idea issue:
+settled decisions are honored, and only the "Not yet specified" frontier
+gets grilled. When a feature session picks an idea up, it comments on the
+issue; close the idea issue when the feature that came from it merges.
 
 ### Spec issues (`/to-spec`, `/feature` phase 2)
 
@@ -79,6 +79,43 @@ first), each linked to the spec issue as a GitHub **sub-issue**, or with
 Blocking edges use native issue dependencies (below). Close each ticket as
 its acceptance criteria land, so the frontier query stays honest and a
 resumed session can tell what is left.
+
+## Every ticket opens with WHY
+
+Every issue this flow files opens with a `## Why`: one or two sentences of
+prose saying what is wrong or missing today. It is the only part of a ticket
+a human writes that nothing else can derive, and it is the first thing a
+reader picking the ticket up three sessions later needs.
+
+```markdown
+Part of #12
+
+## Why
+
+Two devices editing one task currently pick a winner silently and tell nobody.
+
+## Acceptance
+- [ ] a conflict is shown rather than resolved
+- [ ] the loser is recoverable
+```
+
+| Rule | Reason |
+|---|---|
+| One or two sentences, under roughly 240 characters | A reader gets the first sentence that fits; a purpose needing a third is a specification |
+| Say what is WRONG or missing TODAY, not what the ticket does | The title already says what it does. `Dark mode` plus "adds a dark theme" tells a reader nothing they did not have |
+| Never restate the title | Both are drawn, one above the other |
+| Plain prose: no checklist, no table, no code fence, no bare link | Structure is skipped, and a body that is only structure reads as an absence |
+| `Part of #n` and `Blocked by: #n` stay where they are | They are recognised as bookkeeping and skipped wherever they sit |
+| `## Purpose` and `**Why:**` are read the same way | With no such heading the first prose paragraph is used, so a hand-filed ticket still reads sensibly. The heading is what makes it PREDICTABLE |
+
+**Idea issues and spec issues carry it too**, above their own first section.
+What a later session reads first should be why anybody wants the thing, not
+where it is going.
+
+The framing is what changes the output, more than the format:
+
+> Write the Why for somebody with two minutes and no context, who will read
+> it on a board beside forty others.
 
 ## Blocking edges and the frontier
 

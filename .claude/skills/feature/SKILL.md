@@ -217,8 +217,10 @@ works on `claude/` branches and stop.
 ### Read the idea issue, if one was passed
 
 If `$ARGUMENTS` is a `#<number>`, fetch that issue per
-`docs/agents/issue-tracker.md`. It is a brainstorm idea issue with four
-sections: treat **Decisions so far** as settled (do not re-ask them),
+`docs/agents/issue-tracker.md`. It is a brainstorm idea issue with five
+sections: read **Why** first, and carry it into the work item's own `## Why`
+rather than writing a new one; treat **Decisions so far** as settled (do not
+re-ask them),
 **Not yet specified** as the phase 1b frontier, and **Destination** and
 **Out of scope** as the feature description. Comment on the issue that a
 feature session picked it up, and link the issue in the feature context.

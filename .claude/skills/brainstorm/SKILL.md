@@ -66,9 +66,18 @@ Never assume; ask and wait.
 
 For option 2, create one issue per the tracker contract in
 `docs/agents/issue-tracker.md`, with the `idea` label and exactly these
-four sections:
+five sections:
 
 ```
+## Why
+
+One or two sentences of prose: what is wrong or missing today that makes
+this idea worth having. Never a restatement of the title, and never a
+checklist, a table or a bare link. It sits above Destination, because
+Destination is where the idea is going and this is why anybody would. Where
+the project carries `docs/agents/issue-tracker.md`, the fuller convention
+is there.
+
 ## Destination
 
 Where this thinking wants to end up: the outcome, one paragraph.
@@ -90,7 +99,7 @@ What this idea deliberately does not cover.
 ```
 
 A later `/feature #<issue-number>` accepts the idea issue as input, reads
-all four sections, and enters its own flow with the settled decisions
+all five sections, and enters its own flow with the settled decisions
 honored and only the "Not yet specified" frontier left to grill.
 
 For option 3, do the same synthesis but hand it to `/feature` directly in

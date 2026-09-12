@@ -42,6 +42,13 @@ Give each ticket its **blocking edges**: the other tickets that must
 complete before it can start. A ticket with no blockers can start
 immediately.
 
+Give each ticket its **Why**: one or two sentences of prose saying what is
+wrong or missing today. The five checks in step 5 are the bar it has to
+clear. The framing is what changes the output, more than the format:
+
+> Write the Why for somebody with two minutes and no context, who will read
+> it on a board beside forty others.
+
 **Wide refactors are the exception to vertical slicing.** A wide refactor
 is one mechanical change (rename a column, retype a shared symbol) whose
 blast radius fans across the whole codebase, so a single edit breaks
@@ -59,6 +66,7 @@ by every migrate batch.
 Present the proposed breakdown as a numbered list. For each ticket, show:
 
 - **Title**: short descriptive name
+- **Why**: the one or two sentences, exactly as they will be filed
 - **Blocked by**: which other tickets (if any) must complete first
 - **What it delivers**: the end-to-end behaviour this ticket makes work
 
@@ -87,6 +95,11 @@ Use this body template per ticket:
 
 A reference to the spec issue (omit if there is none).
 
+## Why
+
+One or two sentences of prose: what is wrong or missing today. Nothing else
+in this body says it, and nothing downstream can derive it.
+
 ## What to build
 
 The end-to-end behaviour this ticket makes work, from the user's
@@ -105,6 +118,20 @@ perspective, not layer-by-layer implementation.
 
 Avoid specific file paths or code snippets in ticket bodies; they go
 stale fast.
+
+**Self-check every ticket before it is filed.** Run these five against the
+`## Why` of each ticket in turn, before the first issue is created:
+
+1. A `## Why` is present.
+2. It is one or two sentences, under roughly 240 characters.
+3. It says what is WRONG or missing TODAY, not what the ticket does.
+4. It does not restate the title.
+5. It is plain prose: no checklist, no table, no code fence, no bare link.
+
+A ticket that fails any of the five is **rewritten and not filed**. Rewrite
+the Why, check it again, and create the issue once it passes. Fixing it
+before the issue exists is what makes the Why worth anything: the body is
+what every downstream reader reads, and they read it once.
 
 Do NOT close or modify the spec issue itself.
 

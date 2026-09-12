@@ -77,6 +77,14 @@ not swept, so write nothing and say so.
 
 <spec-template>
 
+## Why
+
+One or two sentences of prose: what is wrong or missing today that makes
+this worth specifying. Never a restatement of the title, and never a
+checklist, a table or a bare link. `## Problem Statement` below is the long
+form. Where the project carries `docs/agents/issue-tracker.md`, the fuller
+convention is there.
+
 ## Problem Statement
 
 The problem the user is facing, from the user's perspective.
