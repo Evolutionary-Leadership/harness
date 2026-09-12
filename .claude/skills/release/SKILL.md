@@ -318,6 +318,25 @@ rejects. Run it without `--draft` to read the same material as a report:
 
     node scripts/release-notes-brief.mjs --version <version without the leading v>
 
+**A non-zero exit from `--draft` means it could not write the note.** The
+release changes something a downstream project can act on, but no prose was
+found to write it from, so the file it just wrote carries one
+`RELEASE NOTE UNWRITTEN` line instead of a claim about the release. Do not
+ship it and do not delete the marker on its own: read the report, write the
+note by hand from it, and replace the marker line. Two causes are worth
+checking first, and the report tells you which:
+
+- **`prose read from:` says nothing was found.** The line says which of the
+  two it is. `origin/preprod is not readable here` means the ref is missing
+  or unfetched, so `git fetch origin preprod` and run the brief again; the
+  brief reads the remote-tracking ref and never fetches for you, so a stale
+  one answers as if it were current. `the accumulator is empty locally and
+  on origin/preprod` means no prose exists yet, and the note has to be
+  written from the file list.
+- **`prose read from:` names a ref, but the draft is still a placeholder.**
+  Every bullet was dropped as factory prose. The material is in the report;
+  the bullets it dropped are the ones to rewrite for a downstream reader.
+
 **Then edit what it produced.** The draft is assembled from changelog
 prose written for people who work on the harness, so it will name
 internals and describe changes from the maintainer's side. Rewrite each
