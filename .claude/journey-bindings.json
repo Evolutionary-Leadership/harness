@@ -1,6 +1,6 @@
 {
   "manifest": "harness-journey-bindings",
-  "harness_version": "0.15.0",
+  "harness_version": "0.15.1",
   "journey": ".claude/JOURNEY.md",
   "join": {
     "prefix_source": {
