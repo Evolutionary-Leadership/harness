@@ -1,7 +1,6 @@
 ---
 name: review
 description: Submit a PR for team review (without auto-merge). Use when the user says "submit for review", "create a PR", or invokes /review.
-disable-model-invocation: true
 argument-hint: "[optional: PR title]"
 allowed-tools: Bash(git *), Read, Write, Glob, Grep
 ---
@@ -18,6 +17,17 @@ This is the harness's *process* review: it requests humans. The *code*
 review is `/code-review`, which has normally already run at the end of
 `/feature` phase 4; its findings go into the PR body below so reviewers
 start from them.
+
+## Authority
+
+**A session may complete this skill alone, and should.** It opens a pull
+request and merges nothing: the PR waits for the humans it assigns, and an
+approved one lands later through `/to-preprod`. Asking for review is the one
+act in the flow whose whole purpose is to put a person in the loop, so it needs
+no grant in `.harness-version` and checks for none.
+
+If you have reached this skill legitimately, finish it; do not stop to ask a
+person to open the PR for you (forge decision record 0037).
 
 ## Steps
 

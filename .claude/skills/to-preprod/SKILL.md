@@ -1,7 +1,6 @@
 ---
 name: to-preprod
 description: Merge the current feature branch into preprod, the gate before production. Use when the user says "merge to preprod", "ship it to the gate", or invokes /to-preprod.
-disable-model-invocation: true
 argument-hint: "[optional: PR title]"
 allowed-tools: Bash(git *), Bash(bash .claude/scripts/*), Bash(node scripts/*), Read, Write, Glob, Grep
 ---
@@ -19,6 +18,18 @@ handles PR creation and auto-merge.
 It is also how a `/review` PR lands after humans approve it. The workflow
 reuses the open PR instead of opening a second one, so run `/to-preprod`
 rather than clicking the GitHub merge button.
+
+## Authority
+
+**A session may complete this skill alone, and should.** It reaches no
+production surface: the signal push hands the work to a GitHub Action that
+opens a PR and auto-merges it into `preprod`, which is the branch before
+production and not production. Nothing here needs a grant in
+`.harness-version`, and nothing here checks for one.
+
+A session that did the work is the right thing to file it. If you have reached
+this skill legitimately, finish it; do not stop to ask a person to run it for
+you (forge decision record 0037).
 
 ## The closing block
 

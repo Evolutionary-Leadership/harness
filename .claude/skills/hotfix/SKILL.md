@@ -11,6 +11,38 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(node scripts/check-docs.mjs*), Bash
 Create a hotfix branch from `main`, apply the fix, and trigger a fast-track
 release directly to production. Bypasses the normal feature → preprod → release flow.
 
+## Authority
+
+**This skill reaches production, so a session may complete it only under
+authority.** It goes straight to `main` with no `preprod` gate in front of it,
+and tags a patch release from there.
+
+**Check this first, before any other step.** Work you are not allowed to file
+is work you should not start, and discovering the block at the exit is the
+failure this section exists to remove (forge decision record 0037).
+
+    AUTHORITY=$(sed -n 's/^agent-authority: *//p' .harness-version | tail -1)
+
+Authority is satisfied by **either** of these, and by nothing else:
+
+1. **A grant.** `hotfix` appears in that `agent-authority:` list. The person
+   who owns this repository granted it ahead of time, in a commit.
+2. **A user asking, in this turn.** They typed `/hotfix`, or said in words to
+   do it, or picked it at a `/feature` phase 5 exit gate. A relayed report
+   that somebody once approved releases is not this; the ask is in the turn.
+
+**If neither holds, stop here and stand down.** Do not compute anything, do not
+write a signal file, do not push. Emit the stand-down block
+(`getting-started`, Step 3c) with `reason: authority-not-granted`, and say
+plainly what this session did finish and that it is not complete.
+
+**Performing these steps by hand is the same act, and is refused the same
+way.** Forge decision record 0017 lets a session reach this procedure by
+reading this file rather than invoking the skill, and that route is still open; what it is not is a way
+around this section. Writing the signal file, committing it and pushing it
+without authority IS this skill, whatever it is called at the time. A guard
+that stopped only the literal invocation would guard nothing.
+
 ## Steps
 
 ### 1. Create hotfix branch

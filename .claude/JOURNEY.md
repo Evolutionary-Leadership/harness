@@ -300,6 +300,13 @@ STANDS DOWN, and standing down has four parts, in this order:
    standing down is a fact, and the record's staleness already carries how long
    it has lasted.
 
+Those four are the RECORD. The fifth part is the REPLY: emit the stand-down
+block defined in `.claude/skills/getting-started/SKILL.md`, Step 3c, so the
+session says it in the one shape every skill uses, and never reports the work
+complete in a reply that carries it. The record is what the cockpit reads
+later; the block is what the person reading this session sees now, and the two
+failures in issue #277 were both in the second (forge decision record 0037).
+
 The phase is NOT rewritten. The record keeps saying which transition was in
 progress, and its `updated_at` stops moving; after the recency window the
 cockpit shows the change back at the last state it completed, waiting.

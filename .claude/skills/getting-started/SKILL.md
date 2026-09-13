@@ -156,6 +156,49 @@ letter, in the order the session reaches stages, starting at Q and wrapping
 from Z back to A. The prefix never resets mid-session. Explain each shift in
 one brief sentence, so a jump from Q17 to R1 does not read as a mistake.
 
+## Step 3c: Stand down in one shape, and never call it done
+
+Some things a session is not allowed or not able to finish: an exit whose
+authority this repository has not granted, a capability the sandbox does not
+have, a decision only a person can make. That is a normal outcome, not an
+error, and it has exactly one shape so that a coordinator reading six sessions
+sees one pattern instead of six phrasings.
+
+When a session cannot finish what it was asked to do, it emits a **stand-down
+block**, verbatim, fences included, directly above the closing block:
+
+```
+=== HARNESS BLOCKED ===
+skill: <the skill or step that cannot be completed>
+reason: <authority-not-granted | capability-missing | needs-decision>
+done: <what this session did finish, stated so a reader can check it>
+not-done: <what remains, named as an act someone can perform>
+unblock: <the smallest thing that would let a session finish it>
+=== END HARNESS BLOCKED ===
+```
+
+The rules, and the first one is the reason the block exists:
+
+- **A reply carrying this block MUST NOT report the work as complete.** Not
+  "done, pending merge", not "finished, just needs a human". The work is not
+  complete; say what is and what is not, in `done:` and `not-done:`. A stall
+  that reads as success is worse than a stall, because nothing downstream can
+  tell the two apart.
+- **`reason:` takes one of the three words and no others.** They are what a
+  coordinator routes on: `authority-not-granted` means a person or a grant
+  would clear it, `capability-missing` means this environment cannot do it at
+  all, `needs-decision` means someone must choose before anyone can act.
+- **One block per reply, and only at the moment of standing down.** A session
+  that clears its own block never emitted one.
+- **The block reports; it does not ask.** Where the flow also keeps a record
+  (`/feature` writes `## Blocked` in the feature context, labels the work item,
+  and reports to the cockpit), that record is kept as `.claude/JOURNEY.md`
+  prescribes. This block is how the same fact reaches the reply.
+
+`unblock:` is a lever, never a plea. "The owner adds `agent-authority: release`
+to `.harness-version`, or a person runs `/release`" is a lever. "Please let me
+know how to proceed" is not, and it is what six stalled sessions said.
+
 ## Step 4: Act
 
 Run `bash .claude/scripts/list-skills.sh` RIGHT NOW, then proceed with

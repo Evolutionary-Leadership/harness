@@ -101,6 +101,7 @@ reviewers: teammate1, teammate2
 spec_product: myproduct
 change-prefix: MYPR
 gate-mode: evaluate
+agent-authority: release
 ```
 
 - **`harness`**: variant identifier, written by `/setup` on first run
@@ -120,6 +121,14 @@ gate-mode: evaluate
   and to-preprod polls the run's conclusion on the PR head, merging only on
   success. The check chain must finish within the gate's 12-minute budget.
 - **`reviewers`**: Default reviewers assigned when using `/review`.
+- **`agent-authority`**: the production-reaching skills a session may complete
+  without a person present, space or comma separated. Absent or empty grants
+  none, which is the default. Only `release`, `hotfix` and `rollback` are
+  gated, so only those three mean anything here; `/to-preprod` and `/review`
+  reach no production surface and are always available to a session. This key
+  is project-owned and an upgrade never rewrites it: the grant is the owner's,
+  and it is a commit, so it is reviewable and revertible like any other. See
+  "What a session can finish alone" below, and forge decision record 0037.
 
 ### The registry keys and the spec loop's keys
 
@@ -442,6 +451,66 @@ is the thing that drifts.
 `/feature` phase 5 always asks which exit the user wants, suggesting
 `/review` when `.harness-version` configures `reviewers:` and `/to-preprod`
 otherwise.
+
+### What a session can finish alone
+
+An autonomous session must know, before it starts, whether it will be allowed
+to file the work it is about to do. A session that builds for an hour and then
+discovers it cannot merge has wasted the hour and, worse, tends to report
+itself finished. The rule is one axis: **does this act reach production?**
+
+| Skill | A session alone | Why |
+|---|---|---|
+| `/to-preprod` | **Yes, always** | Auto-merged PR into `preprod`. `preprod` is the branch before production, not production |
+| `/review` | **Yes, always** | Opens a PR and merges nothing; its whole purpose is to put people in the loop |
+| `/feature`, `/brainstorm`, `/chat`, `/continue`, and the technique skills | **Yes** | They build, think and record. None of them ships |
+| `/release` | **Only under a grant** | Ships everything queued on `preprod` to `main`, tags it, publishes a Release |
+| `/hotfix` | **Only under a grant** | Straight to `main`, no `preprod` gate in front of it |
+| `/rollback` | **Only under a grant** | Moves production back, undoing work somebody shipped deliberately |
+
+The grant is one line in `.harness-version`, and it is the owner's to write:
+
+```yaml
+agent-authority: release rollback
+```
+
+Two things satisfy a gated skill's authority and nothing else does: that grant,
+or a user asking for the skill in the turn. A session cannot assert its own
+authority, which is why there is no `--autonomous` flag anywhere.
+
+**The gate binds the act, not the command.** A session may reach a skill's
+procedure by reading its `SKILL.md` and following the steps (forge decision
+record 0017), and
+that route stays open. What it is not is a way around the gate: writing a
+release's signal file, committing it and pushing it without authority is a
+release, whatever it is called while it happens. A guard that stopped only the
+literal `/release` would guard nothing.
+
+**A blocked session says so in one shape and never claims success.** The
+stand-down block is defined in `.claude/skills/getting-started/SKILL.md` under
+Step 3c, which every session is made to read at start. It names what was
+finished, what was not, and the smallest thing that would unblock it. The rule
+that matters most: a reply carrying that block must not describe the work as
+complete. Six sessions once stalled at their exits in six different phrasings
+and two of them reported success while their work sat unmerged; the fixed shape
+exists so a coordinator can tell the difference at a glance.
+
+#### What a session cannot do at all
+
+Distinct from authority, and not fixable by a grant. These are environment
+limits, so a session should name them rather than retry:
+
+- **Delete a remote branch.** The harness git proxy accepts pushes only to the
+  session's own `claude/<name>` ref, and there is no GitHub MCP tool for
+  deleting a branch, so `git push origin --delete` returns 403 in the sandbox.
+  One case is already automated: `/release` writes a `cleanup-branch:` key into
+  `.release-description.md` and `release.yml` deletes that `claude/` branch
+  server-side with the harness PAT. Everything else is human work, most often a
+  `feature/<name>` branch left behind when a release bypassed the feature-branch
+  chain. A session that hits this reports it with `reason: capability-missing`
+  and names the branch; it does not treat the failed delete as done.
+- **Push to `preprod` or `main` with `git`.** Same proxy rule. `/release` uses
+  `mcp__github__push_files`, which goes through api.github.com instead.
 
 ### The variants differ only in the Railway steps
 

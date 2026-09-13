@@ -11,6 +11,38 @@ allowed-tools: Bash(git *), Bash(gh *), Read, Write, Glob, Grep
 Revert `main` to a previous release tag when the current production deploy is
 broken. Creates a tracking issue for the incident.
 
+## Authority
+
+**This skill reaches production, so a session may complete it only under
+authority.** It moves production back to an earlier release tag, which is a
+deploy like any other and undoes work somebody shipped deliberately.
+
+**Check this first, before any other step.** Work you are not allowed to file
+is work you should not start, and discovering the block at the exit is the
+failure this section exists to remove (forge decision record 0037).
+
+    AUTHORITY=$(sed -n 's/^agent-authority: *//p' .harness-version | tail -1)
+
+Authority is satisfied by **either** of these, and by nothing else:
+
+1. **A grant.** `rollback` appears in that `agent-authority:` list. The person
+   who owns this repository granted it ahead of time, in a commit.
+2. **A user asking, in this turn.** They typed `/rollback`, or said in words to
+   do it, or picked it at a `/feature` phase 5 exit gate. A relayed report
+   that somebody once approved releases is not this; the ask is in the turn.
+
+**If neither holds, stop here and stand down.** Do not compute anything, do not
+write a signal file, do not push. Emit the stand-down block
+(`getting-started`, Step 3c) with `reason: authority-not-granted`, and say
+plainly what this session did finish and that it is not complete.
+
+**Performing these steps by hand is the same act, and is refused the same
+way.** Forge decision record 0017 lets a session reach this procedure by
+reading this file rather than invoking the skill, and that route is still open; what it is not is a way
+around this section. Writing the signal file, committing it and pushing it
+without authority IS this skill, whatever it is called at the time. A guard
+that stopped only the literal invocation would guard nothing.
+
 ## Steps
 
 ### 1. Identify the target version

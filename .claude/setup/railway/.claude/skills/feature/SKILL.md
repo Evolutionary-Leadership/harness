@@ -233,6 +233,22 @@ BRANCH=$(git branch --show-current)
 If the branch does NOT start with `claude/`, tell the user this skill only
 works on `claude/` branches and stop.
 
+### Know which exit this session can reach, before it builds anything
+
+Read the authority this repository grants, now, at phase 0:
+
+    AUTHORITY=$(sed -n 's/^agent-authority: *//p' .harness-version | tail -1)
+
+`/to-preprod` and `/review` need no grant and are always reachable.
+`/release` is reachable only if `release` appears in that list, or the user
+asks for it at the phase 5 gate (forge decision record 0037).
+
+**Say so in phase 0's closing block, in one line**, naming the exits this
+session will be able to take. A caller who learns at phase 5 that the session
+cannot file its own work has been told five phases too late, and that is the
+failure this line exists to prevent. Record the same line in the feature
+context under `Exit route`, as "reachable exits" until one is chosen.
+
 ### Read the idea issue, if one was passed
 
 If `$ARGUMENTS` is a `#<number>`, fetch that issue per
@@ -945,12 +961,26 @@ in order, to the end**, trigger push included:
 | `/review` | `.claude/skills/review/SKILL.md` |
 | `/release` | `.claude/skills/release/SKILL.md` |
 
-These are user-invoked skills, so the Skill tool will not fire them and
-you must not try. A `SKILL.md` is a file; read it and do what it says.
-This is deliberate:
-`disable-model-invocation` exists to stop an unprompted auto-fire, and the
-user's answer at this gate is the authorization it was waiting for. No
-skill's frontmatter changes, and nothing here fires without that answer.
+Follow the file rather than invoking the skill: reading a `SKILL.md` and
+working its steps is the established route (forge decision record 0017), and it
+is what the
+overlay checker resolves this table against. `/to-preprod` and `/review` carry
+no `disable-model-invocation` any more and would also fire through the Skill
+tool; either way is fine for those two.
+
+**The authorization is the user's answer at this gate**, and for `/release` it
+is one of the two things its own `## Authority` section accepts. Read that
+section before following the file: if this repository has granted no
+`agent-authority: release` AND no user picked `/release` here, the exit is not
+available and performing its steps by hand would be the same forbidden act
+(forge decision record 0037).
+
+**Do not stall at this gate.** If you cannot obtain an answer because no person
+is reading (an unattended session), take the exit the repository's authority
+already permits: `/to-preprod` needs no grant, so a session that has work worth
+filing files it rather than stopping. Stand down (`getting-started`, Step 3c)
+only for an exit you genuinely may not take, and never report the feature
+complete while its work sits unmerged on a `claude/` branch.
 
 Autopilot, if it was granted at the phase 1 gate, ends at this question.
 It advances gates; it never picks an exit.
@@ -966,6 +996,13 @@ label on the work item, and one Board ask through `.claude/scripts/cockpit.sh`
 only when a person is what unblocks it. Do NOT rewrite the phase: the record
 keeps naming the transition that was in progress, and its staleness is what
 tells the cockpit the work stopped. Push the context before ending.
+
+**Then say it in the reply, in the one shape.** The four steps above are the
+*record*; the stand-down block (`getting-started`, Step 3c) is how the same
+fact reaches the person or coordinator reading this session. Emit it, and do
+not describe the feature as complete in a reply that carries it. A feature
+whose work sits unmerged on a `claude/` branch is not complete, however much
+of it was built.
 
 ## Quick mode (escape hatch)
 
