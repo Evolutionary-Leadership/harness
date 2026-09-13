@@ -55,6 +55,25 @@ Before going further, confirm the fixed point resolves
 (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or an
 empty diff should fail here, not inside two parallel sub-agents.
 
+Then **report the start**. A review is minutes of parallel sub-agents with
+nothing visible happening, and it is one of the eight seams in
+`.claude/JOURNEY.md` ("Reporting activity"), which owns the voice and the
+rules. Bind the ref once here, so the two halves of the pair cannot disagree,
+and pair against the sha reviewed so a re-review after a fix is a new
+operation rather than a suppressed duplicate:
+
+    REF="$KEY:review@$(git rev-parse --short HEAD)"
+    bash .claude/scripts/cockpit.sh report building "running the code review" \
+      --key="$KEY" --ref="$REF"
+
+The seam lives here and not in the caller because BOTH callers reach this
+step: `/feature` phase 4 runs this skill directly, and `/implement`'s
+Finishing runs it too. A recipe kept in either one would be skipped by the
+other. Run standalone there is no `$KEY`; pass no `--key` and the report is
+scoped to the repository, which is honest where a made-up key would not be.
+A report can never stop a review: it exits 0 whatever happens, and says
+nothing at all when no cockpit is configured.
+
 ### 2. Identify the spec source **(dormant)**
 
 Look for the originating spec, in this order:
@@ -264,6 +283,16 @@ A tier-2 pass is skipped only when tier 1 returned no `drifted` and no
 Present the two reports under `## Standards` and `## Spec` headings,
 verbatim or lightly cleaned. Do **not** merge or rerank findings; the two
 axes are deliberately separate (see below).
+
+**Close the pair from step 1** as the aggregate goes out, naming what came
+back:
+
+    bash .claude/scripts/cockpit.sh report building "code review done: <n> findings" \
+      --key="$KEY" --completes="$REF"
+
+A review that found nothing completes it too ("code review done: no
+findings"). Leaving it open would claim the review is still running, and the
+whole point of a pair is that an unfinished one means a session that died.
 
 **(dormant)** End with a one-line summary: total findings per axis, and the
 worst issue *within each axis* (if any). Do not pick a single winner across

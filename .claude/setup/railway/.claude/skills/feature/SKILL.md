@@ -90,6 +90,25 @@ Rules for a gate:
   to phase 1b for that branch of the tree rather than guessing.
 - At every gate, refresh the feature-context file and push (see "The
   feature context" below).
+- **Report the gate at both ends.** A gate is the longest deliberate wait in
+  the flow, and from outside it looks exactly like a session that stopped.
+  This is one of the eight seams in `.claude/JOURNEY.md` ("Reporting
+  activity"), which owns the voice and the rules. As the question goes out:
+
+      REF="$KEY:gate-<n>"
+      bash .claude/scripts/cockpit.sh report <position> "waiting at the phase <n> gate: <what is being approved>" \
+        --key="$KEY" --ref="$REF"
+
+  and as the answer lands, naming the verdict in its own words:
+
+      bash .claude/scripts/cockpit.sh report <position> "gate answered: <verdict>" \
+        --key="$KEY" --completes="$REF"
+
+  `<n>` is this phase's own label (`1a`, `1b`, `1c`, `1d`, `2`, `3`, `4`, `5`)
+  and not the position, because the phase 4 and phase 5 gates are both put at
+  `built` and a ref has to tell them apart. **Under autopilot both halves
+  still go out**, back to back: the verdict is yours instead of the user's,
+  and a reader watching the stream should see the same trail either way.
 
 ### Phase autopilot
 
@@ -258,6 +277,60 @@ already has a key.
 safe to copy only because a prefix is immutable), and `n` the next number
 from the counter `counters/change-key` on the `coordination` branch.
 
+#### Verify the prefix against the registry, before the mint
+
+The prefix was verified once, when the line was written. This is the one
+place it is checked again, because this is the last moment before a key is
+minted under it, and a key minted under a wrong prefix collides with the
+registry's forever.
+
+    PREFIX=$(sed -n 's/^change-prefix: *//p' .harness-version | tail -1)
+    SYSTEM_KEY=$(sed -n 's/^system-key: *//p' .harness-version | tail -1)
+
+**With `REGISTRY_URL` or `REGISTRY_TOKEN` unset, check nothing and say
+nothing.** Trust the line and mint, exactly as before this check existed. A
+repository with no registry is a normal repository, not a degraded one, and
+a session that announced a skipped check every time would teach the user to
+skip the one time it fires.
+
+With both set:
+
+    bash .claude/scripts/registry.sh prefix "$PREFIX"
+
+| Exit | Meaning | Do |
+|---|---|---|
+| 0 | The prefix resolves | Compare the system, below |
+| 1 | **No system has this prefix** | **Stop. Do not mint.** |
+| 2 | The prefix is a shape no key could be built from | **Stop. Do not mint.** |
+| 3, 4, 5 | Unset or blank variable, refused token, unreachable | One line naming which, then mint |
+
+**Only exits 1 and 2, and a system mismatch, refuse to start.** They are the
+only outcomes that say something true about the prefix. Three, four and five
+say only that this session could not look, and a registry outage must never
+stop a Capture: the prefix is a cached immutable fact, and an outage does not
+make it less true. Say which of the three happened, in one line, and carry on.
+
+On exit 0, read the system out of the JSON on stdout and compare it with
+`SYSTEM_KEY`:
+
+- **`SYSTEM_KEY` is empty**: mint. Put one line in the closing block naming
+  the system the prefix resolved to, and offer the line that would make this
+  check exact from now on: `system-key: <the permanent key>` in
+  `.harness-version`. **Offer it; never write it.** The user is the one who
+  knows this is their system, and a session that recorded whatever came back
+  would be asserting the very thing the check exists to test.
+- **`SYSTEM_KEY` matches the system's permanent key**: mint. Say nothing; a
+  check that passed is not news.
+- **`SYSTEM_KEY` names a different system**: **stop, and do not mint.** Say
+  which system is recorded, which one the prefix resolves to now, and that
+  one of the two lines in `.harness-version` is wrong. Do not guess which.
+
+**Refusing is the point.** This is the one way `/feature` can decline to
+start on something other than a missing line, and it is deliberate: a
+session that waits costs an hour, and a key minted under another system's
+prefix is in the registry's namespace forever, under a change that is not
+theirs. Say what is wrong, say the two lines to check, and stop.
+
 **Keys are unpadded, only.** `MYPR-1`, never `MYPR-0001`. Refuse a padded key
 wherever one is offered (an argument, an idea issue, a branch name), naming
 the rule: "Change keys are unpadded, like the `fr-N` slugs they follow." It
@@ -328,6 +401,21 @@ below carries `phase: captured` for that reason, from its first write.
 
 Comment on an idea issue, if one was passed, that a feature session picked it
 up under `<KEY>`, and link both in the feature context.
+
+#### Ring the cockpit
+
+The change now exists where a reader can see it, so tell the cockpit to look,
+once, in one line:
+
+    bash .claude/scripts/cockpit.sh ping --key="$KEY"
+
+The ping says WHERE to look and never what will be found: the key scopes the
+refetch to this change, and the fact stays on the tracker and in the record.
+It is the doorbell on a cockpit that polls anyway, so it can never be the
+reason a Capture stops. `ping` exits 0 whatever happens, prints nothing at all
+when no cockpit is configured, and one line when one is configured and the
+ring did not land. Read that line, say it in the closing block if there is
+one, and carry on. Do not retry it, and do not ask the user about it.
 
 ### Name the feature
 
@@ -426,6 +514,15 @@ branch with `mcp__github__create_or_update_file`. Pass the `sha`, read with
 already exists, which a resumed session's does: this is an update by the
 file's one writer, and the deliberate opposite of the ADR claim in
 `/document`, where omitting the sha IS the reservation.
+
+Then **ring the cockpit**, for the same reason and with the same
+fail-softness as at Capture:
+
+    bash .claude/scripts/cockpit.sh ping --key="$KEY"
+
+This ring is written out here because phase 0's write is a `render`, not the
+refresh recipe, so it is the one record write that does not inherit the ring
+from `.claude/JOURNEY.md`. Every later one does.
 
 **Read the namespace and report:**
 
@@ -865,7 +962,7 @@ or strict pause waiting on the user, a merge conflict this session cannot
 resolve, a question only the author can answer. When that happens and the
 session is going to end without clearing it, follow "Blocked" in
 `.claude/JOURNEY.md`: `## Blocked` in the feature context, the `blocked`
-label on the work item, and one Board ask through `.claude/scripts/board.sh`
+label on the work item, and one Board ask through `.claude/scripts/cockpit.sh`
 only when a person is what unblocks it. Do NOT rewrite the phase: the record
 keeps naming the transition that was in progress, and its staleness is what
 tells the cockpit the work stopped. Push the context before ending.

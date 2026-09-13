@@ -44,6 +44,39 @@ the frontier and ask the next round. A question whose answer depends on
 another question still open in this round belongs to a *later* round, not
 this one.
 
+## Report the round at both ends
+
+A round is the harness's most common wait, and from the outside a session
+waiting on a person is indistinguishable from one that died. So the round loop
+reports, and this is one of the eight seams in `.claude/JOURNEY.md`
+("Reporting activity"), which owns the voice and the rules.
+
+As the round goes out, binding the ref once so the two halves of the pair
+cannot disagree:
+
+    REF="$KEY:<position>:round-<first question number>"
+    bash .claude/scripts/cockpit.sh report <position> "asked round <n>: <what it is about>" \
+      --key="$KEY" --ref="$REF"
+
+As the answers land, before the frontier is recomputed:
+
+    bash .claude/scripts/cockpit.sh report <position> "round <n> answered" \
+      --key="$KEY" --completes="$REF"
+
+The pair is what makes "waiting on a person, for eleven minutes" derivable at
+all. Inside `/feature`, `$KEY` and `<position>` are the ones that phase is at:
+`challenging` in 1a, `shaping` in 1b. A grill running on its own has neither;
+pass no `--key` and name the position the work is at, and the report is scoped
+to the repository, which is honest where a made-up key would not be.
+
+**Autonomy changes who answers, never whether the pair is reported.** An
+auto-answered round is still a round, and a stream that went quiet for the
+whole of an autonomous grill would read to a watcher as a stall.
+
+**A report can never stop a grill.** It exits 0 whatever happens, and says
+nothing at all when no cockpit is configured. Read any line it prints, carry
+it into the closing block, and carry on.
+
 ## Numbering
 
 **Numbers run continuously across the rounds of one grill.** A round that

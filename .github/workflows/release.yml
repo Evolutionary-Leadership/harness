@@ -310,7 +310,7 @@ jobs:
             echo "::warning::Could not stamp the CHANGELOG accumulator for ${NEW_VERSION}."
           fi
 
-          # --- VERSION, and the two stamps that must move with it ---
+          # --- VERSION, and the stamps that must move with it ---
           echo "$NEW_VERSION" > VERSION
           if [ -f "templates/harness/base/.harness-version" ]; then
             # The stamp the template carries downstream.
@@ -327,6 +327,32 @@ jobs:
             if [ -f ".harness-version" ]; then
               sed -i "s/^version: .*/version: ${NEW_VERSION}/" ".harness-version"
             fi
+
+            # The journey binding manifest says which harness vocabulary it
+            # speaks, so a cockpit applying it can name a mismatch instead of
+            # placing nothing at three positions and leaving the operator to
+            # guess why. Both copies move together: they are one managed file,
+            # and the dogfood gate compares them byte for byte, so stamping
+            # the cell alone would fail the next merge rather than this run.
+            #
+            # Parsed rather than sed-ed, unlike the two line-oriented stamps
+            # above: a regex over JSON depends on the exact spacing it was
+            # written with, so a reformat would make it a silent no-op with a
+            # zero exit. This edits the one top-level key and rewrites the file
+            # from the parse, which is byte-identical to what the repo carries
+            # and loud when the file is not valid JSON.
+            node -e '
+              const fs = require("fs");
+              const [version, ...paths] = process.argv.slice(1);
+              for (const path of paths) {
+                if (!fs.existsSync(path)) continue;
+                const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+                manifest.harness_version = version;
+                fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+              }
+            ' "$NEW_VERSION" \
+              "templates/harness/base/claude/journey-bindings.json" \
+              ".claude/journey-bindings.json"
           fi
 
 
@@ -359,14 +385,17 @@ jobs:
           # step declaring `shell: bash`, or a repo setting defaults.run.shell)
           # that aborts the step before the commit below, failing every release
           # in the normal case where nothing leaked.
-          LEAKED=$(git diff --cached --name-only -- ':!.release-description.md' ':!VERSION' ':!CHANGELOG.md' ':!migrations' ':!templates' ':!.harness-version' | tr '\n' ' ')
+          LEAKED=$(git diff --cached --name-only -- ':!.release-description.md' ':!VERSION' ':!CHANGELOG.md' ':!migrations' ':!templates' ':!.harness-version' ':!.claude/journey-bindings.json' | tr '\n' ' ')
           [ -z "$LEAKED" ] || echo "::warning::Signal files reached preprod and were removed before the release: $LEAKED"
           # .harness-version is staged here or the stamp above never lands: the
           # step writes the file but this is the commit. It is excluded above
           # for the same reason the others are, so a reordering that stages it
-          # earlier does not report the release's own work as a leak.
+          # earlier does not report the release's own work as a leak. The
+          # dogfooded binding manifest is the same case: the cell's copy rides
+          # in under templates/, and this one would be written and thrown away.
           git add VERSION CHANGELOG.md migrations/ templates/ 2>/dev/null || true
           git add .harness-version 2>/dev/null || true
+          git add .claude/journey-bindings.json 2>/dev/null || true
           git commit -m "chore: remove release signal file"
 
           for i in 1 2 3; do

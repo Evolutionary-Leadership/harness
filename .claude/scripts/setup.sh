@@ -24,7 +24,8 @@
 #       dispatched the workflows through the GitHub MCP server.
 #
 #   setup.sh apply --railway yes|no --foundation yes|no --mcp yes|no \
-#                  [--workspace <id>] [--first-time yes|no]
+#                  [--workspace <id>] [--first-time yes|no] \
+#                  [--change-prefix <PREFIX>] [--system-key <KEY>]
 #       Applies the chosen configuration: quarantine copies, the one
 #       package.json name substitution, the .harness-version rewrite,
 #       the self-delete (this script included), the provisioning
@@ -249,6 +250,14 @@ guard_classify() {
     status_add "inferred-foundation" "$inferred_foundation"
     status_add "inferred-mcp" "$inferred_mcp"
     status_add "variant-line-rewritten" "$variant_rewritten"
+    # The identity lines are inferred the same way the answers are, so an
+    # interrupted apply that already wrote them is not asked for them again.
+    # "none" means the rerun still needs --change-prefix, or that this
+    # repository has no registry entry yet and is finishing without one.
+    status_add "inferred-change-prefix" \
+      "$(sed -n 's/^change-prefix: *//p' .harness-version 2>/dev/null | tail -1 | grep . || echo none)"
+    status_add "inferred-system-key" \
+      "$(sed -n 's/^system-key: *//p' .harness-version 2>/dev/null | tail -1 | grep . || echo none)"
     status_add "detail" "a previous /setup was interrupted mid-apply; infer the answers above, do not re-ask them, and rerun apply with those answers (apply is idempotent)"
     return 0
   fi
@@ -535,6 +544,7 @@ substitute_package_name() {
 cmd_apply() {
   PHASE="apply"
   local RAILWAY="" FOUNDATION="" MCP="" WORKSPACE_ID="" FIRST_TIME="unset"
+  local CHANGE_PREFIX="" SYSTEM_KEY=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --railway) need_value --railway $#; RAILWAY="$2"; shift 2 ;;
@@ -542,9 +552,32 @@ cmd_apply() {
       --mcp) need_value --mcp $#; MCP="$2"; shift 2 ;;
       --workspace) need_value --workspace $#; WORKSPACE_ID="$2"; shift 2 ;;
       --first-time) need_value --first-time $#; FIRST_TIME="$2"; shift 2 ;;
+      --change-prefix) need_value --change-prefix $#; CHANGE_PREFIX="$2"; shift 2 ;;
+      --system-key) need_value --system-key $#; SYSTEM_KEY="$2"; shift 2 ;;
       *) status_add "detail" "unknown argument: $1"; finish "invalid-arguments" 1 ;;
     esac
   done
+  # Both identity flags are optional, and a repository whose system is not in
+  # the registry yet passes neither: it is then configured exactly as before
+  # this flag existed, and /feature stops at Capture with the line to add. The
+  # shape check is the one registry.sh applies, for the same reason: a change
+  # key is <PREFIX>-<n>, so a prefix carrying a hyphen would make the key
+  # ambiguous about where the prefix ends.
+  case "$CHANGE_PREFIX" in
+    "") ;;
+    *-* | *[[:space:]]* | */*)
+      status_add "detail" "--change-prefix carries a hyphen, whitespace or a slash, so <PREFIX>-<n> would be ambiguous: $CHANGE_PREFIX"
+      finish "invalid-arguments" 1 ;;
+  esac
+  if [ -n "$SYSTEM_KEY" ] && [ -z "$CHANGE_PREFIX" ]; then
+    status_add "detail" "--system-key without --change-prefix: the key records which system the prefix resolved to, so it is meaningless without one"
+    finish "invalid-arguments" 1
+  fi
+  case "$SYSTEM_KEY" in
+    *[[:space:]]*)
+      status_add "detail" "--system-key carries whitespace: $SYSTEM_KEY"
+      finish "invalid-arguments" 1 ;;
+  esac
   local flag
   for flag in "$RAILWAY" "$FOUNDATION" "$MCP"; do
     case "$flag" in yes|no) ;; *)
@@ -626,8 +659,31 @@ cmd_apply() {
     if [ "$FOUNDATION" = yes ] && ! grep -q '^check:' .harness-version; then
       printf 'check: pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm check:docs\n' >> .harness-version
     fi
+    # The repository's identity in the System Registry. change-prefix is what
+    # every change key of this repository carries, cached here because it is
+    # immutable and because reading it live would put a registry credential in
+    # every repository that mints a key. system-key is the system that prefix
+    # resolved to when the skill verified it, recorded so a later /feature can
+    # tell "still the same system" from "someone changed the prefix line".
+    # Each line is guarded on its own, so a rerun that already wrote one and
+    # not the other finishes the pair instead of skipping it.
+    if [ -n "$CHANGE_PREFIX" ] && ! grep -q '^change-prefix:' .harness-version; then
+      printf 'change-prefix: %s\n' "$CHANGE_PREFIX" >> .harness-version
+    fi
+    if [ -n "$SYSTEM_KEY" ] && ! grep -q '^system-key:' .harness-version; then
+      printf 'system-key: %s\n' "$SYSTEM_KEY" >> .harness-version
+    fi
   fi
   status_add "variant" "$variant"
+  # Read the two identity lines back out of the file rather than echoing the
+  # flags. The skill's hand-off says "recorded" from these lines, and a rerun
+  # whose file already carried a different prefix keeps the one on disk: the
+  # status must name what a reader of .harness-version will find, not what
+  # this invocation was asked for.
+  status_add "change-prefix" \
+    "$(sed -n 's/^change-prefix: *//p' .harness-version 2>/dev/null | tail -1 | grep . || echo none)"
+  status_add "system-key" \
+    "$(sed -n 's/^system-key: *//p' .harness-version 2>/dev/null | tail -1 | grep . || echo none)"
 
   # Self-delete: the quarantine, the skill, the plain path's preflight
   # workflow, and this script itself. The skill's presence is the
@@ -774,7 +830,7 @@ case "${1:-}" in
   apply) shift; cmd_apply "$@" ;;
   *)
     PHASE="none"
-    status_add "detail" "usage: setup.sh guard | prepare [--railway yes|no|unknown] [--poll-only] | apply --railway yes|no --foundation yes|no --mcp yes|no [--workspace <id>] [--first-time yes|no]"
+    status_add "detail" "usage: setup.sh guard | prepare [--railway yes|no|unknown] [--poll-only] | apply --railway yes|no --foundation yes|no --mcp yes|no [--workspace <id>] [--first-time yes|no] [--change-prefix <PREFIX>] [--system-key <KEY>]"
     finish "invalid-arguments" 1
     ;;
 esac

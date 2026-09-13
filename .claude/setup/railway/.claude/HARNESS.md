@@ -132,11 +132,14 @@ gate-mode: evaluate
   success. The check chain must finish within the gate's 12-minute budget.
 - **`reviewers`**: Default reviewers assigned when using `/review`.
 
-### The spec loop's three keys
+### The registry keys and the spec loop's keys
 
-All three are absent from a fresh scaffold, and the loop is asleep while
-`spec_product` is. See `.claude/SPEC-LOOP.md` for the whole
-mechanism; this is what the file holds and what each key switches.
+Four keys, two concerns. `change-prefix` and `system-key` are this
+repository's identity in the System Registry, and `/setup` writes them when it
+can. `spec_product` and `gate-mode` are the spec loop, which is absent from a
+fresh scaffold and asleep while `spec_product` is. See `.claude/SPEC-LOOP.md`
+for the loop's whole mechanism; this is what the file holds and what each key
+switches.
 
 - **`spec_product`**: the Spec Universe product slug this repository's
   specification lives under, and the switch for the whole loop. Absent or
@@ -152,13 +155,28 @@ mechanism; this is what the file holds and what each key switches.
   released, because the keys minted under it exist forever, and a copy of a
   value that cannot change is a cache rather than a second authority. It is
   verified against the registry once, when the line is written, and never
-  again. Reading it live instead would put a registry credential in every
-  repository that mints a key, and would fail a Capture on a registry outage.
-  **Unlike the other two, this key is not switched by `spec_product`**: every
+  again, with one exception that costs nothing: where `REGISTRY_URL` and
+  `REGISTRY_TOKEN` are both set, `/feature` re-checks the prefix at Capture,
+  in the last moment before a key is minted under it. Reading it live as the
+  source instead would put a registry credential in every repository that
+  mints a key, so the check refuses only on an answer (the prefix resolves to
+  nothing, or to a different system) and never on an outage.
+  **This key is not switched by `spec_product`**: every
   `/feature` mints a change key and opens a work item, connected or not,
   because the work item is where the journey's first artefacts live
   (`.claude/JOURNEY.md`). A repository without a `change-prefix:` line cannot
   start a feature; `/feature` phase 0 stops and says which line to add.
+- **`system-key`**: the permanent key of the system that `change-prefix`
+  resolved to when `/setup` verified it, and the only reason it is written
+  down. It is never used to look anything up and never read offline: it is an
+  **assertion**, not a cache, so a later `/feature` can tell "still the same
+  system" from "someone edited the prefix line". A public identifier, never a
+  credential. **Absent is normal and never blocks**: without it, Capture can
+  check that the prefix resolves and not what it resolves to. `/setup` writes
+  it only where the lookup succeeded and the human confirmed the system;
+  `/feature` offers the line and never writes it, because a session that
+  recorded whatever came back would be asserting the very thing the check
+  exists to test.
 - **`gate-mode`**: how the preprod gate treats drift, `evaluate` or `enforce`.
   **An absent key reads `evaluate`**, which is the shipped default and not an
   oversight: a scaffold has no recorded conformance yet, so every baseline
@@ -659,8 +677,10 @@ These files are maintained by the harness and replaced on
 | `.claude/scripts/resolve-feature-name.sh` | Resolves the feature name (slug from `.harness-feature`, else session codename); shared by the hooks, scripts, and workflows |
 | `.claude/scripts/set-feature-name.sh` | Names the session's feature: sanitizes a slug, writes `.harness-feature`, commits, and pushes to trigger provisioning |
 | `.claude/SPEC-LOOP.md` | The spec loop: how to connect it, the anchor grammar, the judge, the gate, the claim flow, and which file owns each mechanism. Read it only once `spec_product` is set |
-| `.claude/JOURNEY.md` | The journey: the twelve states and eleven transitions the Product Cockpit draws, what each means in harness terms (skill, artefact, ready, done, how it is seen), the gate verdicts, what blocked means, and the `phase` write recipe. Read from `/feature`, `/continue` and `/to-preprod` |
-| `.claude/scripts/board.sh` | The one Board client for the Product Cockpit: posts the stand-down ask the journey defines (marker `blocked`) and reads the board, with `BOARD_URL` and `BOARD_TOKEN`, failing with the same three exits as `spec-universe.sh`. Never carries a position |
+| `.claude/JOURNEY.md` | The journey: the twelve states and eleven transitions the Product Cockpit draws, what each means in harness terms (skill, artefact, ready, done, how it is seen), the gate verdicts, what blocked means, the `phase` write recipe, and "Reporting activity": the eight seams, the ref shapes, the pair rule and the sentence voice. Read from `/feature`, `/continue`, `/to-preprod`, `/grilling`, `/implement` and `/code-review` |
+| `.claude/journey-bindings.json` | The journey binding manifest: one entry per position naming the cockpit rule expression that observes it and its recency window, the `join` patterns for the change key, the work item title and the two branch names, and the harness version it shipped as. Machine-readable; `.claude/JOURNEY.md` is the prose that owns the meanings |
+| `.claude/scripts/cockpit.sh` | The one Product Cockpit client, for the one cockpit credential an environment holds: `post` puts the stand-down ask the journey defines on the Board (marker `blocked`), `read` reads it, `ping` tells the cockpit a fact it reads has changed, and `report` says in one sentence what is happening inside the position a change is at. `BOARD_URL` and `BOARD_TOKEN`, plus an optional `COCKPIT_SOFT_TIMEOUT` (default 5s) shared by the two fail-soft commands. `post` and `read` fail with the same three exits as `spec-universe.sh`; `ping` and `report` never exit non-zero at runtime, are silent when no cockpit is configured, and are one line otherwise. A ping carries an ADDRESS (`repository`, `changeKey`, `sources`) and never a fact, a position or a session identity: the credential is the author. A report carries a sentence and the position it happened at, stored as the producer's own words and never consulted when the cockpit places the change; it goes out at eight seams and no more, listed in `.claude/JOURNEY.md` under "Reporting activity" |
+| `.claude/scripts/registry.sh` | The one `/v1` client the skills share for the System Registry: `prefix <PREFIX>` and `system <key-or-slug>`, with `REGISTRY_URL` and `REGISTRY_TOKEN`. Read-only, because the registry refuses a machine token on every write. Adds exit 1, a definitive "no such entry", to the three exits `spec-universe.sh` uses; only exits 1 and 2, the two answers about the prefix itself, may stop a Capture |
 | `.claude/scripts/coordination.sh` | Reads the `coordination` branch: the claimed ADR numbers, the in-flight touched sets, and the live feature branches. Every read is best-effort and exits 0 |
 | `.claude/scripts/touched-set.mjs` | The touched-set record: composes it, reads it back, and computes the overlap between two in-flight features. Advisory; nothing it returns is an exit code |
 | `.claude/scripts/spec-universe.sh` | The one `/v1` client every skill shares for Spec Universe: reads, proposes, patches, claims and promotes with `SPEC_UNIVERSE_URL` and `SPEC_UNIVERSE_TOKEN`, fails closed with three distinguishable exits, and offers no generic pass-through. Inert while `spec_product` is unset |

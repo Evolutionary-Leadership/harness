@@ -41,6 +41,11 @@
 //               it runs to well over a hundred entries on a real tree and
 //               `blockedSummary` is what a caller renders.
 //
+// The plan also carries `hazards`: things about THIS repository, read from
+// its own stamp, that an upgrade would otherwise carry past in silence. They
+// are not file operations and nothing here fixes them; they exist so the
+// skill can stop and ask before it applies anything.
+//
 // Prints a JSON plan on stdout. Exit 0 on success (an empty plan is a
 // success), 2 on a usage error, 3 when the target is not a rendered
 // harness tree.
@@ -295,6 +300,64 @@ export function assertRenderedTree(root) {
   }
 }
 
+// One `key: value` line out of a stamp, last occurrence wins, trimmed.
+//
+// This is the cell's third parser of `.harness-version`, and deliberately so:
+// the other two ship with the spec loop's scripts, which a dormant scaffold
+// never receives, and the planner must stay importable with no dependency on
+// anything but itself.
+function readStampKey(text, key) {
+  let value = null;
+  for (const line of text.split("\n")) {
+    const match = line.match(new RegExp(`^${key}: *(.*)$`));
+    if (match) value = match[1].trim();
+  }
+  return value;
+}
+
+// Things about the repository being upgraded that would otherwise pass in
+// silence. Pure: it reads the stamp's text and nothing else.
+//
+// `spec-loop-armed-without-product`. `spec_product:` is the switch for the
+// whole spec loop: with no key, `check-spec.mjs` prints one line and exits 0
+// before it reads a credential or walks the tree. That is correct for a
+// repository that never connected a specification, and catastrophic for one
+// that DID: its `check:` line still runs the checker, the anchor gate stops
+// enforcing, and the build stays green. A gate that reports success because
+// it stopped looking is the worst shape a failure can take, and an upgrade is
+// the moment the shape changes under the repository.
+//
+// The two spellings are both the same arming: the `check:spec` script a
+// connected project adds, and the checker invoked by path. A false positive
+// here costs one question with both fixes in it; a false negative costs a
+// gate nobody knows has stopped.
+export function hazardsFromStamp(text) {
+  const hazards = [];
+  const check = readStampKey(text, "check") ?? "";
+  const product = readStampKey(text, "spec_product") ?? "";
+  const armed = check.includes("check:spec") || check.includes("check-spec.mjs");
+  if (armed && product === "") {
+    hazards.push({
+      id: "spec-loop-armed-without-product",
+      summary:
+        "this repository's check: line runs check:spec, but .harness-version carries no spec_product: key. From this version on, the checker prints `spec loop not connected` and exits 0 before it looks at anything, so the anchor gate stops enforcing and nothing goes red.",
+      fix: "Add `spec_product: <slug>` to .harness-version, naming the Spec Universe product this repository's specification lives under. If the loop is meant to be dormant, drop `check:spec` from the `check:` line instead, so the stamp stops claiming a gate that is not running.",
+    });
+  }
+  return hazards;
+}
+
+function readHazards(localRoot) {
+  try {
+    return hazardsFromStamp(readFileSync(join(localRoot, STAMP), "utf8"));
+  } catch {
+    // No stamp, or one that cannot be read. The skill has already stopped on
+    // a missing stamp by the time it gets here, and a planner that threw
+    // would turn a missing file into a failed plan.
+    return [];
+  }
+}
+
 // Build the plan. `previous` is optional; without it no deletion is ever
 // proposed, because a file absent from the target cannot be told apart
 // from a file the user wrote.
@@ -312,6 +375,7 @@ export function buildPlan({ targetRoot, localRoot, variant, previousRoot }) {
     stamp: null,
     blockedSummary: [],
     deletionsDetected: Boolean(previousRoot),
+    hazards: readHazards(localRoot),
   };
 
   const target = composeLayers(targetRoot, variant);

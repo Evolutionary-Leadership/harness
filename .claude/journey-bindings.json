@@ -1,0 +1,136 @@
+{
+  "manifest": "harness-journey-bindings",
+  "harness_version": "0.14.0",
+  "journey": ".claude/JOURNEY.md",
+  "join": {
+    "prefix_source": {
+      "file": ".harness-version",
+      "key": "change-prefix"
+    },
+    "change_key": "{prefix}-{n}",
+    "work_item_title": "{key}: {title}",
+    "feature_branch": "feature/{key_lower}-{slug}",
+    "session_branch": "claude/{key_lower}-{slug}"
+  },
+  "positions": [
+    {
+      "position": "captured",
+      "expression": "backlog_item_exists",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "challenging",
+      "expression": "journey_phase_active",
+      "recency_window_seconds": 14400
+    },
+    {
+      "position": "challenged",
+      "expression": "journey_phase_reached",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "shaping",
+      "expression": "journey_phase_active",
+      "recency_window_seconds": 14400
+    },
+    {
+      "position": "shaped",
+      "expression": "journey_phase_reached",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "assessing",
+      "expression": "journey_phase_active",
+      "recency_window_seconds": 14400
+    },
+    {
+      "position": "assessed",
+      "expression": "journey_phase_reached",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "deciding",
+      "expression": "journey_phase_active",
+      "recency_window_seconds": 14400
+    },
+    {
+      "position": "committed",
+      "expression": "journey_phase_reached",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "planning",
+      "expression": "journey_phase_active",
+      "recency_window_seconds": 14400
+    },
+    {
+      "position": "planned",
+      "expression": "journey_phase_reached",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "building",
+      "expression": "branch_commit_activity",
+      "recency_window_seconds": 14400
+    },
+    {
+      "position": "built",
+      "expression": "journey_phase_reached",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "verifying",
+      "expression": "check_run_activity",
+      "recency_window_seconds": 3600
+    },
+    {
+      "position": "verified",
+      "expression": "checks_green_on_head",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "reviewing",
+      "expression": "review_activity",
+      "recency_window_seconds": 172800
+    },
+    {
+      "position": "reviewed",
+      "expression": "merged_into_dev",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "releasing",
+      "expression": "deploy_activity",
+      "recency_window_seconds": 3600
+    },
+    {
+      "position": "released",
+      "expression": "release_published",
+      "recency_window_seconds": null
+    },
+    {
+      "position": "adoption",
+      "expression": null,
+      "recency_window_seconds": null,
+      "reason": "Seeing a release get adopted needs an analytics source no harness repository has."
+    },
+    {
+      "position": "used",
+      "expression": null,
+      "recency_window_seconds": null,
+      "reason": "Seeing use needs an analytics source no harness repository has."
+    },
+    {
+      "position": "evaluating",
+      "expression": null,
+      "recency_window_seconds": null,
+      "reason": "Nothing in the harness observes an outcome being judged."
+    },
+    {
+      "position": "evaluated",
+      "expression": null,
+      "recency_window_seconds": null,
+      "reason": "Nothing in the harness records an outcome verdict."
+    }
+  ]
+}

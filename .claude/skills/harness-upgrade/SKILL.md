@@ -138,7 +138,7 @@ real tree that list runs to well over a hundred entries and the summary is
 what you render.
 
 It returns JSON with `variant`, `update`, `create`, `delete`, `skipped`,
-`blocked`, `blockedSummary`, `stamp` and `deletionsDetected`.
+`blocked`, `blockedSummary`, `stamp`, `deletionsDetected` and `hazards`.
 
 `deletionsDetected` is false when no previous tree was available. Say so in
 the plan when it is: "retired files were not checked for, because the
@@ -147,6 +147,41 @@ version you are on was never tagged" is honest, and silence reads as
 
 `variant` is the normalised name, which differs from your stamp when the
 repo was stamped before 0.4.4.
+
+### 4b. Stop on a hazard, and ask
+
+`hazards` is not a file list. Each entry is something about THIS repository,
+read from its own stamp, that the upgrade would otherwise carry past in
+silence, with an `id`, a `summary` and a `fix`.
+
+**A non-empty `hazards` stops the upgrade here.** Print every entry's summary
+and its fix, then ask the user what they want to do, and wait. Do not apply
+anything, do not offer to apply anything, and do not rank the hazard against
+the file plan: a hazard is about the repository being sound, and the plan is
+about files.
+
+```
+HAZARD  {id}
+  {summary}
+
+  {fix}
+
+Nothing has been applied. Fix this first, or say to continue anyway.
+```
+
+The one hazard the harness ships today is
+`spec-loop-armed-without-product`: a `check:` line that runs `check:spec`
+while `.harness-version` carries no `spec_product:` key. With no key the
+checker prints one line and exits 0 before it reads a credential or walks the
+tree, which is right for a repository that never connected a specification and
+catastrophic for one that did: its anchor gate has stopped enforcing and its
+build stays green. **That is why this stops rather than warns.** Everything else in an
+upgrade is visible in a diff; a gate that reports success because it stopped
+looking is visible nowhere.
+
+The user may continue anyway: the shape is legal, and a repository whose loop
+is deliberately dormant should drop `check:spec` from its `check:` line rather
+than add a key. Take the answer, say which one they took, and carry on.
 
 **The planner owns the rules, not you.** It decides which paths are
 managed, which are write-once, and which must never be written. Do not
@@ -238,6 +273,11 @@ gets a half-applied upgrade and no signal that anything is outstanding.
 
 ```
 Harness upgrade: {CURRENT} to {TARGET} ({N} versions)
+
+HAZARD
+  {id}: {summary}
+
+  {fix}
 
 BREAKING
   {version}: {item}
@@ -360,6 +400,9 @@ scripts/check-docs.mjs` and fix what it reports.
 
 Report, in this order:
 
+- **Any hazard the user chose to continue past**, repeated from step 4b with
+  its fix. It was true before this upgrade and it is still true after it, and
+  this is the last place anyone sees it.
 - **Breaking items still outstanding**, repeated from the narrative. This
   is the last chance the user has to see them, and copying files did not
   perform them.

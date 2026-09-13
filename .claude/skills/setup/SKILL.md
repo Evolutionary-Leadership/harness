@@ -1,8 +1,8 @@
 ---
 name: setup
 description: "Configure this fresh template: choose Railway or code-only, optionally materialize the pre-built technical foundation, and optionally let agents work inside it over MCP. Runs once and deletes itself."
-argument-hint: "[railway=yes|no] [foundation=yes|no] [mcp=yes|no]"
-allowed-tools: Bash(bash .claude/scripts/setup.sh *), Bash(git *), Bash(ls *), Bash(pnpm *), Bash(curl *), Bash(date *), Read, Write, Glob, Grep, mcp__github__actions_run_trigger
+argument-hint: "[railway=yes|no] [foundation=yes|no] [mcp=yes|no] [prefix=<PREFIX>]"
+allowed-tools: Bash(bash .claude/scripts/setup.sh *), Bash(bash .claude/scripts/registry.sh *), Bash(git *), Bash(ls *), Bash(pnpm *), Bash(curl *), Bash(date *), Read, Write, Glob, Grep, mcp__github__actions_run_trigger
 ---
 
 # Configure this template
@@ -61,7 +61,10 @@ Run `bash .claude/scripts/setup.sh guard` and branch on `outcome:`:
 - **`half-applied`**: a previous `/setup` was interrupted. Do not start
   over and do not re-ask questions the working tree already answers:
   the status block's `inferred-railway:`, `inferred-foundation:` and
-  `inferred-mcp:` lines are the answers. Rerun
+  `inferred-mcp:` lines are the answers, and `inferred-change-prefix:`
+  with `inferred-system-key:` say whether the identity lines already
+  landed. `none` on the prefix line means Q2c is still owed, so ask it
+  (and verify it, step 5b) before rerunning apply. Rerun
   `setup.sh apply` with exactly those answers (apply is idempotent), or
   follow the block's `detail:` line when it names a different finish
   (an unpushed configuration commit only needs its push).
@@ -77,9 +80,15 @@ Run `bash .claude/scripts/setup.sh guard` and branch on `outcome:`:
 
 ### 2. Arguments
 
-Parse `$ARGUMENTS` for `railway=yes|no`, `foundation=yes|no` and
-`mcp=yes|no`. The harnesscompanion.com wizard passes them so its users
-answer nothing twice. Whatever is missing gets asked in step 4.
+Parse `$ARGUMENTS` for `railway=yes|no`, `foundation=yes|no`,
+`mcp=yes|no` and `prefix=<PREFIX>`. The harnesscompanion.com wizard
+passes them so its users answer nothing twice. Whatever is missing gets
+asked in step 4.
+
+`prefix=` is the change-key prefix the System Registry issued for this
+system, and the wizard usually cannot pass it: most repositories are
+scaffolded before their registry entry exists. Treat its absence as
+normal and ask Q2c.
 
 Accept `secrets=confirmed` silently if present (older wizard hand-offs
 still pass it) but never act on it: the secrets preflight runs
@@ -145,14 +154,16 @@ The moment Q0 resolves, do BOTH of these in the same turn:
    plain repo forever (forge decision record 0022).
 
 2. Ask every still-unanswered question from the list below in ONE
-   AskUserQuestion call (it takes up to four questions). Include a
-   question only when its argument was not passed; include Q2 and Q2b
-   only when railway is not already known to be no, and Q2b only when
-   foundation is not already known to be no. When the arguments answered
-   everything (the wizard path), there is nothing to ask: skip the
-   AskUserQuestion call entirely and this step is just the background
-   prepare, leaving Q0 and, when the workspace list demands it, Q3 as
-   the only questions.
+   AskUserQuestion call (it takes up to four questions, and these are
+   exactly four). Include a question only when its argument was not
+   passed; include Q2 and Q2b only when railway is not already known to
+   be no, and Q2b only when foundation is not already known to be no.
+   **Q2c does not depend on any of the others** and is asked whenever
+   `prefix=` was not passed, on the railway path and the plain path
+   alike. When the arguments answered everything (the wizard path), there
+   is nothing to ask: skip the AskUserQuestion call entirely and this
+   step is just the background prepare, leaving Q0 and, when the
+   workspace list demands it, Q3 as the only questions.
 
 **Q1: deploy target.** If `railway=` was not passed:
 
@@ -201,6 +212,37 @@ deletes its own payloads when it finishes, so a later change of mind
 means wiring MCP by hand from the docs. That is the whole reason the
 question is asked here rather than left for later.
 
+**Q2c: the change prefix.** If `prefix=` was not passed:
+
+> What change-key prefix did the System Registry issue for this system?
+
+Two options, and nothing pre-selected:
+
+- **I have one**: they type it into the free-text answer. It is a short
+  word, `MYPR`, and it gives change keys like `MYPR-7`. Say in the option
+  text that the answer goes in the free-text field.
+- **Not yet, there is no registry entry for this system**: a first-class
+  answer, not a failure. Most repositories are scaffolded before their
+  registry entry exists.
+
+Frame it as the repository's permanent name for its own changes, not as
+a configuration value. Every feature this repository ever builds gets a
+key under it, every branch and every environment starts with that key,
+and the prefix is issued once and never released.
+
+**Answering "not yet" costs exactly one thing, and the user is told it
+here and again at the hand-off**: `/feature` cannot start without the
+line, so the first feature waits until the prefix exists and the line is
+added by hand. Nothing else in the repository is affected: the branch
+flow, the checks, the release and (on the railway path) provisioning all
+work without it.
+
+**Never guess a prefix, and never derive one from the repository name.**
+A prefix the registry did not issue mints keys that collide with the real
+ones forever, and there is no way back: the keys minted under a prefix
+outlive the mistake. No line at all is a session's inconvenience; a wrong
+line is permanent.
+
 **Batching over branching, handled after the fact.** Asking the three
 together means Q2 and Q2b can be asked in a combination where they turn
 out not to apply (Q1 answered no, or Q2 answered no under Q2b). Their
@@ -208,7 +250,8 @@ wording must not change, so resolve it afterwards instead: normalize
 `foundation` to no when railway is no, and `mcp` to no when foundation
 is no, and say plainly, in one line, that those answers did not apply
 and were ignored. Never carry a yes into `apply` for a question that
-did not apply.
+did not apply. **Q2c is never normalized away**: the prefix applies to
+every variant, because every repository mints change keys.
 
 ### 5. Collect the preparation
 
@@ -248,6 +291,57 @@ runs. Then branch on the final status:
   when the status carried a `stale-result:` other than `none`, append
   `--stale-result <that sha>` so the poll waits out the result that
   already sat on preprod instead of re-reading it.
+
+### 5b. Verify the change prefix
+
+Skip this entirely when Q2c answered "not yet": there is nothing to
+verify, and the hand-off says what happens next.
+
+The registry client is `.claude/scripts/registry.sh`, and it reads
+`REGISTRY_URL` and `REGISTRY_TOKEN` from the environment. **Where either
+is unset, ask and trust**: say in one line that the prefix was recorded
+as given and not checked, and go to step 6. A code-only scaffold with no
+registry must never be blocked here.
+
+Where both are set:
+
+    bash .claude/scripts/registry.sh prefix <PREFIX>
+
+The exits, and what each one means for this session:
+
+| Exit | Meaning | Do |
+|---|---|---|
+| 0 | The prefix resolves to a system | Read the system out of the JSON on stdout and confirm it with the user, below |
+| 1 | The registry has no system with this prefix | **Stop.** Show the prefix back and ask for the right one, or for "not yet" |
+| 2 | The prefix is a shape no change key could be built from | **Stop.** The message says why; ask again |
+| 3 | A variable is unset or blank | A half-configured registry. Say so in one line, record the prefix unverified, continue |
+| 4 | `REGISTRY_TOKEN` was refused | Say so in one line, record the prefix unverified, continue |
+| 5 | The registry could not be reached | Say so in one line, record the prefix unverified, continue |
+
+**Only exit 1 and exit 2 stop.** Three, four and five mean this session
+learned nothing about the prefix, and refusing to configure a repository
+because a lookup was unavailable would trade a permanent problem for a
+temporary one in the wrong direction. Say which of the three happened,
+in the registry's own words, and carry on unverified.
+
+**On exit 0, confirm the system with the user before recording anything.**
+The response body is the registry's, not this skill's: read it and put
+the system's name, its permanent key and its status in front of them, then
+ask, in one short question, whether that is the system this repository
+belongs to.
+
+- **Yes**: record the prefix as the registry spells it (the lookup is
+  case-insensitive, so what the user typed and what the registry holds
+  may differ in case, and the registry's spelling is the one to keep),
+  and record the permanent key too.
+- **No**: the prefix belongs to someone else's system. **Stop and say
+  so.** Ask for the right prefix, or for "not yet". This is the whole
+  reason the lookup happens before anything is written.
+
+A system the registry reports as **retired** is still a match, not a free
+prefix: the keys minted under it are still out there. Say that it is
+retired when you show it, and let the user answer the same question. Only
+they know whether this repository is that system coming back.
 
 ### 6. Q3: which Railway workspace (only when there is a choice)
 
@@ -300,11 +394,23 @@ human interaction happens past this point:
 
     bash .claude/scripts/setup.sh apply --railway <yes|no> \
       --foundation <yes|no> --mcp <yes|no> \
-      [--workspace <id>] --first-time <yes|no>
+      [--workspace <id>] --first-time <yes|no> \
+      [--change-prefix <PREFIX>] [--system-key <KEY>]
 
 Pass `--workspace` only when Q3 was asked. Pass `--first-time` from the
 Q0 answer; the script echoes it back so step 9 can branch without
-remembering. The script does the rest: payload copies, the one
+remembering.
+
+Pass `--change-prefix` with the prefix Q2c produced, and `--system-key`
+with the permanent key **only when step 5b verified it and the user
+confirmed the system**. Pass neither when Q2c answered "not yet". Pass
+the prefix alone when step 5b could not check it (exits 3, 4 and 5): the
+key records which system the prefix resolved to, so recording one this
+session never saw would be inventing the answer the check exists to make.
+The script writes both into `.harness-version` and echoes them back as
+`change-prefix:` and `system-key:` in the apply status.
+
+The script does the rest: payload copies, the one
 package.json name substitution, the `.harness-version` rewrite, the
 self-delete (quarantine, this skill, the spine script itself, and on
 the plain path the preflight workflow), the provisioning sentinel, the
@@ -370,6 +476,22 @@ Shared core, for everyone:
 - A one-line configuration summary (variant, foundation materialized or
   not, and whether the verify chain ran; `verify:` in the status says
   which, honestly).
+- **The change prefix, in one of three shapes.** This is the line that
+  decides whether the user's next session works, so it is never left out:
+  - **Recorded and verified**: name the prefix and the system it resolved
+    to, and say the first feature will be `<PREFIX>-1`.
+  - **Recorded, not verified** (the registry was unset, refused or
+    unreachable, per step 5b): name the prefix, say plainly that it was
+    taken as given and not checked, and say which of the three it was.
+  - **Not recorded** (Q2c answered "not yet"): say that `/feature` will
+    stop at its first step until the line exists, and give the exact
+    remedy, on its own, as the two things it is: get the prefix from the
+    System Registry, then add one line to `.harness-version`:
+
+        change-prefix: MYPR
+
+    Say that nothing else is blocked, and that the line can be added at
+    any time, by anyone, in any session.
 - The production and preprod URLs, when railway = yes, and whether the
   liveness check confirmed production serving (`liveness: live`).
 - When mcp = yes: the MCP endpoint is live at `<production-url>/api/mcp`
@@ -408,7 +530,10 @@ path, in the same warm register the welcome opened with:
    (workflows, skills, the docs skeleton).
 2. The first feature: start a fresh chat, type `/feature`, and describe
    one small idea in a sentence; the harness drives it from there,
-   including the questions. Nothing else to install or configure.
+   including the questions. Nothing else to install or configure, **when
+   the prefix was recorded**. When it was not, this is the one thing that
+   is: say so here too, in their words, so the send-off is not the last
+   place a blocker could have been mentioned.
 3. The send-off, and it is the last thing on the screen. They have
    just watched a project go from nothing to live; close on that, not
    on another instruction. Set it off from the paragraph above with a
@@ -425,4 +550,7 @@ Never use em dashes anywhere in the handoff; commas, colons and
 parentheses do the same work.
 
 **Returning-user ending (first-time: no, or a retry)**: one line: fresh
-chat, `/feature`, done. They know the drill; do not tour them.
+chat, `/feature`, done. They know the drill; do not tour them. The one
+exception is a missing prefix: that is a second line, because `/feature`
+will not start without it and a returning user has no reason to expect
+that.
