@@ -1,6 +1,6 @@
 {
   "manifest": "harness-journey-bindings",
-  "harness_version": "0.15.1",
+  "harness_version": "0.16.0",
   "journey": ".claude/JOURNEY.md",
   "join": {
     "prefix_source": {
@@ -100,7 +100,7 @@
     },
     {
       "position": "releasing",
-      "expression": "deploy_activity",
+      "expression": "release_workflow_activity",
       "recency_window_seconds": 3600
     },
     {

@@ -241,7 +241,7 @@ entry predicate, restated so this table can be read on its own.
 | `building` | `/implement` with `/tdd`, then `/code-review` (phase 4) | Tickets exist | Frontier empty, full check green, review run and acted on | `phase: building`; commits closing tickets | none |
 | `verifying` | Phase 5's push; `feature-branch-checks.yml` on the pushed head | Built | The check on the current head is green | `check_run_activity` on the branch | **checks passed** |
 | `reviewing` | `/review` (people) or `/to-preprod` (machinery, with the docs audit) | Verified | The pull request is merged | Review activity on the pull request | **approved to merge** |
-| `releasing` | `/release` | Merged | The release is published | Deploy activity | none |
+| `releasing` | `/release` | Merged | The release is published | A `release.yml` run in progress | none |
 | `adoption`, `evaluating` | Nothing. Both stay dark with the states they lead to | | | | |
 
 ## Gate verdicts, and what each does to the work item
