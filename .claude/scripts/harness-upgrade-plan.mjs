@@ -46,6 +46,12 @@
 // are not file operations and nothing here fixes them; they exist so the
 // skill can stop and ask before it applies anything.
 //
+// Every entry's `source` is a path RELATIVE to the target tree, and the
+// plan carries `targetRoot` once. An absolute mktemp path inlined into a
+// hundred entries makes the output unreadable and impossible to diff
+// between two runs, and the only thing a caller does with a source is join
+// it back onto the root it already passed in.
+//
 // Prints a JSON plan on stdout. Exit 0 on success (an empty plan is a
 // success), 2 on a usage error, 3 when the target is not a rendered
 // harness tree.
@@ -268,6 +274,16 @@ function sameContent(a, b) {
   }
 }
 
+// configDelta against two files on disk. A file that cannot be read is the
+// same refusal to judge as a format that cannot be parsed.
+function readDelta(path, targetFile, localFile) {
+  try {
+    return configDelta(path, readFileSync(targetFile, "utf8"), readFileSync(localFile, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function isFile(path) {
   try {
     return statSync(path).isFile();
@@ -358,6 +374,124 @@ function readHazards(localRoot) {
   }
 }
 
+// Every leaf key path of a parsed object, dotted. An array is a leaf: what
+// is being asked is which SETTINGS exist, and a list is one setting whose
+// value the project chose.
+function keyPaths(value, prefix = "") {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return prefix ? [prefix] : [];
+  }
+  const out = [];
+  for (const [k, v] of Object.entries(value)) {
+    out.push(...keyPaths(v, prefix ? `${prefix}.${k}` : k));
+  }
+  return out.length > 0 ? out : prefix ? [prefix] : [];
+}
+
+// A config file parsed into a plain object, or null when the format cannot
+// be read exactly. Null is a refusal to judge, not an empty answer: the
+// caller keeps the entry a plain merge rather than claiming anything.
+//
+// JSON is parsed. Dotenv becomes an object of its variable names, so one
+// walk serves both. YAML deliberately is NOT read, though
+// .github/dependabot.yml is the one YAML config the cell ships: a
+// zero-dependency indentation scan cannot tell a SECOND `updates:` entry
+// from a repeat of the first, so it would report "the target introduces
+// nothing" for a target that introduces a whole new ecosystem.
+function configValue(path, text) {
+  if (path.endsWith(".json")) {
+    try {
+      const parsed = JSON.parse(text);
+      return parsed !== null && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  // .env.example is the only dotenv config the cell ships, but the prefix
+  // covers a project that carries a sibling under the same class.
+  const name = path.split(/[\\/]/).pop();
+  if (name.startsWith(".env")) {
+    const keys = {};
+    for (const line of text.split("\n")) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+      if (match) keys[match[1]] = "";
+    }
+    return keys;
+  }
+  return null;
+}
+
+// The keys a config file sets, or null when it cannot be read exactly.
+// scripts/check-dogfood.mjs imports this so the forge's own gate and a
+// downstream upgrade compare the same thing.
+export function configKeys(path, text) {
+  const value = configValue(path, text);
+  return value === null ? null : new Set(keyPaths(value));
+}
+
+// Key paths where the target sets a list carrying entries the local list
+// does not. An array is a leaf to `keyPaths`, because a list is one
+// setting whose value a project chooses, and for `railway.json`'s
+// `watchPatterns` that is exactly right. It is exactly WRONG for
+// `.claude/settings.json`, where the harness accumulates hooks and
+// permissions INTO a list and a new entry is a new behaviour the project
+// must receive. Neither shape can be told from the other by inspection, so
+// this reports the difference instead of ruling on it, and the caller makes
+// it a third outcome rather than folding it into either of the first two.
+//
+// Membership is by serialised element, so reordering a list is not an
+// addition. A key the local side lacks entirely is a new KEY and is left to
+// `keyPaths`.
+function newListPaths(target, local, prefix = "") {
+  if (Array.isArray(target)) {
+    if (!Array.isArray(local)) return [];
+    const have = new Set(local.map((entry) => JSON.stringify(entry)));
+    return target.some((entry) => !have.has(JSON.stringify(entry))) ? [prefix] : [];
+  }
+  if (target === null || typeof target !== "object") return [];
+  if (local === null || typeof local !== "object" || Array.isArray(local)) return [];
+  const out = [];
+  for (const [k, v] of Object.entries(target)) {
+    if (!(k in local)) continue;
+    out.push(...newListPaths(v, local[k], prefix ? `${prefix}.${k}` : k));
+  }
+  return out;
+}
+
+// What a merge of the target's config into the local one would actually
+// bring. `null` means the question could not be answered.
+//
+// This exists because "config to merge" had exactly one model of a
+// divergence: the same file with different additions. A project can also
+// have SUPERSEDED the template's default outright. railway.json is the
+// case: the cell ships the generic scaffold default (`node server.js`,
+// npm, a Prisma migrate line) and a real project ships pnpm, drizzle and
+// its own start command. The target introduces no key the project lacks,
+// so there is nothing to add, and a literal reading of "add what the
+// target introduced" ships a broken production deploy naming a server.js
+// the same plan already reports as deleted by the user.
+//
+// Two fields rather than one, because "no key is missing" is NOT the same
+// claim as "nothing is missing". Saying "expect no change" about a file
+// that quietly gained a hook is the single error this detection must never
+// make, and `newLists` is what keeps the two apart.
+export function configDelta(path, targetText, localText) {
+  const target = configValue(path, targetText);
+  const local = configValue(path, localText);
+  if (target === null || local === null) return null;
+  const targetKeys = keyPaths(target);
+  // A target that sets nothing readable proves nothing: an empty set is
+  // trivially contained in anything, and reading "the project already has
+  // everything" out of "I found no key" is the same false claim by another
+  // route.
+  if (targetKeys.length === 0) return null;
+  const localKeys = new Set(keyPaths(local));
+  return {
+    newKeys: targetKeys.filter((k) => !localKeys.has(k)).sort(),
+    newLists: newListPaths(target, local).sort(),
+  };
+}
+
 // Build the plan. `previous` is optional; without it no deletion is ever
 // proposed, because a file absent from the target cannot be told apart
 // from a file the user wrote.
@@ -367,6 +501,7 @@ export function buildPlan({ targetRoot, localRoot, variant, previousRoot }) {
   variant = normaliseVariant(variant);
   const plan = {
     variant,
+    targetRoot,
     update: [],
     create: [],
     delete: [],
@@ -386,7 +521,11 @@ export function buildPlan({ targetRoot, localRoot, variant, previousRoot }) {
   const previous = previousRoot ? composeLayers(previousRoot, variant) : null;
 
   for (const path of [...target.keys()].sort()) {
-    const source = target.get(path);
+    const absolute = target.get(path);
+    // Relative to the target root, which the plan carries once. A caller
+    // joins it back on; the railway overlay's own prefix survives the
+    // relativisation, so an entry still says which layer it came from.
+    const source = relative(targetRoot, absolute);
     const local = join(localRoot, path);
     const present = isFile(local);
 
@@ -424,17 +563,48 @@ export function buildPlan({ targetRoot, localRoot, variant, previousRoot }) {
         // different is a merge the skill has to perform by hand, and
         // saying so is what stops the project's own entries being
         // silently dropped.
+        //
+        // There are three shapes of difference, not one, and the entry
+        // names which:
+        //
+        //   merge: true          the target sets keys this project lacks.
+        //                        `newKeys` says which, and `newLists` any
+        //                        list it also extends.
+        //   merge: "values-only" no key is missing, but a list the target
+        //                        sets carries entries this one does not
+        //                        (`newLists`). Whether to take them depends
+        //                        on whether the harness owns that list, so
+        //                        it is put to the user rather than ruled on.
+        //   merge: "superseded"  nothing the target sets is absent here.
+        //                        The merge would change nothing, and the
+        //                        difference is values this project chose.
+        //
+        // All three stay in `update` rather than being dropped, because a
+        // template default that has diverged is worth seeing; what changes
+        // is how the skill renders it. Both strings are truthy, so a caller
+        // still testing `merge` for truthiness cannot read either as a copy.
         if (!present) {
           plan.create.push({ path, source, class: "config" });
-        } else if (!sameContent(source, local)) {
-          plan.update.push({ path, source, class: "config", merge: true });
+        } else if (!sameContent(absolute, local)) {
+          const delta = readDelta(path, absolute, local);
+          const entry = { path, source, class: "config", merge: true };
+          if (delta && delta.newKeys.length === 0 && delta.newLists.length === 0) {
+            entry.merge = "superseded";
+          } else if (delta && delta.newKeys.length === 0) {
+            entry.merge = "values-only";
+            entry.newLists = delta.newLists;
+          } else if (delta) {
+            entry.newKeys = delta.newKeys;
+            if (delta.newLists.length > 0) entry.newLists = delta.newLists;
+          }
+          plan.update.push(entry);
         }
         break;
 
       default:
         if (!present) {
           plan.create.push({ path, source, class: "managed" });
-        } else if (!sameContent(source, local)) {
+        } else if (!sameContent(absolute, local)) {
           plan.update.push({ path, source, class: "managed" });
         }
         break;

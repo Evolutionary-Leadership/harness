@@ -731,6 +731,16 @@ notes, with any breaking items above the confirmation prompt, and then the
 exact list of files it would write. Nothing is changed until you approve
 it. See `.harness-version` for current version info.
 
+The narrative comes out of the tree it clones, not from an API, so an
+upgrade works offline, behind a proxy and in a sandboxed agent session.
+
+**An upgrade is a reviewed commit, not an auto-push.** It rewrites the
+workflows, skills and hooks that decide how every future session in this
+repository behaves, and no person wrote any of it. Read `git diff`, check
+that the workflows and hooks still run, and commit it yourself. The version
+stamp is written last, and only after the result verifies, so a repo that
+holds a half-applied upgrade says so rather than claiming the new version.
+
 ### Version numbering
 
 Harness versions use semver (`MAJOR.MINOR.PATCH`):
