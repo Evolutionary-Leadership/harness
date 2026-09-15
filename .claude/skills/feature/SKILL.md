@@ -80,6 +80,12 @@ does to the work item, the branch and the record is in `.claude/JOURNEY.md`
 under "Gate verdicts"; a park or a drop ends this skill there, after doing
 what that table says.
 
+**Who answers a gate can change; what a gate does never does.** Phase
+autopilot and `--ship` both advance gates without a person, and both are one
+section: "Not stopping at gates" below. Under `--ship` the two journey gates
+above are answered by the session rather than put to the user, and their
+verdicts are still recorded as artefacts.
+
 Rules for a gate:
 
 - Show what the phase produced first: the settled decisions, the spec
@@ -110,49 +116,130 @@ Rules for a gate:
   still go out**, back to back: the verdict is yours instead of the user's,
   and a reader watching the stream should see the same trail either way.
 
-### Phase autopilot
+### Not stopping at gates: phase autopilot and --ship
 
-The phase 1d gate carries a fourth option: **from here on out, go all the
-way to implement**. Taking it auto-advances the phase 2, 3 and 4 gates and
-stops at the phase 5 exit gate.
+One concept, two entry points. The concept is that **the session does not
+stop at gates**: everything a gate *does* still happens, and only the stopping
+stops.
 
-Under autopilot, everything a gate *does* still happens; only the stopping
-stops. Refresh the feature context at every phase boundary and push it.
+- **The phase 1d gate's fourth option**, *from here on out, go all the way to
+  implement*, auto-advances the phase 2, 3 and 4 gates and stops at the phase
+  5 exit gate.
+- **`--ship` in `$ARGUMENTS`** declares the session **unattended from the
+  start**: nobody is reading, so no gate is put to a person, and the exit is
+  taken rather than offered. It composes with `--quick` and works without it.
+
+**Why one stops at phase 5 and the other does not is derived, not decreed.** A
+person answered the phase 1d gate, so somebody is evidently reading, and the
+exit is a question worth putting to them. `--ship` is the same switch thrown
+before any code exists, when nothing proves that, so there is nobody to put it
+to. The difference is not how far the session is trusted; it is whether anyone
+is there.
+
+Under either, refresh the feature context at every phase boundary and push it.
 Report what each phase produced (the spec link, the ticket list, the diff
-summary and review findings) as you pass through, so the user reading back
+summary and review findings) as you pass through, so a reader reading back
 sees the same trail they would have approved. Where a phase skill asks the
-user something of its own, `/to-tickets`' granularity quiz above all,
-answer it with your own recommendation and say that you did; never drop the
-question silently.
+user something of its own, `/to-tickets`' granularity quiz above all, answer
+it with your own recommendation and say that you did; never drop the question
+silently.
 
-**Autopilot ends at phase 5, always.** It advances gates; it never runs an
-exit. The user still chooses `/to-preprod`, `/review` or `/release` with the
-diff, the check result and the `/code-review` findings in front of them,
-because that gate is the last thing standing between this session and
-`preprod`.
+#### What `--ship` may reach
 
-**(connected) Two things autopilot never answers: the conflict card and the
-strict pause** (see "The conflict protocol"). Both are the user's decision
-about the specification itself, not about this session's pace. Under
-autopilot the session still stops there, renders the card or the pause, and
-waits.
+**Ceiling.** `--ship` takes the furthest exit `.harness-version` already
+permits, and never grants itself one. Read the configuration at phase 0 and
+resolve exactly one row:
+
+| `.harness-version` | `--ship` takes |
+|---|---|
+| `reviewers:` configured | `/review` |
+| no `reviewers:`, and `agent-authority:` does not grant `release` | `/to-preprod`, and says so |
+| no `reviewers:`, and `agent-authority:` grants `release` | `/release` |
+
+Read `agent-authority:` as the list it is. The middle row is the default and
+covers three configurations that are one fact: the key is absent, the key is
+empty, or the key grants something other than `release`. Every repository
+matches exactly one row, and a repository that matches none would mean this
+table has a hole rather than that the run has no exit.
+
+`reviewers:` **lowers the ceiling and never raises it.** A repository that
+names reviewers has withheld the permission to merge without a human on the
+diff, so here the job becomes getting the change reviewable without stopping:
+open the pull request, do not merge it.
+
+**The flag is not authority, and `/release` says so itself.** That skill's
+`## Authority` section accepts a grant in `.harness-version` or a user asking
+in this turn, and it names a `--ship` flag as neither: a flag typed before any
+code exists is not informed consent about a specific release. The grant is
+what makes the bottom row reachable, it was made once, and it is revocable in
+a commit.
+
+#### What `--ship` still stops for
+
+**Floor.** `--ship` still stands down. It removes gates, never blocks.
+
+**A gate asks "shall I continue?" A block asks "which way?"** `--ship` answers
+the first permanently and in advance. It answers the second never, because you
+cannot pre-answer a question nobody has asked yet. These still stop, and
+standing down is the answer to each:
+
+- A merge conflict with two incompatible intents in one hunk.
+- A red check whose cause cannot be established. Being unable to fix it is not
+  the same as being unable to explain it, and the second is the block.
+- A review finding that is architecturally significant rather than local.
+- Any design decision arising mid-build that was not settled beforehand.
+
+**A grill break-out is the fourth case, reached earlier.** `/grilling` breaks
+out of autonomy for a decision that is genuinely the user's, and under `--ship`
+there is nobody to break out to. Stand down there exactly as mid-build, and do
+not answer it because the run is supposed to be fast.
+
+**A gate `--ship` would answer `park` or `drop` is a block, not a verdict.**
+Dropping the change somebody asked for is a "which way?" question. Stand down
+and let a person answer it.
+
+**What `--ship` never skips**: the full check, and green as a precondition for
+the exit; the regression test for a bug fix; Capture, the key and the work
+item, which are the audit trail and what `/release` closes by key; and the
+stand-down path in full, the four records and the reply block alike.
+
+#### Gates under either entry point
+
+Everything a gate *does* still happens. The two journey gates keep their
+verdicts and their artefacts: the 1a **worth pursuing** verdict still rewrites
+`## Challenge` and applies the `pursue` label, and the 1d **build it** verdict
+is still commented on the work item. A resumed session reads the same tree
+either way. Only the answerer changed.
+
+**Autopilot brings the user the phase 1d gate; `--ship` answers it.** Under
+autopilot that gate is never skipped, because it is the one place the whole
+settled design is visible in one piece before it becomes tickets and code, and
+a person is there to look at it. Under `--ship` nobody is, so the session
+answers it and records the verdict as an artefact.
 
 **Autopilot and grill autonomy are two switches, not one.** Autonomy (in
 `/grilling`) answers questions *inside* phases 1a and 1b. Autopilot advances
 phase *gates*. Granting autonomy mid-grill still brings the user the phase 1d
-gate, because that gate is the one place the whole settled design is
-visible in one piece before it becomes tickets and code. **(connected)** Grill
-autonomy carries the same two carve-outs: a conflict card or a strict pause
-reached during the grill is put to the user, never self-answered.
+gate. **`--ship` throws both**, because unattended is a fact about the world
+rather than a preference about pace, and both switches answer the same
+question: who answers. Without grill autonomy, a `--ship` run carrying no
+`--quick` would stall on the first round of phase 1a, which is the opposite of
+the point.
 
-Going backwards stays allowed under autopilot. If phase 3 exposes a hole,
-return to phase 1b for that branch of the tree; autopilot is a reason to
-keep moving, never a reason to build on a gap.
+**(connected) Two things neither entry point answers: the conflict card and
+the strict pause** (see "The conflict protocol"). Both are the user's decision
+about the specification itself, not about this session's pace. The session
+still stops there and renders the card or the pause; under `--ship`, where
+there is nobody to wait for, it stands down.
 
-**Autopilot does not survive the session.** Record in the feature context
-that it was used, so a reader knows why phases 2 to 4 carry no approvals. A
-resumed `/continue` session does not re-arm it: a switch the user flipped
-yesterday must not drive a session they start today.
+Going backwards stays allowed. If phase 3 exposes a hole, return to phase 1b
+for that branch of the tree; neither entry point is a reason to build on a
+gap.
+
+**Neither switch survives the session.** Record in the feature context which
+one was used, so a reader knows why the run carries no approvals. A resumed
+`/continue` session never re-arms either: a switch flipped yesterday, or a
+flag typed yesterday, must not drive a session started today.
 
 ## The feature context
 
@@ -163,7 +250,8 @@ live in `.claude/HARNESS.md`; the short version:
 - Phase 0 creates it. It is a rewritten summary, never an append-only
   log: current phase, next step, decisions settled (with what was
   rejected and why), open frontier, scope boundary, tracker links, exit
-  route once chosen, and whether autopilot or grill autonomy was granted.
+  route once chosen, and whether autopilot or grill autonomy was granted,
+  naming `--ship` where the flag is what granted them.
   It also carries the change key and its work item, the challenge verdict
   and the build verdict, a `## Blocked` section while the session is
   standing down (`.claude/JOURNEY.md`, "Blocked"), and **(connected)** the
@@ -248,6 +336,38 @@ session will be able to take. A caller who learns at phase 5 that the session
 cannot file its own work has been told five phases too late, and that is the
 failure this line exists to prevent. Record the same line in the feature
 context under `Exit route`, as "reachable exits" until one is chosen.
+
+**`--ship` resolves that list to one exit, here.** The ceiling table in "Not
+stopping at gates" above takes `.harness-version` and returns exactly one row.
+Name the exit this run will take and the row that chose it, in the same line,
+and record it in the feature context: under `--ship` nobody will be asked at
+phase 5, so phase 0 is the only place a person sees the decision before it
+happens.
+
+**Then probe the alert path, once, and only under `--ship`.** An unattended
+run's stand-down is only as good as its notification. The durable record is
+`## Blocked` plus the `blocked` label, but the only thing that reaches a
+person is the Board ask, and `ping`, `report` and `post` are three different
+routes: a ring that landed says nothing about whether an ask would. Probe the
+one that matters, read-only, and only when both `BOARD_URL` and `BOARD_TOKEN`
+are set:
+
+    bash .claude/scripts/cockpit.sh read >/dev/null
+
+`read` is a GET against the same path `post` writes to, with the same
+credential and the same three exits, so it is the honest test and it writes
+nothing.
+
+| What happened | Do |
+|---|---|
+| It exited 0 | Nothing. A check that passed is not news |
+| Neither variable is set | Nothing, and do not run the probe. A repository with no cockpit is a normal repository, not a degraded one, and a line every run teaches a reader to skim past the one run it matters |
+| One variable is set, or the probe exited 4 or 5 | One line: a stand-down on this run will leave the record but no alert. **Write the same line into the feature context**, because nobody reads an unattended session's output while it runs, and the person who finds the run stalled tomorrow reads that file |
+
+**Warn; never refuse.** A `--ship` run with no Board is worse off than one
+with a Board and still better off than one that never started. Refusing here
+would make this one flag fail closed on the subsystem the harness makes
+fail-soft everywhere else, and it would contradict the floor rule above.
 
 ### Read the idea issue, if one was passed
 
@@ -639,7 +759,8 @@ item as it lands: the rounds are history the tracker keeps, and they are
 what a reader sees while this transition is in progress.
 
 Then gate: the **worth pursuing** gate, verdicts `pursue`, `drop` or `park`,
-put to the user with `AskUserQuestion`. On `pursue`, rewrite `## Challenge`
+put to the user with `AskUserQuestion`, or answered by the session under
+`--ship` ("Not stopping at gates" above). On `pursue`, rewrite `## Challenge`
 on the work item (the why as it stands now, what the challenge rejected, the
 verdict), apply the `pursue` label, record the verdict in the feature
 context, and write `phase: challenged`. On `park` or `drop`, do what
@@ -765,7 +886,9 @@ Then write `phase: assessed` and gate: continue to phase 1d, or stay.
 ### Phase 1d: decide (`deciding`)
 
 Write `phase: deciding`, then put the **build it** gate to the user with the
-settled picture in front of them, using `AskUserQuestion`: `build` (continue
+settled picture in front of them, using `AskUserQuestion`. Under `--ship` there
+is nobody to put it to, so answer it and record the verdict ("Not stopping at
+gates" above). The options: `build` (continue
 to phase 2), `build` under **phase autopilot** (go all the way to implement,
 see above), `park`, or `drop`. "Stay in phase 1" and "revise a settled
 decision" remain available and send the flow back to 1b.
@@ -777,7 +900,8 @@ context, and write `phase: committed`. On `park` or `drop`: do what
 **Phase 1 is done** when `committed` has been written. Under autopilot the
 next three gates are advanced; this one is never skipped, because it is the
 one place the whole settled design is visible in one piece before it becomes
-tickets and code.
+tickets and code, and a person is there to look. Under `--ship` it is answered
+rather than skipped: the verdict is still given and still recorded.
 
 ## Phase 2: spec
 
@@ -872,7 +996,14 @@ Summarize: what was built, which files changed, the spec and ticket issue
 numbers, the `/code-review` findings summary, any in-flight feature that
 overlaps this one, and any ticket left open.
 
-Then ask the user which exit they want, using `AskUserQuestion`:
+**Under `--ship` there is no question here.** The ceiling table resolved this
+run's exit back at phase 0; take that exit now, and say which row chose it.
+Everything else in this phase still applies: the summary above, the record
+below, the push of the feature context before the exit merges the branch out
+from under you, and the `## Authority` read before `/release`. Only the asking
+is skipped.
+
+Otherwise, ask the user which exit they want, using `AskUserQuestion`:
 
 - **`/to-preprod`**: auto-merge to preprod. The default suggestion when
   `.harness-version` has no `reviewers:` field. **(connected)** Its preprod
@@ -917,15 +1048,23 @@ section before following the file: if this repository has granted no
 available and performing its steps by hand would be the same forbidden act
 (forge decision record 0037).
 
-**Do not stall at this gate.** If you cannot obtain an answer because no person
-is reading (an unattended session), take the exit the repository's authority
-already permits: `/to-preprod` needs no grant, so a session that has work worth
-filing files it rather than stopping. Stand down (`getting-started`, Step 3c)
-only for an exit you genuinely may not take, and never report the feature
-complete while its work sits unmerged on a `claude/` branch.
+**Under `--ship` the authorization is the grant alone**, because there was no
+answer at this gate and the flag is not one. That is why the ceiling table
+reaches `/release` only where `.harness-version` grants it, and why a run
+without the grant takes `/to-preprod` and says so rather than standing down:
+it has work worth filing and an exit it may take.
 
-Autopilot, if it was granted at the phase 1 gate, ends at this question.
-It advances gates; it never picks an exit.
+**Do not stall at this gate**, flag or no flag. A session that asked and got no
+answer because nobody is reading resolves the ceiling table above and takes
+that exit, exactly as a `--ship` run would; the flag is how an operator says so
+in advance, not the only way it can become true. Stand down
+(`getting-started`, Step 3c) only for an exit you genuinely may not take, and
+never report the feature complete while its work sits unmerged on a `claude/`
+branch.
+
+Autopilot, if it was granted at the phase 1 gate, ends at this question. It
+advances gates; it never picks an exit. `--ship` is the entry point that does,
+and "Not stopping at gates" above is where both are defined.
 
 ## Standing down
 
@@ -956,6 +1095,10 @@ You may **propose** quick mode for genuinely trivial work (a typo, a
 one-line config tweak, a dependency bump) but you may never take it on
 your own. Ask, then wait for the answer. Anything that changes behavior,
 schema, or a public interface is not trivial, whatever its diff size.
+
+**Quick mode and `--ship` are orthogonal**, and compose in either order.
+`--quick` removes phases; `--ship` removes stops. See "Not stopping at gates"
+above for what the flag does, including on a run that carries no `--quick`.
 
 In quick mode, still do phases 0 and 5, including the feature context,
 Capture, the key and the work item. A change too small to specify is still a

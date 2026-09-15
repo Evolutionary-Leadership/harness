@@ -247,7 +247,18 @@ entry predicate, restated so this table can be read on its own.
 ## Gate verdicts, and what each does to the work item
 
 The two front-half gates can end a journey as well as continue it. Both are
-put to the user and never self-answered, under autopilot or grill autonomy.
+put to the user and never self-answered under autopilot or grill autonomy, and
+self-answered only where the session was declared unattended.
+
+**`/feature --ship` is the one exception, and it is an exception about who is
+there rather than about what a gate is for.** The flag declares the session
+unattended, so there is no user to put either gate to, and the session answers
+both. Nothing else changes: the `pursue` label, the `## Challenge` rewrite and
+the `build` comment are still written, so the artefacts below and the tree a
+resume reads are exactly what a supervised run leaves. A run that would answer
+`park` or `drop` does neither; choosing to end somebody else's change is a
+decision, not a gate, and the session stands down instead. The skill owns the
+rest of what the flag does.
 
 | Verdict | Where | What happens |
 |---|---|---|
@@ -321,6 +332,11 @@ let a stalled session keep claiming a transition it is not working on.
 from `captured` straight to `building`, and the cockpit's visit history shows
 the gap. That is the honest rendering of a change that genuinely skipped four
 states, and quick mode stays available for the work it exists for.
+
+`--ship` is orthogonal to it and leaves no gap at all: it changes who answers
+a gate, never which positions a change passes through, so a `--ship` run
+writes every phase a supervised run would. Both are session-scoped, and
+`/continue` re-arms neither.
 
 `/continue` re-derives the phase from the durable artefacts (work item,
 challenge, spec, tickets, open tickets) and WRITES it, rather than trusting

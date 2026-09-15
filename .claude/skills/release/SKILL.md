@@ -52,6 +52,22 @@ Authority is satisfied by **either** of these, and by nothing else:
    do it, or picked it at a `/feature` phase 5 exit gate. A relayed report
    that somebody once approved releases is not this; the ask is in the turn.
 
+**A flag is not the second form, and `--ship` in particular is not.** A
+`/feature --ship` run reaches this skill having asked nobody anything: the
+flag was typed before any code existed, so it cannot be informed consent about
+a specific release. What the phase 5 exit gate is, and what a flag can never
+be, is a choice made with the diff, the check result and the review findings
+in front of you, at the last moment before anything reaches `preprod`. The
+same goes for any later argument, alias or wrapper that means "do not stop":
+the test is whether a person decided about THIS release, not whether they
+decided about this session.
+
+So a `--ship` run releases under form 1 or not at all. That is the point of
+putting the grant in `.harness-version`: it is the informed decision, made
+once, by the person who owns the repository, in a commit that can be reviewed
+and revoked. Without this paragraph the flag would quietly become a
+production-access token, and a typo in a prompt would become a release.
+
 **If neither holds, stop here and stand down.** Do not compute anything, do not
 write a signal file, do not push. Emit the stand-down block
 (`getting-started`, Step 3c) with `reason: authority-not-granted`, and say

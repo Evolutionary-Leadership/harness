@@ -125,7 +125,15 @@ was not consulted is the failure mode this rule exists to prevent.
 important; important and reversible still gets decided.
 
 **Breaking out costs one question, not the grant.** Ask that question, take
-the answer, and resume autonomy for the rest of the grill. Say plainly why
+the answer, and resume autonomy for the rest of the grill.
+
+**Under `/feature --ship` there is nobody to break out to.** That flag declares
+the session unattended, which grants this autonomy from the first round rather
+than mid-grill, and the two bars above still apply: a question that clears them
+is a question no one is there to answer, so the session stands down on it
+rather than talking itself past it. `/feature`'s "Not stopping at gates" owns
+the rest, including why the flag throws this switch and the gate switch
+together. A grill run outside `/feature` never sees the flag. Say plainly why
 you broke out, so the user can see the bar being applied rather than guess
 at it. A grant that evaporated the first time you were careful would teach
 you not to be.
