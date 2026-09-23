@@ -68,6 +68,18 @@ once, by the person who owns the repository, in a commit that can be reviewed
 and revoked. Without this paragraph the flag would quietly become a
 production-access token, and a typo in a prompt would become a release.
 
+**Where form 1 does hold, a `--ship` run goes all the way, and does not stop
+to ask again.** The grant is the consent; the flag says nobody is there to be
+asked a second time. So the one confirmation in step 4 is answered by the pair
+and skipped, exactly as `--quick` skips it, and the run takes the feature from
+its branch to `preprod` to `main` carrying everything already queued there.
+Standing down at that question would make the grant worthless for the case it
+was granted for: an owner who wrote `agent-authority: release` and started an
+unattended run has asked for precisely this. **Step 3's blast-radius report is
+still produced in full and still recorded** (in the reply, and in the feature
+context when `/feature` chained here). A release nobody was asked about is
+allowed by the grant; a release nobody can read afterwards is not.
+
 **If neither holds, stop here and stand down.** Do not compute anything, do not
 write a signal file, do not push. Emit the stand-down block
 (`getting-started`, Step 3c) with `reason: authority-not-granted`, and say
@@ -218,12 +230,26 @@ are at the same point."
 Hold this report. Step 4 uses it as the body of the question, and step 10
 prints it in the summary whether or not step 4 ran.
 
-### 4. Confirm, unless `--quick`
+### 4. Confirm, unless `--quick` or unattended
 
-Skip this step entirely when `--quick` was passed, and when the situation
-is `preprod` or landed-feature with nothing riding along that the user has not
-already seen. Otherwise ask exactly one question with `AskUserQuestion`,
-with the step 3 report as its body.
+Skip this step entirely in three cases:
+
+1. `--quick` was passed.
+2. **The run is unattended under a standing grant**: a `/feature --ship` run
+   reached this skill, and `.harness-version` carries
+   `agent-authority: release`. The `## Authority` section above is where that
+   is settled; there is nobody to ask, and the grant already answered. Say in
+   the reply that the question was skipped and why, and record it.
+3. The situation is `preprod` or landed-feature with nothing riding along that
+   the user has not already seen.
+
+Otherwise ask exactly one question with `AskUserQuestion`, with the step 3
+report as its body.
+
+**Step 3's report is produced and reported whatever happens here.** Skipping
+the question never skips the blast radius: the whole of `LAST_TAG..preprod`
+goes in the reply, and in the feature context when `/feature` chained here, so
+the decision is auditable even when nobody made it in the moment.
 
 In the **unlanded** case, the question names the whole path explicitly:
 this takes the feature from its branch, to `preprod`, to `main`, and tags a

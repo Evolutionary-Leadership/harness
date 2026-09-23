@@ -275,39 +275,176 @@ jobs:
           # making CI decorative for the merge decision.
           CHECK_CMD=$(grep '^check:' .harness-version 2>/dev/null | sed 's/^check: *//' || true)
           if [ -n "$CHECK_CMD" ]; then
-            # Budget: 72 ticks of 10s is a hard 12-minute cap. A check:
-            # command that runs longer than that fails every gated merge;
-            # keep the check chain under the cap or raise the budget here.
+            # A head pushed with a bot token cannot produce a usable 'check'
+            # run: GitHub does not start pull_request workflows for such a
+            # push, so the run is either never created or created as
+            # action_required and resolved without executing. Polling it can
+            # only time out, and the gate then reported "CI status 'pending'",
+            # which sends the reader hunting for a test failure that never
+            # happened.
+            #
+            # Two functions below answer the two questions that distinguishes
+            # that from a real red: is this head one a bot pushed, and can the
+            # signal files be stripped off it again? Stripping is the recovery:
+            # it pushes a user-identity (PAT) commit, which starts a real check
+            # run on a real head. The gate is never relaxed. Accepting an
+            # earlier commit's green instead would merge the bot's file onto
+            # preprod AND assert a check the gate never saw on the head it
+            # merged. Forge decision record 0041.
+            #
+            # Retried, because one unlucky API call must not be what decides
+            # this. An unanswerable lookup falls through to "not a bot", which
+            # is the safe direction for merging (the gate refuses rather than
+            # recovers) and the unsafe one for the message, so it says so.
+            head_is_bot() {
+              local who=""
+              for _try in 1 2 3; do
+                who=$(GH_TOKEN=${{ github.token }} gh api \
+                  "/repos/${{ github.repository }}/commits/$1" \
+                  --jq '[.author.login // "", .commit.author.email // ""] | join(" ")' 2>/dev/null || echo "")
+                if [ -n "${who// /}" ]; then break; fi
+                sleep 2
+              done
+              if [ -z "${who// /}" ]; then
+                echo "::warning::Could not read the author of $1 after 3 attempts; treating it as a human push, so a red below is reported as a real failure."
+                return 1
+              fi
+              case "$who" in
+                *'[bot]'*) return 0 ;;
+              esac
+              return 1
+            }
+
+            # Re-strip the signal files and push as the PAT. Returns non-zero
+            # when there is nothing to strip, which is the honest answer that
+            # this head is not the signal-file case and cannot be recovered
+            # here. remove_signal_files and pat_push are defined above.
+            restrip_head() {
+              git fetch origin "$FEATURE_BRANCH" > /dev/null 2>&1 || return 1
+              git reset --hard "origin/$FEATURE_BRANCH" > /dev/null 2>&1 || return 1
+              remove_signal_files
+              if git diff --quiet "origin/$FEATURE_BRANCH"; then return 1; fi
+              pat_push
+            }
+
+            # Budget: 72 ticks of 10s is a hard 12-minute cap per round, and
+            # three rounds (the first, plus one per recovery) make 36 minutes
+            # worst case. Only a round that ends in a recovery costs its full
+            # 12: an unrunnable head is recognised in seconds (action_required)
+            # or two minutes (missing), so the common shape is minutes, not
+            # half an hour. A check: command that runs longer than one round
+            # fails every gated merge; keep the check chain under the cap or
+            # raise the budget here.
             echo "Waiting for CI 'check' status on PR #$PR_NUMBER HEAD..."
             CI_RESULT=pending
             CHECK=missing
-            for i in $(seq 1 72); do
-              PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
-              if [ -z "$PR_HEAD" ]; then
-                echo "  [$i/72] HEAD fetch failed, retrying next tick"
+            UNRUNNABLE_HEAD=""
+            RESTRIPS=0
+            # How long 'missing' may persist on a bot-pushed head before it
+            # counts as unrunnable. A real run's check appears within seconds;
+            # two minutes is slack for a busy runner queue, not a diagnosis.
+            MISSING_GRACE_TICKS=12
+            for round in 1 2 3; do
+              MISSING_TICKS=0
+              UNRUNNABLE_HEAD=""
+              PR_HEAD=""
+              for i in $(seq 1 72); do
+                PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+                if [ -z "$PR_HEAD" ]; then
+                  echo "  [round $round] [$i/72] HEAD fetch failed, retrying next tick"
+                  sleep 10
+                  continue
+                fi
+                # The check-runs API needs checks:read; PAT_TOKEN may not
+                # carry that scope, so use the workflow's default token for
+                # this one call.
+                CHECK=$(GH_TOKEN=${{ github.token }} gh api \
+                  "/repos/${{ github.repository }}/commits/$PR_HEAD/check-runs" \
+                  --jq '[.check_runs[] | select(.name=="check")] | max_by(.started_at) | (.conclusion // .status // "missing")' 2>/dev/null || echo missing)
+                echo "  [round $round] [$i/72] HEAD=$PR_HEAD check=$CHECK"
+                if [ "$CHECK" = success ]; then
+                  CI_RESULT=success
+                  break
+                fi
+                case "$CHECK" in
+                  failure|cancelled|timed_out)
+                    CI_RESULT="$CHECK"
+                    break
+                    ;;
+                esac
+                # action_required is what a never-executed run reports, but it
+                # is also what a run legitimately waiting on approval reports,
+                # so it is conclusive only on a bot-pushed head. Without that
+                # qualifier a fork or first-time-contributor PR would burn a
+                # re-strip before refusing.
+                if [ "$CHECK" = action_required ] && head_is_bot "$PR_HEAD"; then
+                  UNRUNNABLE_HEAD="$PR_HEAD"
+                  break
+                fi
+                # 'missing' needs a grace period (a real run appears within
+                # seconds), and only counts as unrunnable on a bot-pushed head.
+                if [ "$CHECK" = missing ]; then
+                  MISSING_TICKS=$((MISSING_TICKS + 1))
+                  if [ "$MISSING_TICKS" -ge "$MISSING_GRACE_TICKS" ] && head_is_bot "$PR_HEAD"; then
+                    UNRUNNABLE_HEAD="$PR_HEAD"
+                    break
+                  fi
+                else
+                  MISSING_TICKS=0
+                fi
                 sleep 10
+              done
+
+              # A bot-pushed head's run can also resolve 'failure' without ever
+              # executing a step, so a red on such a head is not evidence of a
+              # red test. Reclassify it rather than reporting a failure that
+              # did not happen; the recovery below produces a head whose red,
+              # if it comes, is real.
+              case "$CI_RESULT" in
+                failure|cancelled|timed_out)
+                  if [ -n "$PR_HEAD" ] && head_is_bot "$PR_HEAD"; then
+                    echo "'$CI_RESULT' was reported on bot-pushed head $PR_HEAD, which never ran; treating it as unrunnable."
+                    UNRUNNABLE_HEAD="$PR_HEAD"
+                    CI_RESULT=pending
+                  fi
+                  ;;
+              esac
+
+              if [ "$CI_RESULT" = success ]; then
+                break
+              fi
+              if [ -z "$UNRUNNABLE_HEAD" ]; then
+                break
+              fi
+              if [ "$RESTRIPS" -ge 2 ]; then
+                break
+              fi
+              echo "Head $UNRUNNABLE_HEAD cannot produce a check run. Re-stripping the signal files so a user-identity push starts one..."
+              if restrip_head; then
+                RESTRIPS=$((RESTRIPS + 1))
+                UNRUNNABLE_HEAD=""
+                CI_RESULT=pending
                 continue
               fi
-              # The check-runs API needs checks:read; PAT_TOKEN may not
-              # carry that scope, so use the workflow's default token for
-              # this one call.
-              CHECK=$(GH_TOKEN=${{ github.token }} gh api \
-                "/repos/${{ github.repository }}/commits/$PR_HEAD/check-runs" \
-                --jq '[.check_runs[] | select(.name=="check")] | max_by(.started_at) | (.conclusion // .status // "missing")' 2>/dev/null || echo missing)
-              echo "  [$i/72] HEAD=$PR_HEAD check=$CHECK"
-              case "$CHECK" in
-                success) CI_RESULT=success; break ;;
-                failure|cancelled|timed_out) CI_RESULT="$CHECK"; break ;;
-              esac
-              sleep 10
+              echo "Could not restore a checkable head for $UNRUNNABLE_HEAD: either nothing was left to strip, or the push was rejected."
+              break
             done
+
             if [ "$CI_RESULT" != "success" ]; then
               # Exit non-zero so the workflow conclusion honestly reports
-              # that the merge did NOT happen. Timeouts report the last
-              # observed run state (e.g. action_required, skipped) so the
-              # operator sees why the gate never resolved.
-              echo "::error::CI status '$CI_RESULT' (last check state: '$CHECK') for PR #$PR_NUMBER; merge not performed."
-              gh pr comment "$PR_NUMBER" --body "**Merge not performed: CI status was '$CI_RESULT'** (last check state: '$CHECK'). Fix the failure (or wait for CI to finish) and merge manually with \`gh pr merge $PR_NUMBER --merge\`, or push a new change to re-trigger to-preprod."
+              # that the merge did NOT happen.
+              if [ -n "$UNRUNNABLE_HEAD" ]; then
+                # Say what is actually wrong. "CI status was pending" sends
+                # the reader looking for a broken test; there is none.
+                WHY="head $UNRUNNABLE_HEAD was pushed with a bot token, so GitHub will not run the 'check' workflow on it. CI did not fail on this PR; it never ran on this head."
+                echo "::error::Merge not performed for PR #$PR_NUMBER: $WHY"
+                gh pr comment "$PR_NUMBER" --body "**Merge not performed: the PR head cannot produce a CI check.** The $WHY Re-push the head under a user or PAT identity (for example by removing the bot-authored commit's file again from a local clone), and to-preprod will merge on the green check that follows. Do not read this as a test failure."
+              else
+                # Timeouts report the last observed run state (e.g. skipped)
+                # so the operator sees why the gate never resolved.
+                echo "::error::CI status '$CI_RESULT' (last check state: '$CHECK') for PR #$PR_NUMBER; merge not performed."
+                gh pr comment "$PR_NUMBER" --body "**Merge not performed: CI status was '$CI_RESULT'** (last check state: '$CHECK'). Fix the failure (or wait for CI to finish) and merge manually with \`gh pr merge $PR_NUMBER --merge\`, or push a new change to re-trigger to-preprod."
+              fi
               exit 1
             fi
           fi

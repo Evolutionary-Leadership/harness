@@ -197,11 +197,40 @@ jobs:
             exit 1
           fi
 
-          # 2. Create environment duplicated from preprod
+          # 2. Create environment duplicated from preprod.
+          #
+          # Say something about the name length BEFORE the call. Railway
+          # refuses environmentCreate for an over-long name with a bare
+          #   {"errors":[{"message":"Error in name - Invalid input", ...}]}
+          # which reads like a transient API fault, and the no-id path below
+          # then used to spend 60 seconds polling for an environment the API
+          # had already declined to create.
+          #
+          # This WARNS and does not refuse, deliberately. 34 characters was
+          # rejected downstream and 26 and 27 provisioned, so the real
+          # threshold is known only to lie somewhere in 28..34.
+          # set-feature-name.sh mints at 27, the longest length measured to
+          # work; refusing here at the same number would turn every unmeasured
+          # length into a certain failure on this side too, when Railway might
+          # well accept it. Railway decides, and the error path below reports
+          # its answer with the length attached.
+          RAILWAY_ENV_NAME_MAX=27
+          if [ "${#FEATURE_NAME}" -gt "$RAILWAY_ENV_NAME_MAX" ]; then
+            echo "::warning::Feature name '$FEATURE_NAME' is ${#FEATURE_NAME} characters, above the $RAILWAY_ENV_NAME_MAX that set-feature-name.sh mints. Railway may refuse it; if it does, the error below names this length. Rename with 'bash .claude/scripts/set-feature-name.sh <shorter-slug>' and push again."
+          fi
+
           CREATE_RESPONSE=$(gql "mutation { environmentCreate(input: { name: \\\"$FEATURE_NAME\\\", projectId: \\\"$PROJECT_ID\\\", sourceEnvironmentId: \\\"$PREPROD_ENV_ID\\\" }) { id deploymentTriggers { edges { node { id branch } } } } }")
 
           ENV_ID=$(echo "$CREATE_RESPONSE" | jq -r '.data.environmentCreate.id // empty')
           if [ -z "$ENV_ID" ]; then
+            # Railway answered and said no. That is not the malformed-response
+            # case the polling fallback exists for, so report what it said
+            # rather than waiting a minute to report that nothing appeared.
+            CREATE_ERRS=$(echo "$CREATE_RESPONSE" | jq -r '[.errors[]?.message] | join("; ")' 2>/dev/null || true)
+            if [ -n "$CREATE_ERRS" ]; then
+              echo "::error::Railway refused to create environment '$FEATURE_NAME' (${#FEATURE_NAME} characters; set-feature-name.sh mints at most $RAILWAY_ENV_NAME_MAX): $CREATE_ERRS. An 'Error in name' here means the name is too long: rename the feature with 'bash .claude/scripts/set-feature-name.sh <shorter-slug>' and push again."
+              exit 1
+            fi
             # The create response can be malformed even though the
             # environment WAS created server-side (with preprod's deployment
             # trigger still pointing at preprod). Exiting 0 here would skip
@@ -221,7 +250,7 @@ jobs:
               echo "Environment '$FEATURE_NAME' not visible yet (poll $i/6)."
             done
             if [ -z "$ENV_ID" ]; then
-              echo "::error::Railway environment '$FEATURE_NAME' was not created: environmentCreate returned no id and the environment did not appear after 60s of polling."
+              echo "::error::Railway environment '$FEATURE_NAME' (${#FEATURE_NAME} characters, cap $RAILWAY_ENV_NAME_MAX) was not created: environmentCreate returned no id, named no error, and the environment did not appear after 60s of polling."
               exit 1
             fi
           fi
@@ -640,6 +669,37 @@ jobs:
             echo "::warning::.railway-url named $CURRENT_URL, which is not this environment's domain. Republishing as $DEPLOY_URL."
           fi
 
+          # Is the environment this URL names still there? Asked again, now,
+          # because minutes can pass between the lookup above and this push:
+          # environmentCreate forks the whole preprod environment and the
+          # deployment wait that follows is slower still.
+          #
+          # On the merge path claude-to-preprod.yml deletes the environment
+          # BEFORE it strips the signal files and opens the merge, so an
+          # environment that resolved a moment ago and is gone now means a
+          # to-preprod merge is in flight. Publishing into that is how
+          # .railway-url landed on the PR head as a github-actions[bot] commit:
+          # GitHub does not run a pull_request workflow for a bot-token push,
+          # so the merge gate polled a head that could never go green and timed
+          # out reporting a CI failure that had not happened.
+          #
+          # /review keeps its environment (the teardown is gated on the review
+          # flag), so this never refuses a review preview its URL. The
+          # workflow-level skip on 'chore: trigger auto-merge to preprod'
+          # covers the push that ASKS for the merge; this covers a provisioning
+          # run that was already in flight when the merge started, which the
+          # subject-line guard cannot see. Forge decision record 0041.
+          env_gone() {
+            local envs
+            envs=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+            # Fail towards publishing: an unreadable response is not evidence
+            # of a teardown, and abandoning a good URL on an API blip is the
+            # cost this direction refuses to pay.
+            echo "$envs" | jq -e '.data.environments.edges' > /dev/null 2>&1 || return 1
+            ! echo "$envs" | jq -e --arg n "$FEATURE_NAME" \
+              '[.data.environments.edges[].node | select(.name == $n)] | length > 0' > /dev/null 2>&1
+          }
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -652,6 +712,11 @@ jobs:
           # conflict, and the value is authoritative because it came from the
           # live API moments ago.
           for attempt in 1 2 3 4 5; do
+            if env_gone; then
+              echo "::warning::Railway environment '$FEATURE_NAME' was deleted while this run was provisioning; a merge to preprod is tearing it down. Not publishing $DEPLOY_URL."
+              exit 0
+            fi
+
             git fetch origin "$FEATURE_BRANCH" || true
 
             # Concede only to a run that published THIS url. Conceding to any

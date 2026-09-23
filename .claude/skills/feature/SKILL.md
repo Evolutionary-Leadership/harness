@@ -174,6 +174,27 @@ code exists is not informed consent about a specific release. The grant is
 what makes the bottom row reachable, it was made once, and it is revocable in
 a commit.
 
+**So `--ship` does not mean production; the grant does.** The one line that
+moves a repository from the middle row to the bottom one is this, in
+`.harness-version`:
+
+    agent-authority: release
+
+Add it and `--ship` runs the feature branch to `preprod` to `main` and tags a
+release, carrying everything already queued on `preprod`. Leave it out and
+`--ship` stops at `preprod`, which is a complete, filed, merged outcome and not
+a stand-down. **Phase 0 says which of the two this run is**, in the line it
+already writes about the exit, so nobody learns it at phase 5.
+
+**Under the grant, the chained `/release` does not re-ask.** Its step 4
+blast-radius question is skipped, on the same grounds `--quick` skips it and
+for the reason its `## Authority` section now states: the grant is the consent
+and there is nobody to ask a second time. Standing down there would make the
+grant worthless for the case it was granted for. Its step 3 blast-radius
+report is still produced, still reported, and still recorded in the feature
+context, because a release nobody was asked about must still be one somebody
+can read afterwards.
+
 #### What `--ship` still stops for
 
 **Floor.** `--ship` still stands down. It removes gates, never blocks.
@@ -343,6 +364,15 @@ Name the exit this run will take and the row that chose it, in the same line,
 and record it in the feature context: under `--ship` nobody will be asked at
 phase 5, so phase 0 is the only place a person sees the decision before it
 happens.
+
+**Where the middle row chose it, say what that costs and what would change
+it**, in that same line and in those terms: this run will stop at `preprod`
+and will not reach production, and the one line that would change it is
+`agent-authority: release` in `.harness-version`. An owner who wanted
+production and gets `preprod` should learn it now, while adding a line and
+re-running is cheap, rather than at phase 5 with the work already built. Same
+principle as forge decision record 0037, applied to the flag instead of to the
+gate.
 
 **Then probe the alert path, once, and only under `--ship`.** An unattended
 run's stand-down is only as good as its notification. The durable record is
@@ -1002,6 +1032,12 @@ Everything else in this phase still applies: the summary above, the record
 below, the push of the feature context before the exit merges the branch out
 from under you, and the `## Authority` read before `/release`. Only the asking
 is skipped.
+
+**On the bottom row, `/release`'s own confirmation is covered too**, on the
+terms the ceiling section above sets out; do not re-derive them here. Read the
+grant out of `.harness-version` yourself before following the file: an absent
+grant means the ceiling table never chose that row, and taking it by hand
+would be the same forbidden act as invoking it.
 
 Otherwise, ask the user which exit they want, using `AskUserQuestion`:
 
