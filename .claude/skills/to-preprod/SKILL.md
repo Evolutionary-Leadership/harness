@@ -60,6 +60,25 @@ skill's block rather than emitting a second one.
 This prefers the slug in `.harness-feature` (set via `set-feature-name.sh`)
 and falls back to the random session codename, matching the workflows.
 
+**If `.harness-feature` is gone but the session named its feature** (a
+`chore: set feature name (<slug>)` commit in `git log origin/preprod..HEAD`,
+or a feature context under that slug), restore it before anything is pushed,
+and without a push of its own:
+
+    bash .claude/scripts/set-feature-name.sh --no-push <slug>
+
+`--no-push` matters on Railway: a naming push provisions an environment, and
+after the PR opened on the merge path that is the environment the workflow
+just tore down, while the signal push that follows is one provisioning skips.
+A naming commit that arrived with someone else's branch is not yours to
+restore; name this session's own feature instead.
+
+Merging `feature/<name>` back into this branch after its PR opened is the
+usual way to lose it: the workflow stripped the signal files from that branch,
+and the merge carries the deletion across. The workflows refuse a push that
+lost the name its branch set, rather than opening `feature/<codename>` (and,
+on Railway, an environment) beside the real branch.
+
 ### 2. Gather all changes and sync with preprod
 
 Fetch and diff against preprod to understand what is going through the gate:
@@ -103,8 +122,11 @@ conflict.
 3. **Resolve each hunk.** Preserve both intents where possible. Where
    they are incompatible, pick the side matching this merge's stated goal
    and note the trade-off. Do not invent new behaviour in a resolution.
-   For generated, lock, or signal files, prefer the `preprod` version. Always
-   resolve; never `--abort`.
+   For generated and lock files, prefer the `preprod` version and regenerate.
+   Signal files (`.harness-feature`, `.pr-description.md`) are the opposite:
+   keep this branch's version, because they belong to this session and a
+   copy that reached `preprod` belongs to another one. Always resolve; never
+   `--abort`.
 4. **Run the checks.** Run the `check:` command from `.harness-version`
    (or the project's typecheck and tests) and fix anything the merge
    broke.
@@ -123,6 +145,36 @@ stop and ask the user instead of guessing.
 `.harness/feature-context/*.md` for *other* features (leaked past a merge
 that bypassed this skill and the cleanup workflow), delete them now; the
 deletion rides along with this merge.
+
+**Check the ADR numbers after the merge.** A duplicated ADR number is a
+conflict git cannot see: two branches that each wrote a decision record
+without claiming its number pick the same one, the filenames differ, and the
+merge above is clean either way. Ask:
+
+    bash .claude/scripts/coordination.sh adr-collisions "$FEATURE_BRANCH"
+
+Silence means every record this branch adds has a number of its own. Each
+`ADR NNNN:` line names one of this branch's records and the record that
+already holds the number. A record on `preprod`, or one another feature
+claimed, keeps its number; against another in-flight branch, the branch that
+finds the collision moves, because it is the one with a session in front of
+it. Renumber this branch's record:
+
+1. Claim a new number exactly as `/document` Mode A step 1 does.
+2. `git mv docs/decisions/<old>-<slug>.md docs/decisions/<new>-<slug>.md`,
+   and change the number in the record's title line.
+3. Change every citation this branch added, and only those. These are the
+   lines to look at:
+
+       git diff -U0 origin/preprod...HEAD | grep -E '^(\+\+\+ |\+.*<old>)'
+
+   A citation of `<old>` on a line this branch did not add is the other
+   record's: leave it. A link names the file, so it takes the new filename.
+4. Move the record's row in `docs/README.md` to the new number.
+5. Run the checks. `check-docs.mjs` refuses a number still shared and a
+   citation left dangling.
+
+Say in the final message which record moved, and from which number to which.
 
 ### 3. Run docs-updater agent
 
@@ -292,8 +344,8 @@ one:
 
 The context lives only while the feature is in flight; it never passes the
 gate. (If someone merges around this skill, the cleanup workflow removes the
-leftover from `preprod`; it names that one file and touches nothing else under
-`.harness/`.)
+leftover from `preprod`; it names this feature's own files and touches nothing
+else under `.harness/`.)
 
 **`.harness/gate-runs/` is the opposite case and MUST pass the gate.** It is
 the ledger the false-drift rate is computed from after ten features. Never
@@ -303,6 +355,11 @@ delete it here, and never gitignore it.
 
 Create `.pr-description.md` at the repo root. If `$ARGUMENTS` is provided, use
 it as the PR title. Otherwise, generate a concise title from the changes.
+
+The front matter is read line by line, not parsed as YAML. Write the title
+unquoted, even when it carries a colon (`title: MYPR-6: the bot look`): the
+workflow strips one surrounding pair of quotes and takes everything else
+verbatim, so escapes and other YAML syntax reach the PR as typed.
 
 Format:
 
@@ -397,17 +454,51 @@ where it broke. Open the Actions tab in GitHub and find the run titled
 "Merge feature branch to preprod (to-preprod)" triggered by the `claude/<branch>`
 push.
 
+**A recovery push re-triggers the workflow only if it changes
+`.pr-description.md`.** The workflow starts on a push whose diff touches that
+file and on no other: a push that fixes the problem but leaves the signal file
+as it was merges into `feature/<name>` and never reaches the PR. So every
+recovery below ends the same way. Record what the recovery was in the body of
+`.pr-description.md` (step 7 asks you to report it anyway), then commit and
+push it exactly as step 6 does, message included:
+
+    git add -f .pr-description.md
+    git commit -m "chore: trigger auto-merge to preprod"
+    git push -u origin <current-branch>
+
+The message is part of the contract: on Railway it is what keeps the recovery
+push from provisioning a preview environment again. The workflow reuses the
+open PR, so no second one opens, and it strips the signal files again before
+it merges.
+
 Common failure modes:
 
-- **Workflow run failed mid-step** (e.g. a transient git push race): re-push
-  the local `claude/` branch with `git push -u origin <branch>`. If the remote
-  `claude/` branch was already deleted by `claude-to-feature-branch.yml`, the
-  push creates a fresh branch and retriggers the chain. The workflow is
-  idempotent, so re-runs do not duplicate commits or work.
-- **PR opened but could not auto-merge** (conflicts with preprod): the workflow
-  leaves a comment on the PR with manual resolution steps. Check out
-  `feature/<name>` locally, merge `preprod` into it, resolve the conflicts using
-  the discipline in step 2, push, and merge the PR by hand.
+- **PR opened but did not merge because it conflicts with `preprod`**
+  (`preprod` moved after the signal push; the PR comment says it conflicts
+  with `preprod`). Recover here, on this `claude/` branch: run
+  `git fetch origin preprod && git merge origin/preprod`, resolve with the
+  discipline in step 2, run the checks, then re-trigger as above. **Never
+  merge `origin/feature/<name>` into this branch to recover.** The workflow
+  stripped the signal files from it when it opened the PR, and the merge
+  carries the deletion across, `.harness-feature` included; step 1 says how
+  to restore the name if that already happened.
+- **"The PR head cannot produce a CI check"** (a bot-pushed head, often the
+  Railway URL publish landing on top of the strip). Re-trigger as above: the
+  run re-strips the signal files as a PAT push, which starts a real check,
+  and merges on its green. Pushing the head again by any other route starts a
+  check and nothing that merges.
+- **Workflow run failed mid-step** (e.g. a transient git push race):
+  re-trigger as above. If the remote `claude/` branch was already deleted by
+  `claude-to-feature-branch.yml`, the push creates a fresh branch and restarts
+  the chain. The workflow is idempotent, so re-runs do not duplicate commits
+  or work.
+- **A push already created a stray `feature/<codename>` branch** (and, on
+  Railway, an environment). A session cannot delete it: the git proxy refuses
+  every branch but the session's own. Dispatch the removal workflow instead,
+  with `mcp__github__actions_run_trigger`: method `run_workflow`, workflow
+  `feature-branch-remove.yml`, ref `preprod`, inputs
+  `{"branch": "feature/<codename>"}`. It refuses a branch with an open PR or a
+  touched-set record, so close a PR the stray branch opened first.
 - **PR did not open at all**: the workflow errored before PR creation. Read
   the failed step's logs in the Actions tab. Most common cause: a missing or
   empty `PAT_TOKEN` secret. The workflow now fails fast with an explicit
@@ -416,9 +507,8 @@ Common failure modes:
   `workflow` scopes (or fine-grained equivalent: Contents r/w, Pull
   requests r/w, Workflows r/w). Other causes: branch protection on `preprod`
   that requires explicit reviewers. **Recovery when `PAT_TOKEN` was
-  missing**: add the secret, then re-push the `claude/` branch
-  (`git push -u origin <branch>`) to retrigger. Because cleanup now runs
-  *after* PR creation, the signal file is still on `feature/<name>` and
+  missing**: add the secret, then re-trigger as above. Because cleanup now
+  runs *after* PR creation, the signal file is still on `feature/<name>` and
   the rerun picks up cleanly.
 
 Do not confuse the recovery push above with the gotcha already documented in

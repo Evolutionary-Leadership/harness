@@ -575,6 +575,158 @@ jobs:
             echo "Redeployed app service so the new region takes effect."
           fi
 
+      - name: Apply this feature's own variables
+        # Railway forks every feature environment from preprod, variables
+        # included, and a session holds no Railway credential, so a value
+        # meant for one preview alone (an experiment behind a flag, an
+        # undocumented field to try) had no way in: the only choice was to
+        # hard-code it on a branch never meant to merge. A feature branch now
+        # commits .harness/env/<name>.env, KEY=value literals, and this step
+        # sets them on that feature's app service. Always runs when secrets
+        # are present, create path or not, because the file usually arrives
+        # after the naming push that provisioned the environment, and a push
+        # that touches only .harness/ starts no Railway deploy of its own.
+        #
+        # Literals only, and never a secret: the file is committed. Keys the
+        # harness or Railway own are refused, a reference is refused, and no
+        # value is ever printed, only keys. It upserts only keys whose value
+        # differs from the environment's, and Railway redeploys the app on the
+        # upsert, so an unchanged file costs a read and no deploy.
+        # claude-to-preprod.yml strips the file with .railway-url on the merge
+        # path, and feature-merge-cleanup.yml removes one that reached preprod
+        # anyway. Forge decision record 0043.
+        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        run: |
+          FEATURE_NAME="${{ steps.feature.outputs.name }}"
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          PROJECT_ID="$RAILWAY_PROJECT_ID"
+          API_URL="https://backboard.railway.com/graphql/v2"
+          FILE=".harness/env/$FEATURE_NAME.env"
+
+          # env_literals <file>: the file's KEY=value lines as one JSON object.
+          # A value is everything after the first '=', less one surrounding
+          # pair of matching quotes; nothing else is dotenv-parsed. Warnings
+          # name a line number or a key, never a value, and collect in $NOTES
+          # because stdout is the JSON; the step prints them afterwards, on
+          # stdout, where Actions reads its annotations. The reference opener
+          # is built at runtime so double braces never appear literally here.
+          NOTES=$(mktemp)
+          env_literals() {
+            local file="$1" n=0 line key value out='{}' ref_open
+            ref_open=$(printf '\044{{')
+            while IFS= read -r line || [ -n "$line" ]; do
+              n=$((n + 1))
+              line=${line%$'\r'}
+              line=${line#"${line%%[![:space:]]*}"}
+              case "$line" in
+                "" | "#"*) continue ;;
+                "export "*) line=${line#export } ;;
+              esac
+              if ! [[ "$line" =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]]; then
+                echo "::warning::$file line $n is not KEY=value; skipped." >> "$NOTES"
+                continue
+              fi
+              key=${BASH_REMATCH[1]}
+              value=${BASH_REMATCH[2]}
+              case "$key" in
+                DATABASE_URL | PORT | BETTER_AUTH_SECRET | AWS_* | RAILWAY_*)
+                  echo "::warning::$key is set by the harness or by Railway, never by $file; skipped." >> "$NOTES"
+                  continue
+                  ;;
+              esac
+              case "$value" in
+                \"*\") value=${value#\"}; value=${value%\"} ;;
+                \'*\') value=${value#\'}; value=${value%\'} ;;
+              esac
+              case "$value" in
+                *"$ref_open"*)
+                  echo "::warning::$key is a reference; $file carries literals only, so it is skipped." >> "$NOTES"
+                  continue
+                  ;;
+              esac
+              out=$(jq -c --arg k "$key" --arg v "$value" '. + {($k): $v}' <<< "$out")
+            done < "$file"
+            printf '%s\n' "$out"
+          }
+
+          if [ ! -f "$FILE" ]; then
+            echo "No $FILE on $FEATURE_BRANCH; this preview carries preprod's variables only."
+            exit 0
+          fi
+          WANT=$(env_literals "$FILE")
+          cat "$NOTES"
+          rm -f "$NOTES"
+          if [ "$WANT" = '{}' ]; then
+            echo "$FILE sets nothing this workflow may apply."
+            exit 0
+          fi
+
+          # Same retry-hardened helper as the create step: never trust a
+          # single malformed response from a slow Railway mutation.
+          gql_post() {
+            local payload="$1" resp
+            for _try in 1 2 3; do
+              resp=$(curl -s --max-time 120 -X POST "$API_URL" \
+                -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$payload") || true
+              if echo "$resp" | jq . >/dev/null 2>&1; then
+                echo "$resp"
+                return 0
+              fi
+              sleep 5
+            done
+            echo '{"data":null}'
+          }
+
+          gql() {
+            gql_post "{\"query\":\"$1\"}"
+          }
+
+          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
+          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id // empty" 2>/dev/null) || true
+          if [ -z "$ENV_ID" ]; then
+            echo "::warning::No Railway environment found for '$FEATURE_NAME'; $FILE not applied."
+            exit 0
+          fi
+          SERVICES=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { services { edges { node { id name } } } } }")
+          APP_SERVICE_ID=$(echo "$SERVICES" | jq -r '[.data.project.services.edges[].node | select(.name | test("postgres|db|storage"; "i") | not)][0].id // empty' 2>/dev/null) || true
+          if [ -z "$APP_SERVICE_ID" ]; then
+            echo "::warning::No app service found in '$FEATURE_NAME'; $FILE not applied."
+            exit 0
+          fi
+
+          # Read before writing, and fail towards doing nothing: an unreadable
+          # environment is not one to change blind.
+          HAVE=$(gql_post "$(jq -n \
+            --arg pid "$PROJECT_ID" \
+            --arg eid "$ENV_ID" \
+            --arg sid "$APP_SERVICE_ID" \
+            '{query: "query($pid: String!, $eid: String!, $sid: String!) { variables(projectId: $pid, environmentId: $eid, serviceId: $sid) }", variables: {pid: $pid, eid: $eid, sid: $sid}}')" \
+            | jq -c 'if (.data.variables | type) == "object" then .data.variables else empty end' 2>/dev/null) || true
+          if [ -z "$HAVE" ]; then
+            echo "::warning::Could not read the variables of '$FEATURE_NAME'; $FILE not applied."
+            exit 0
+          fi
+          CHANGED=$(jq -cn --argjson want "$WANT" --argjson have "$HAVE" '$want | with_entries(select($have[.key] != .value))')
+          if [ "$CHANGED" = '{}' ]; then
+            echo "Every variable in $FILE is already set on '$FEATURE_NAME'."
+            exit 0
+          fi
+
+          RESP=$(gql_post "$(jq -n \
+            --arg pid "$PROJECT_ID" \
+            --arg eid "$ENV_ID" \
+            --arg sid "$APP_SERVICE_ID" \
+            --argjson vars "$CHANGED" \
+            '{query: "mutation($input: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $input) }", variables: {input: {projectId: $pid, environmentId: $eid, serviceId: $sid, variables: $vars}}}')")
+          if echo "$RESP" | jq -e '(.errors | length) > 0' > /dev/null 2>&1; then
+            echo "::warning::Railway refused the variables from $FILE: $(echo "$RESP" | jq -r '[.errors[].message] | join("; ")')"
+            exit 0
+          fi
+          # Keys only. Never the values.
+          echo "Set $(echo "$CHANGED" | jq -r 'keys | join(", ")') on the app service of '$FEATURE_NAME' from $FILE; Railway redeploys it with them."
+
       - name: Publish Railway preview URL to feature branch
         # Always runs when secrets are present, regardless of whether the
         # create step ran or was skipped (exists=true).

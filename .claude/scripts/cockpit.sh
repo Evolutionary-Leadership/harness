@@ -56,15 +56,34 @@
 #   one variable set       one line naming the missing one, exit 0. Half a
 #                          cockpit IS a fault, and a silent one would never
 #                          be found
-#   401 or 403             one line, exit 0
-#   any other 4xx          one line, exit 0, naming the status: the fix for a
-#                          refusal is in the recipe, not in the environment,
-#                          so it must not read as an outage
+#   401 or 403             one line, exit 0. For a report, said ONCE per
+#                          session (below)
+#   404, report only       said ONCE per session (below), naming the cause:
+#                          the cockpit's own `not_found` means no product is
+#                          configured against the repository, anything else
+#                          means a cockpit that predates the report route
+#   any other 4xx          for a ping, one line, exit 0, naming the status:
+#                          the fix for a refusal is in the recipe, not in the
+#                          environment, so it must not read as an outage. For
+#                          a report, said ONCE per session too, naming it
 #   anything else          one line, exit 0
 #   2xx                    nothing printed, exit 0. For a report that covers
 #                          both 201 (written) and 200 (this actor's `ref` was
 #                          already there, so nothing was written). Both are
 #                          success and neither is worth a line
+#
+# A REPORT'S REFUSAL IS SAID ONCE PER SESSION, LOUDLY. One downstream session
+# sent ten reports into a 404, one easy-to-miss line each, while `ping` stayed
+# silent (a refresh accepts any repository), and nothing it reported was ever
+# recorded. So the first 4xx of each status in a session is one loud line
+# naming the likely cause and the fix, and the same refusal after it is
+# silent. A 401, a 403 or a 404 is about every report the session will make
+# (the credential, or a repository no product is configured against), so its
+# line starts `COCKPIT REPORTS OFF`. Any other 4xx is about what was sent (a
+# harness and a cockpit that disagree on a report's shape, or a rate limit),
+# so its line starts `COCKPIT REFUSED A REPORT` and claims nothing about the
+# reports after it. The session is Claude Code's own id; without one there is
+# nothing to remember across calls, and the line is said every time.
 #
 # One line means one line: no curl diagnostic beneath it, unlike `post`. The
 # only loud failure left is a USAGE error (an unknown flag, a source or a
@@ -105,9 +124,11 @@
 # that is still going. Pass one only where a finish will follow.
 #
 # THE POSITION is one of the 23 the journey has, and this client refuses an
-# unknown one BY NAME rather than leaving it to the route: a typo would
-# otherwise be a 400 that the fail-soft path turns into one line nobody reads,
-# a seam dead with nothing to say so. That is the one place `report` is strict.
+# unknown one BY NAME rather than leaving it to the route. The route stores
+# whatever position it is sent (checked against the live cockpit: an unknown
+# one is recorded, not refused), so this is the only check there is, and a
+# typo would otherwise land in the stream as the producer's own words. That
+# is the one place `report` is strict.
 # A `ref` gets no such check, because its correctness is relational rather
 # than a vocabulary; what guards it is that each recipe binds the pair to one
 # shell variable, so the two halves cannot disagree.
@@ -324,28 +345,91 @@ soft_configured() {
   return 0
 }
 
-# soft_post <path> <body> <noun>: the fail-soft half of the client. It reads
-# the status code and nothing else, so a hostile receiver can influence one
-# line on stderr and nothing more.
-#
-# curl's own stderr is discarded, because "one line" is the contract and
-# neither caller has a fix a resolver error would point at: the fix is the two
-# variables, the recipe, or nothing at all. The noun says which command went
-# unheard, since one line is the whole budget and a line that does not name
-# its command is one a reader has to go looking for.
-soft_post() {
-  local path=$1 body=$2 noun=$3 base code
-  base=${BOARD_URL%/}
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$SOFT_TIMEOUT_SECONDS" \
-    -X POST "$base$path" \
+# soft_request <path> <body> [<out>]: the one POST both fail-soft commands
+# make, under the soft timeout, printing the status code. curl's own stderr is
+# discarded, because "one line" is the contract and neither caller has a fix a
+# resolver error would point at: the fix is the two variables, the recipe, or
+# nothing at all. The answer's body goes to <out> only for the one caller that
+# reads a field of it; a caller assigns 000 when curl itself fails.
+soft_request() {
+  local path=$1 body=$2 out=${3:-/dev/null}
+  curl -s -o "$out" -w '%{http_code}' --max-time "$SOFT_TIMEOUT_SECONDS" \
+    -X POST "${BOARD_URL%/}$path" \
     -H "Authorization: Bearer $BOARD_TOKEN" \
     -H "Content-Type: application/json" \
-    --data "$body" 2>/dev/null) || code=000
+    --data "$body" 2>/dev/null
+}
+
+# soft_post <path> <body> <noun>: the fail-soft half of the client. It reads
+# the status code and nothing else, so a hostile receiver can influence one
+# line on stderr and nothing more. The noun says which command went unheard,
+# since one line is the whole budget and a line that does not name its
+# command is one a reader has to go looking for.
+soft_post() {
+  local path=$1 body=$2 noun=$3 code
+  code=$(soft_request "$path" "$body") || code=000
   case "$code" in
     2??) ;;
     401 | 403) echo "cockpit rejected the credential ($code); $noun not delivered" >&2 ;;
     4??) echo "cockpit refused the $noun ($code); nothing recorded" >&2 ;;
     *) echo "cockpit unreachable, $noun not delivered" >&2 ;;
+  esac
+}
+
+# say_once <key> <line>: the line on stderr, unless this session already said
+# it under this key. The state lives in the temp directory under the session's
+# id, which is unique, so two sessions sharing one /tmp never silence each
+# other. A state file that cannot be written costs a repeat, never a silence.
+say_once() {
+  local key=$1 line=$2 id state
+  id=$(printf '%s' "${CLAUDE_CODE_SESSION_ID:-}" | tr -cd 'A-Za-z0-9_-')
+  if [ -z "$id" ]; then
+    echo "$line" >&2
+    return 0
+  fi
+  state="${TMPDIR:-/tmp}/cockpit-said-$id"
+  if [ -f "$state" ] && grep -qxF -- "$key" "$state"; then
+    return 0
+  fi
+  echo "$line" >&2
+  printf '%s\n' "$key" >> "$state" 2>/dev/null || true
+}
+
+# soft_report <body> <repository>: a report's delivery. soft_post's contract,
+# with one difference: a 4xx is said once per session (the header says why).
+# The answer's body is read for one fact, whether a 404 is the cockpit's own
+# `not_found`, and only to choose between two sentences written here: nothing
+# the receiver sends reaches the line.
+soft_report() {
+  local body=$1 repository=$2 out code cause
+  out=$(mktemp)
+  code=$(soft_request /api/activity "$body" "$out") || code=000
+  case "$code" in
+    404)
+      if grep -q '"error"[[:space:]]*:[[:space:]]*"not_found"' "$out" 2>/dev/null; then
+        cause="no product in the cockpit is configured against $repository (404); pings still land because a refresh accepts any repository. Fix: link $repository to its product in the cockpit"
+      else
+        cause="this cockpit has no report route (404), so it predates reports. Fix: upgrade the cockpit"
+      fi
+      ;;
+  esac
+  rm -f "$out"
+  case "$code" in
+    2??) ;;
+    401 | 403 | 404)
+      [ "$code" = 404 ] || cause="the cockpit rejected the credential ($code). Fix: replace BOARD_TOKEN with a current pcb_ agent token"
+      say_once "$code $repository" \
+        "COCKPIT REPORTS OFF for this session: nothing it reports is recorded, because $cause. Said once; later reports stay silent"
+      ;;
+    429)
+      say_once "$code $repository" \
+        "COCKPIT REFUSED A REPORT (429): the cockpit is limiting this credential's rate, so reports are dropped until it lifts. Fix: none in the session; it lifts on its own. Said once; later refusals like it stay silent"
+      ;;
+    4??)
+      say_once "$code $repository" \
+        "COCKPIT REFUSED A REPORT ($code): the cockpit would not take what this client sent, most likely a harness and a cockpit that disagree on a report's shape. Fix: run /harness-upgrade, or ask whoever runs the cockpit. Said once; later refusals like it stay silent"
+      ;;
+    *) echo "cockpit unreachable, report not delivered" >&2 ;;
   esac
 }
 
@@ -449,7 +533,7 @@ cmd_report() {
     ref "$ref" \
     completes "$completes")
 
-  soft_post /api/activity "$body" report
+  soft_report "$body" "$repository"
   exit 0
 }
 

@@ -2,7 +2,7 @@
 name: document
 description: Write or repair project documentation under the AI-native docs standard. Use for "write an ADR", "check the docs", "where does this go", or when the user invokes /document.
 argument-hint: "[adr <title> | check | <topic to document>]"
-allowed-tools: Bash(git *), Bash(node scripts/check-docs.mjs*), Bash(python3 scripts/check-docs.py*), Read, Write, Edit, Glob, Grep
+allowed-tools: Bash(git *), Bash(bash .claude/scripts/coordination.sh *), Bash(node scripts/check-docs.mjs*), Bash(python3 scripts/check-docs.py*), Read, Write, Edit, Glob, Grep
 ---
 
 # Document

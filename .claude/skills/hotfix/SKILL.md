@@ -91,10 +91,13 @@ not happen. Add these to the PR body as a checklist:
 
 ### 5. Write `.pr-description.md`
 
-Create the signal file with `hotfix: true` in frontmatter:
+Create the signal file with `hotfix: true` in frontmatter. The front matter is
+read line by line, not parsed as YAML: write the title unquoted even though it
+carries a colon (the workflow strips one surrounding pair of quotes and takes
+the rest verbatim):
 
     ---
-    title: "Hotfix: <description>"
+    title: Hotfix: <description>
     hotfix: true
     version: v1.2.4
     ---

@@ -1,0 +1,100 @@
+name: Remove a stray feature branch
+
+# A web session can push and delete only its own claude/ branch: the git proxy
+# refuses every other ref. So a feature/<name> branch a push stranded (a
+# codename fallback, an abandoned name) outlives the session that made it,
+# and on Railway so does its environment. This is how the session, or anyone
+# with Actions access, removes one: dispatch it with the branch name.
+#
+# It removes only what nothing is still landing. An open PR, or a touched-set
+# record on the coordination branch (a /feature session declared the branch),
+# stops it; close the one or delete the other first if the branch really is
+# stray. The delete is made with PAT_TOKEN so that it fires the `delete`
+# event, which is what tears a Railway environment down; a delete made with
+# GITHUB_TOKEN starts no workflow. Forge decision record 0042.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "The stray branch, for example feature/practical-franklin"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse anything still in flight, then delete
+        env:
+          # Read from the environment, never interpolated into the script: the
+          # input is whatever the dispatcher typed.
+          BRANCH: ${{ inputs.branch }}
+          REPO: ${{ github.repository }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          DEFAULT_TOKEN: ${{ github.token }}
+        run: |
+          # Explicit, though the runner's default shell already adds -e: every
+          # guard below is an `if`, so only a failed delete ends the step.
+          set -euo pipefail
+
+          SLUG="${BRANCH#feature/}"
+          # The feature-name step's validator, reserved names included, so
+          # this can name only a branch the harness could have created: never
+          # preprod, main, a claude/ session branch or a hotfix. Matched on the
+          # whole string with [[ =~ ]]: grep matches line by line, and a
+          # dispatch input can carry a newline.
+          valid_branch() {
+            [ "$SLUG" != "$BRANCH" ] && [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{0,40}$ ]] &&
+              [ "$SLUG" != preprod ] && [ "$SLUG" != dev ] && [ "$SLUG" != main ]
+          }
+          if ! valid_branch; then
+            echo "::error::'$BRANCH' is not a feature/<slug> branch; this workflow removes nothing else."
+            exit 1
+          fi
+
+          if [ -n "$PAT_TOKEN" ]; then
+            export GH_TOKEN="$PAT_TOKEN"
+          else
+            export GH_TOKEN="$DEFAULT_TOKEN"
+          fi
+
+          if ! gh api "repos/$REPO/git/ref/heads/$BRANCH" > /dev/null 2>&1; then
+            echo "$BRANCH does not exist; nothing to remove."
+            exit 0
+          fi
+
+          # Each guard fails closed: a lookup that cannot answer refuses, since
+          # "could not tell" must never read as "nothing is in flight".
+          if ! OPEN=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+            --json number --jq 'map("#" + (.number | tostring)) | join(" ")'); then
+            echo "::error::Could not list the pull requests for $BRANCH; removed nothing."
+            exit 1
+          fi
+          if [ -n "$OPEN" ]; then
+            echo "::error::$BRANCH has open PR $OPEN. Close it first if the branch really is stray; removed nothing."
+            exit 1
+          fi
+
+          RECORD="features/$SLUG.md"
+          if LOOKUP=$(gh api "repos/$REPO/contents/$RECORD?ref=coordination" 2>&1); then
+            echo "::error::$RECORD on the coordination branch says a /feature session is working on $BRANCH. Delete that record first if the session is gone; removed nothing."
+            exit 1
+          fi
+          case "$LOOKUP" in
+            *"HTTP 404"*) ;;
+            *)
+              echo "::error::Could not read $RECORD on the coordination branch; removed nothing."
+              exit 1
+              ;;
+          esac
+
+          gh api -X DELETE "repos/$REPO/git/refs/heads/$BRANCH" > /dev/null
+          echo "Removed $BRANCH."
+          if [ -z "$PAT_TOKEN" ]; then
+            echo "::warning::PAT_TOKEN is not set, so $BRANCH was removed with GITHUB_TOKEN and no delete event fired. A Railway environment named '$SLUG', if this repository has one, is still running; remove it by hand."
+          fi

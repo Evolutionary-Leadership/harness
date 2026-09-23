@@ -18,7 +18,10 @@ The two homes this skill writes to, both defined by the docs standard
 - **Vocabulary** goes in `docs/GLOSSARY.md`, in that file's own table
   format: one row per term, pointing at the term's canonical home.
 - **Decisions** go in `docs/decisions/`, scaffolded with `/document adr`,
-  which handles numbering, the template, and the index row.
+  which claims the number on the `coordination` branch before writing the
+  file (a parallel feature cut from the same `preprod` would otherwise take
+  the same one), then handles the template and the index row. Never number
+  a decision by hand.
 
 ## During the session
 

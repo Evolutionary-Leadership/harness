@@ -87,6 +87,16 @@ for confirmation before deleting anything:
 Both deletions are best-effort; the `claude-to-feature-branch.yml` workflow
 usually deletes the `claude/` branch already.
 
+**In a web session the first delete is refused, not "already gone"**: the git
+proxy lets a session delete only its own `claude/` branch. Remove the feature
+branch through the workflow instead. If this session declared a touched set,
+delete `features/<name>.md` on the `coordination` branch first
+(`mcp__github__delete_file`), because the workflow refuses a branch that still
+has one; then dispatch it with `mcp__github__actions_run_trigger`: method
+`run_workflow`, workflow `feature-branch-remove.yml`, ref `preprod`, inputs
+`{"branch": "<FEATURE_BRANCH>"}`. It deletes with the repository's PAT, so on
+Railway the environment goes with the branch.
+
 ### 6. Switch local checkout to preprod
 
     git fetch origin preprod

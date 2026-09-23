@@ -436,7 +436,8 @@ If `$ARGUMENTS` is a `#<number>` idea issue, derive the three from its
 again. If `$ARGUMENTS` already carries all three in prose, restate them in
 one line and confirm. Only a bare one-liner gets the three questions in full.
 A resumed session (a work item already exists) skips Capture: the change
-already has a key.
+already has a key. So does a continuation after a merge ("Continue a change
+after its merge" below).
 
 **The key is `<PREFIX>-<n>`**: the prefix from `change-prefix:` in
 `.harness-version` (this repository's cached copy of its registry prefix,
@@ -608,6 +609,45 @@ FEATURE_NAME=$(bash .claude/scripts/resolve-feature-name.sh "$BRANCH")
 FEATURE_BRANCH="feature/$FEATURE_NAME"
 ```
 
+### Continue a change after its merge
+
+A change can land in parts. Once a part has merged, `/to-preprod` has already
+retired its slug: the feature branch, the touched-set record and the feature
+context are gone, so a resume finds nothing, and `/continue` does not list it.
+More work under the same key is a **continuation**. If the remaining work has
+a different why, it is a new change instead: run a fresh `/feature`. A
+continuation differs from a fresh feature in four ways:
+
+1. **Keep the key and the work item.** Skip Capture and the mint: the key
+   names the change, not the branch, and the work item stays its home.
+   Comment on it that the change continues, naming the new slug and the part
+   that merged (its pull request).
+2. **Start from `origin/preprod`.** The merged part lives there. `main` lags
+   it until a release, whatever the environment calls its default branch, and
+   a session cut from `main` would build on top of a tree without the first
+   part:
+
+       git fetch origin preprod
+       git merge --no-edit origin/preprod
+
+   On a fresh session branch this is a fast-forward. Merge rather than reset,
+   so a session that already has commits keeps them.
+3. **Name a new slug under the same key**, and run `set-feature-name.sh`
+   again: `<key>-<what this part does>`, as in `mypr-6-speakers` after
+   `mypr-6-bot-look`. Never reuse the merged slug: a push under it re-creates
+   a branch, and on Railway an environment, that the merge already retired.
+4. **Render a fresh record and context.** Create
+   `.harness/feature-context/<new-slug>.md` naming the key, the work item and
+   the merged part, and declare the touched set as below, with `--phase` set
+   to where this part starts: `building` under `--quick`, otherwise the first
+   phase the remaining work needs. The why was challenged once already, so a
+   continuation starts at phase 1b at the earliest.
+
+The key's position then moves back, from `reviewed` or `released` on GitHub
+to the new record's position. That is a continuation and not a regression;
+`.claude/JOURNEY.md` ("A change that continues after its merge") says how the
+cockpit reads it.
+
 ### Pick up previous work (resume)
 
 If a feature branch already exists on the remote (a resumed session),
@@ -681,14 +721,18 @@ already exists, which a resumed session's does: this is an update by the
 file's one writer, and the deliberate opposite of the ADR claim in
 `/document`, where omitting the sha IS the reservation.
 
-Then **ring the cockpit**, for the same reason and with the same
-fail-softness as at Capture:
+Then **ring the cockpit and report the boundary**, for the same reason and
+with the same fail-softness as at Capture:
 
     bash .claude/scripts/cockpit.sh ping --key="$KEY"
+    bash .claude/scripts/cockpit.sh report captured "captured: <the title>" --key="$KEY"
 
-This ring is written out here because phase 0's write is a `render`, not the
+Both are written out here because phase 0's write is a `render`, not the
 refresh recipe, so it is the one record write that does not inherit the ring
-from `.claude/JOURNEY.md`. Every later one does.
+and the report from `.claude/JOURNEY.md`. Every later one does. The report is
+also the session's first, so a cockpit that refuses every report from this
+repository says so here, once, before any work starts (`COCKPIT REPORTS OFF`,
+`.claude/JOURNEY.md`), rather than at the first gate.
 
 **Read the namespace and report:**
 
@@ -697,11 +741,20 @@ from `.claude/JOURNEY.md`. Every later one does.
     $C feature-branches > "$R/branches.txt"
     node .claude/scripts/touched-set.mjs overlap --mine="$R/mine.md" \
       --dir="$R/others" --branches-file="$R/branches.txt"
+    bash .claude/scripts/coordination.sh adr-collisions "$FEATURE_BRANCH"
 
 Put what it prints in the closing block, and copy it into the feature
 context under `## Parallel work` when it found an overlap: name the other
 branch, say what overlaps, and carry on. It is advisory and it stops
 nothing, so an overlap is a thing to know, never a thing to wait on.
+
+**An `ADR NNNN:` line is the one thing here that is not advisory.** It names
+a decision record this branch adds under a number that is already taken, on
+`preprod`, on another feature branch or by another feature's claim. Two
+records cannot share a number and the gate refuses the pair, so renumber this
+branch's record now, while its number is cited in the fewest places, with the
+steps in `/to-preprod` step 2. Phases 1c and 5 re-run this recipe, and so run
+this check again.
 
 **Sweep what has no writer left.** A record the report calls stale belongs to
 a branch that is gone from the remote and has not been touched in a day, so
@@ -890,7 +943,8 @@ Phase 1b is done when the grill is **satisfied**, which means all of:
 - Every assumption you would otherwise carry silently into the spec has
   been put to the user and answered.
 - New domain vocabulary is in `docs/GLOSSARY.md` and any one-way decision
-  has an ADR under `docs/decisions/`, per `/domain-modeling`.
+  has an ADR under `docs/decisions/`, per `/domain-modeling`, written through
+  `/document adr <title>` so its number is claimed before the file exists.
 - You can state the scope boundary: what this feature does NOT do.
 - **(connected)** Every conflict the grill surfaced has a recorded A/B/C
   decision. A conflict can surface in any phase; 1c is where the settled
@@ -984,6 +1038,12 @@ Write `phase: building`.
 Run `/implement` against the tickets, working the frontier: any ticket
 whose blockers are all closed. Commit per ticket and close each as it
 lands.
+
+An ADR the build turns out to need is written through `/document adr
+<title>` the moment its decision settles, as in phase 1b, and never from a
+hand-copied `TEMPLATE.md`: the claim is what stops a parallel feature taking
+the same number. Quick mode skips phase 1b, so this is where its ADRs are
+claimed.
 
 `/implement` owns the build loop, `/tdd` at agreed seams, and the final
 full check. Do not improvise a different loop here.

@@ -138,6 +138,37 @@ values, except for `BETTER_AUTH_SECRET`, which is replaced with a fresh
 one the first time the environment is provisioned. Later pushes to the
 same branch leave it alone, so a reviewer's session survives your pushes.
 
+### A variable for one preview only
+
+To try something on one feature environment alone, a flag or an
+undocumented field, commit `.harness/env/<name>.env` on the feature branch,
+where `<name>` is the feature name:
+
+```
+# this preview only
+FEATURE_FLAG=on
+RECALL_FIELD="undocumented: yes"
+```
+
+Every provisioning run of `feature-branch-railway.yml` sets those literals on
+this environment's app service and writes only the keys whose value
+differs, so an unchanged file costs no deploy; Railway redeploys the app when
+one does change. The rules:
+
+- Literals only, never a secret: the file is committed. A value is taken
+  verbatim after the first `=`, less one surrounding pair of quotes.
+- Keys the harness or Railway own are refused by name: `DATABASE_URL`,
+  `PORT`, `BETTER_AUTH_SECRET`, `AWS_*`, `RAILWAY_*`. So is a reference
+  value; references belong on preprod, where every environment inherits them.
+- Removing a key from the file does not unset it; the environment keeps the
+  value until it is torn down.
+- Do not commit the file under a `chore(context):` subject: provisioning
+  skips those pushes.
+- The to-preprod workflow strips the file on the merge path, the moment it
+  deletes the environment (a review keeps both), and the cleanup workflow
+  removes one that reached `preprod` anyway, so production and preprod never
+  see it.
+
 ### Seed data
 
 Production is the only environment where the harness sets `false`. Guard

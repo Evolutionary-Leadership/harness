@@ -200,6 +200,23 @@ runtime path, prints nothing at all when no cockpit is configured, and one
 line otherwise. Read the line, put it in the closing block if there is one,
 and carry on. Do not retry it and do not ask the user about it.
 
+**One line is the exception to reading past it: `COCKPIT REPORTS OFF`.** It is
+said once per session, for a refusal that covers every report the session will
+make: a credential the cockpit rejects, or a repository no product in the
+cockpit is configured against (a `ping` still lands then, because a refresh
+accepts any repository, so the ring is no evidence the reports arrive).
+Nothing the session reports afterwards is recorded, and the client stays quiet
+about it. Put the line in `Act later` with the fix it names and where that fix
+is made (the product's repository in the cockpit, or the `BOARD_TOKEN`
+secret), and say it again in the phase 5 summary. It still stops nothing.
+
+Its sibling, `COCKPIT REFUSED A REPORT`, is also said once per session and
+status, for a refusal of what was sent rather than of the session: a shape the
+cockpit does not take (a harness and a cockpit at different versions, most
+likely) or a rate limit. Later reports may still land, so carry it the same
+way but do not call the cockpit off. A `/feature` session's first report goes
+out at phase 0, with `captured`, so either line arrives before any work does.
+
 **Every seam in a `/feature` run carries the change key**, because the key is
 minted in phase 0 before any seam can fire. A technique skill run on its own
 (`/grilling` against an idea, `/implement` against a ticket) has no key, passes
@@ -342,6 +359,34 @@ writes every phase a supervised run would. Both are session-scoped, and
 challenge, spec, tickets, open tickets) and WRITES it, rather than trusting
 the record's own value. The record is the one field a crashed session leaves
 wrong, and a resume is the cheapest moment to correct it.
+
+## A change that continues after its merge
+
+A change can land in parts. When its first part merges, `/to-preprod` deletes
+the record, and from then on the key's position is read from GitHub: the
+merged pull request puts it at `reviewed`, and a release at `released`. More
+work under the same key is a **continuation**: a new slug carrying the same
+key, with a new record (`/feature`, "Continue a change after its merge", owns
+the steps).
+
+**That record names an earlier position than GitHub shows, and it wins.** A
+continuation's record says `building`, or `shaping` if the next part is
+grilled first, for a key whose first part already reached `reviewed`. The
+cockpit places the key at the live record's position: a record still being
+written, its `updated_at` inside the staleness window above, is the newest
+fact about the change, while the merged pull request is evidence about a
+part that shipped. "The last position whose evidence holds" applies within a
+part, never across parts. The earlier evidence is outranked, not lost: when
+the continuation's record is deleted at its own merge, placement reads GitHub
+again, where both parts now are. A continuation's record that goes stale ages
+like any other (above), at the last state it completed, so a second part that
+stalled shows as stalled rather than hiding behind the first part's merge. A
+key that goes from `built` or later back to `building` is therefore a
+continuation, and its visit history shows both passes.
+
+**Never write a position to keep a key high.** A continuation writes where its
+work is. A record claiming `built` so the key would not appear to go
+backwards would be the one wrong fact this whole design exists to refuse.
 
 ## The binding manifest
 

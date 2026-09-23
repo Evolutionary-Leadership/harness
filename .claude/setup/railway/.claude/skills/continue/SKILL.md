@@ -35,6 +35,10 @@ For each branch, show the git summary:
 (Where `gh` is unavailable, list open PRs per the GitHub MCP note in
 `docs/agents/issue-tracker.md`.)
 
+A change whose last part already merged has no branch here: its slug was
+retired at the merge. Continue it with `/feature`, whose phase 0 section
+"Continue a change after its merge" keeps the key and names a new slug.
+
 Then, for each branch, read its feature context without checking anything
 out:
 

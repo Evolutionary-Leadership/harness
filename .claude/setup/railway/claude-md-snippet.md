@@ -282,7 +282,10 @@ serves as a fallback if a feature branch is deleted manually (e.g., without
 going through a PR).
 
 **Gotcha:** Don't push to a merged branch. After `/to-preprod`, both branches
-are deleted remotely. Pushing again re-creates everything from scratch.
+are deleted remotely. Pushing again re-creates everything from scratch. To
+continue a change after its merge, start from `origin/preprod` and name a new
+slug under the same key (`/feature`). To recover from a failed to-preprod run,
+the push must change `.pr-description.md` (`/to-preprod` step 8).
 
 **`/release` after `/to-preprod` in the same chat is fine.** The release skill
 works on `preprod` (stash, switch, commit, push, return) and never pushes the

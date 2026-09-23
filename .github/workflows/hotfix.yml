@@ -39,8 +39,21 @@ jobs:
       - name: Parse PR description
         id: pr_desc
         run: |
-          # Parse title from frontmatter
-          TITLE=$(sed -n '/^---$/,/^---$/{ /^title:/{ s/^title: *//; p; } }' .pr-description.md)
+          # Parse title from frontmatter. Read with sed, not a YAML parser, so
+          # pr_title strips one surrounding pair of quotes and takes the rest
+          # verbatim; the same function as claude-to-preprod.yml, kept
+          # identical by the forge's drift test.
+          pr_title() {
+            local t
+            t=$(sed -n '/^---$/,/^---$/{ /^title:/{ s/^title: *//; p; } }' "$1" | head -n1)
+            t=${t%"${t##*[![:space:]]}"}
+            case "$t" in
+              \"*\") t=${t#\"}; t=${t%\"} ;;
+              \'*\') t=${t#\'}; t=${t%\'} ;;
+            esac
+            printf '%s' "$t"
+          }
+          TITLE=$(pr_title .pr-description.md)
           if [ -z "$TITLE" ]; then
             TITLE="Hotfix: ${{ steps.hotfix.outputs.name }}"
           fi

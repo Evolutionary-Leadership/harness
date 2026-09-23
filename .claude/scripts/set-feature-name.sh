@@ -3,10 +3,21 @@
 # .harness-feature, commits, and pushes so the GitHub Action creates
 # feature/<slug>. Run BEFORE the first push. Falls back to the random
 # codename if never called.
+#
+# --no-push commits without pushing, so the next push carries the name. It is
+# how a session restores a name it lost after /to-preprod opened its PR: a
+# push of its own would be a naming push, which on Railway provisions the
+# preview environment the merge path has just torn down, while the recovery
+# push that follows it is one provisioning skips.
 set -euo pipefail
+NO_PUSH=false
+if [ "${1:-}" = "--no-push" ]; then
+  NO_PUSH=true
+  shift
+fi
 RAW="${1:-}"
 if [ -z "$RAW" ]; then
-  echo "Usage: set-feature-name.sh <slug>   (e.g. fix-login-seed)" >&2
+  echo "Usage: set-feature-name.sh [--no-push] <slug>   (e.g. fix-login-seed)" >&2
   exit 2
 fi
 # 27, not 40. The slug becomes a Railway environment name in the railway
@@ -56,11 +67,29 @@ if [ -f .harness-feature ] &&
   echo "Feature name already set to: $SLUG"
   exit 0
 fi
-git config user.name "claude-code[bot]" 2>/dev/null || true
-git config user.email "claude-code[bot]@users.noreply.github.com" 2>/dev/null || true
+# Commit as whoever this session already is, and never write an identity.
+# This script used to set user.name and user.email to a bot. That persisted
+# in .git/config, so every later commit in the session carried the bot too,
+# and so did every `--author="$(git config user.email)"` a skill derived; an
+# environment that verifies committers (Claude Code on the web accepts only
+# its own) then refused the lot, including commits already pushed. Only when
+# git cannot name anyone at all does this supply a name, and only for this
+# one command, so nothing outlives the commit.
+IDENTITY=()
+if ! git var GIT_AUTHOR_IDENT > /dev/null 2>&1 ||
+  ! git var GIT_COMMITTER_IDENT > /dev/null 2>&1; then
+  IDENTITY=(-c "user.name=claude-code[bot]"
+    -c "user.email=claude-code[bot]@users.noreply.github.com")
+fi
 printf '%s\n' "$SLUG" > .harness-feature
 git add .harness-feature
-git commit -q -m "chore: set feature name ($SLUG)"
+# The ${a[@]+...} spelling keeps an empty array legal under `set -u` on the
+# bash 3.2 macOS still ships.
+git ${IDENTITY[@]+"${IDENTITY[@]}"} commit -q -m "chore: set feature name ($SLUG)"
+if [ "$NO_PUSH" = true ]; then
+  echo "Feature name set: $SLUG (committed, not pushed: the next push carries it)"
+  exit 0
+fi
 if git push -u origin "$BRANCH" 2>&1; then
   echo "Feature name set: $SLUG  ->  feature/$SLUG"
 else

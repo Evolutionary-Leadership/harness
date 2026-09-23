@@ -45,6 +45,24 @@ jobs:
           # .claude/scripts/resolve-feature-name.sh and the other workflows.
           SLUG="$(git show "${{ github.sha }}:.harness-feature" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
           if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != preprod ] && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
+          # A branch that named itself and then lost .harness-feature did not
+          # choose its codename. The usual way to lose it is merging
+          # feature/<name> back after to-preprod opened the PR: that branch
+          # carries the signal-file cleanup, and git carries the deletion
+          # across. Falling back then created feature/<codename> (and, on
+          # Railway, an environment) that the session could not delete. So
+          # when this branch's own commits, the ones not yet on preprod, set a
+          # name the pushed commit no longer carries, refuse and name the fix.
+          # Commits already on preprod are excluded, so a merged feature's name
+          # never binds the next session cut from it. Forge decision record 0042.
+          if [ "$FEATURE_NAME" = "$CODENAME" ]; then
+            LOST=$(git log --format=%s "origin/preprod..${{ github.sha }}" 2>/dev/null \
+              | sed -n 's/^chore: set feature name (\([a-z0-9][a-z0-9-]*\))$/\1/p' | head -n1)
+            if [ -n "$LOST" ] && [ "$LOST" != "$CODENAME" ]; then
+              echo "::error::This branch set the feature name '$LOST', but .harness-feature is gone from ${{ github.sha }}, usually because feature/$LOST was merged back after its PR opened. Nothing was created or merged: the codename would have opened feature/$CODENAME beside it. If '$LOST' is this session's feature, restore it without a push of its own ('bash .claude/scripts/set-feature-name.sh --no-push $LOST') and push again; if it arrived with someone else's branch, name this session's own feature instead."
+              exit 1
+            fi
+          fi
           echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
           echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
 
@@ -55,10 +73,69 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          # Merge the session commit, resolving the one class of conflict this
+          # chain produces itself. to-preprod strips the signal files from
+          # feature/<name> the moment it opens the PR; when that PR cannot
+          # merge (preprod moved), the session's recovery push still carries
+          # them, often edited, and the merge stops on modify/delete. Signal
+          # files are plumbing rather than reviewable content, so they resolve
+          # to the incoming claude/ side, which is the newer intent. Any other
+          # conflict fails honestly. .release-description.md is deliberately
+          # absent: on preprod it is the live release trigger, and a session
+          # carrying one never reaches this step.
+          #
+          # Keep this function identical in every workflow that merges a
+          # claude/ commit into feature/<name>; the forge's drift test runs
+          # each copy and refuses a difference. Forge decision record 0042.
+          merge_session() {
+            if git merge "$1" --no-edit; then
+              return 0
+            fi
+            local CONFLICTS RESOLVED f
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            # A merge can fail without leaving index conflicts (a dirty tree,
+            # unrelated histories). Say so rather than falling through to a
+            # misleading "nothing to commit".
+            if [ -z "$CONFLICTS" ]; then
+              echo "::error::git merge failed without index conflicts"
+              if git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+                git merge --abort
+              fi
+              return 1
+            fi
+            RESOLVED=true
+            while IFS= read -r f; do
+              case "$f" in
+                .pr-description.md|.railway-url|.harness-init|.harness-feature|.harness/env/*.env)
+                  # Guard every git call: under errexit a bare failure would
+                  # kill the step mid-merge instead of reaching the abort below.
+                  if git cat-file -e "$1:$f" 2> /dev/null; then
+                    git checkout "$1" -- "$f" && git add -- "$f" || RESOLVED=false
+                  else
+                    git rm -f -- "$f" > /dev/null || RESOLVED=false
+                  fi
+                  ;;
+                *)
+                  echo "::error::Merge conflict on non-signal file: $f"
+                  RESOLVED=false
+                  ;;
+              esac
+            done <<< "$CONFLICTS"
+            if [ "$RESOLVED" != true ]; then
+              git merge --abort
+              return 1
+            fi
+            git commit --no-edit
+          }
 
-          if git ls-remote --exit-code origin "$FEATURE_BRANCH" > /dev/null 2>&1; then
-            git checkout "$FEATURE_BRANCH"
+          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          CLAUDE_SHA="${{ github.sha }}"
+
+          # Decide off the fetch result, not a separate ls-remote probe: a
+          # branch claude-to-preprod.yml creates between the two would pass the
+          # probe with no local ref to check out.
+          if git fetch origin "$FEATURE_BRANCH" 2>/dev/null; then
+            git checkout -B "$FEATURE_BRANCH" FETCH_HEAD
             echo "is_new=false" >> "$GITHUB_OUTPUT"
           else
             git checkout preprod
@@ -66,8 +143,34 @@ jobs:
             echo "is_new=true" >> "$GITHUB_OUTPUT"
           fi
 
-          git merge ${{ github.sha }} --no-edit
-          git push origin "$FEATURE_BRANCH"
+          merge_session "$CLAUDE_SHA"
+
+          # Race-resistant push. A recovery push changes .pr-description.md
+          # alongside the work, so claude-to-preprod.yml merges the same commit
+          # into the same branch at the same time, and the loser's bare push
+          # was a red X over work that had merged. Refetch, and either stop
+          # (the commit is already there) or reset, merge again and retry.
+          for attempt in 1 2 3 4 5; do
+            if git push origin "$FEATURE_BRANCH"; then
+              echo "Pushed $FEATURE_BRANCH on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected on attempt $attempt, refetching and retrying..."
+            if ! git fetch origin "$FEATURE_BRANCH" 2>/dev/null; then
+              sleep "$attempt"
+              continue
+            fi
+            if git merge-base --is-ancestor "$CLAUDE_SHA" FETCH_HEAD 2>/dev/null; then
+              echo "$FEATURE_BRANCH already contains $CLAUDE_SHA, nothing more to push."
+              exit 0
+            fi
+            git reset --hard FETCH_HEAD
+            merge_session "$CLAUDE_SHA"
+            sleep "$attempt"
+          done
+
+          echo "::error::Failed to push $FEATURE_BRANCH after 5 attempts."
+          exit 1
 
       - name: Delete source claude/ branch
         if: steps.release.outputs.is_release != 'true'

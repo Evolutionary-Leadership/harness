@@ -71,26 +71,30 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # The feature-context file (see .claude/HARNESS.md) lives only while a
-      # feature is in flight. /to-preprod deletes it before triggering the
-      # merge; this step is the net for merges that bypassed /to-preprod
-      # (the GitHub UI merge button, a manual git merge), so the file
-      # never lingers on preprod.
-      - name: Remove leftover feature-context file from preprod
+      # feature is in flight, and so does .harness/env/<slug>.env, the
+      # preview's own variables, whose environment the step above just
+      # deleted. /to-preprod and its workflow remove both before the merge;
+      # this step is the net for merges that bypassed /to-preprod (the GitHub
+      # UI merge button, a manual git merge), so neither lingers on preprod.
+      - name: Remove leftover feature context and preview variables from preprod
         run: |
           SLUG="${{ steps.feature.outputs.name }}"
-          FILE=".harness/feature-context/${SLUG}.md"
           git clone --depth 1 --branch preprod \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" preprod-clone
           cd preprod-clone
-          if [ -f "$FILE" ]; then
+          LEFT=""
+          for FILE in ".harness/feature-context/${SLUG}.md" ".harness/env/${SLUG}.env"; do
+            [ -f "$FILE" ] && LEFT="$LEFT $FILE"
+          done
+          if [ -n "$LEFT" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git rm -q "$FILE"
+            git rm -q $LEFT
             git commit -m "chore: remove feature context for merged ${SLUG}"
             git push origin preprod \
               || echo "Warning: could not push context cleanup to preprod (branch protection?)."
           else
-            echo "No feature-context file to clean up."
+            echo "No feature context or preview variables to clean up."
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

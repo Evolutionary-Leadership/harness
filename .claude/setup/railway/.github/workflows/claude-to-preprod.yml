@@ -41,6 +41,24 @@ jobs:
           # .claude/scripts/resolve-feature-name.sh and the other workflows.
           SLUG="$(git show "${{ github.sha }}:.harness-feature" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
           if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != preprod ] && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
+          # A branch that named itself and then lost .harness-feature did not
+          # choose its codename. The usual way to lose it is merging
+          # feature/<name> back after to-preprod opened the PR: that branch
+          # carries the signal-file cleanup, and git carries the deletion
+          # across. Falling back then created feature/<codename> (and, on
+          # Railway, an environment) that the session could not delete. So
+          # when this branch's own commits, the ones not yet on preprod, set a
+          # name the pushed commit no longer carries, refuse and name the fix.
+          # Commits already on preprod are excluded, so a merged feature's name
+          # never binds the next session cut from it. Forge decision record 0042.
+          if [ "$FEATURE_NAME" = "$CODENAME" ]; then
+            LOST=$(git log --format=%s "origin/preprod..${{ github.sha }}" 2>/dev/null \
+              | sed -n 's/^chore: set feature name (\([a-z0-9][a-z0-9-]*\))$/\1/p' | head -n1)
+            if [ -n "$LOST" ] && [ "$LOST" != "$CODENAME" ]; then
+              echo "::error::This branch set the feature name '$LOST', but .harness-feature is gone from ${{ github.sha }}, usually because feature/$LOST was merged back after its PR opened. Nothing was created or merged: the codename would have opened feature/$CODENAME beside it. If '$LOST' is this session's feature, restore it without a push of its own ('bash .claude/scripts/set-feature-name.sh --no-push $LOST') and push again; if it arrived with someone else's branch, name this session's own feature instead."
+              exit 1
+            fi
+          fi
           echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
           echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
 
@@ -53,10 +71,67 @@ jobs:
           FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
           CLAUDE_SHA="${{ github.sha }}"
 
-          git fetch origin "$FEATURE_BRANCH" 2>/dev/null || true
+          # Merge the session commit, resolving the one class of conflict this
+          # chain produces itself. to-preprod strips the signal files from
+          # feature/<name> the moment it opens the PR; when that PR cannot
+          # merge (preprod moved), the session's recovery push still carries
+          # them, often edited, and the merge stops on modify/delete. Signal
+          # files are plumbing rather than reviewable content, so they resolve
+          # to the incoming claude/ side, which is the newer intent. Any other
+          # conflict fails honestly. .release-description.md is deliberately
+          # absent: on preprod it is the live release trigger, and a session
+          # carrying one never reaches this step.
+          #
+          # Keep this function identical in every workflow that merges a
+          # claude/ commit into feature/<name>; the forge's drift test runs
+          # each copy and refuses a difference. Forge decision record 0042.
+          merge_session() {
+            if git merge "$1" --no-edit; then
+              return 0
+            fi
+            local CONFLICTS RESOLVED f
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            # A merge can fail without leaving index conflicts (a dirty tree,
+            # unrelated histories). Say so rather than falling through to a
+            # misleading "nothing to commit".
+            if [ -z "$CONFLICTS" ]; then
+              echo "::error::git merge failed without index conflicts"
+              if git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+                git merge --abort
+              fi
+              return 1
+            fi
+            RESOLVED=true
+            while IFS= read -r f; do
+              case "$f" in
+                .pr-description.md|.railway-url|.harness-init|.harness-feature|.harness/env/*.env)
+                  # Guard every git call: under errexit a bare failure would
+                  # kill the step mid-merge instead of reaching the abort below.
+                  if git cat-file -e "$1:$f" 2> /dev/null; then
+                    git checkout "$1" -- "$f" && git add -- "$f" || RESOLVED=false
+                  else
+                    git rm -f -- "$f" > /dev/null || RESOLVED=false
+                  fi
+                  ;;
+                *)
+                  echo "::error::Merge conflict on non-signal file: $f"
+                  RESOLVED=false
+                  ;;
+              esac
+            done <<< "$CONFLICTS"
+            if [ "$RESOLVED" != true ]; then
+              git merge --abort
+              return 1
+            fi
+            git commit --no-edit
+          }
 
-          if git ls-remote --exit-code origin "$FEATURE_BRANCH" > /dev/null 2>&1; then
-            git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          # Decide off the fetch result, not a separate ls-remote probe: a
+          # branch claude-to-feature-branch.yml creates between the two would
+          # pass the probe with no local ref to check out, and the checkout
+          # would end the step.
+          if git fetch origin "$FEATURE_BRANCH" 2>/dev/null; then
+            git checkout -B "$FEATURE_BRANCH" FETCH_HEAD
           else
             git checkout preprod
             git checkout -B "$FEATURE_BRANCH"
@@ -71,7 +146,7 @@ jobs:
             exit 0
           fi
 
-          git merge "$CLAUDE_SHA" --no-edit
+          merge_session "$CLAUDE_SHA"
           echo "skip_push=false" >> "$GITHUB_OUTPUT"
 
       - name: Read the review flag from the signal file
@@ -139,6 +214,50 @@ jobs:
           FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
           CLAUDE_SHA="${{ github.sha }}"
 
+          # Signal-file conflicts resolve to the incoming claude/ side; the
+          # first copy of merge_session in this file says why, and the
+          # forge's drift test keeps every copy identical.
+          merge_session() {
+            if git merge "$1" --no-edit; then
+              return 0
+            fi
+            local CONFLICTS RESOLVED f
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            # A merge can fail without leaving index conflicts (a dirty tree,
+            # unrelated histories). Say so rather than falling through to a
+            # misleading "nothing to commit".
+            if [ -z "$CONFLICTS" ]; then
+              echo "::error::git merge failed without index conflicts"
+              if git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+                git merge --abort
+              fi
+              return 1
+            fi
+            RESOLVED=true
+            while IFS= read -r f; do
+              case "$f" in
+                .pr-description.md|.railway-url|.harness-init|.harness-feature|.harness/env/*.env)
+                  # Guard every git call: under errexit a bare failure would
+                  # kill the step mid-merge instead of reaching the abort below.
+                  if git cat-file -e "$1:$f" 2> /dev/null; then
+                    git checkout "$1" -- "$f" && git add -- "$f" || RESOLVED=false
+                  else
+                    git rm -f -- "$f" > /dev/null || RESOLVED=false
+                  fi
+                  ;;
+                *)
+                  echo "::error::Merge conflict on non-signal file: $f"
+                  RESOLVED=false
+                  ;;
+              esac
+            done <<< "$CONFLICTS"
+            if [ "$RESOLVED" != true ]; then
+              git merge --abort
+              return 1
+            fi
+            git commit --no-edit
+          }
+
           for attempt in 1 2 3 4 5; do
             if git push origin "$FEATURE_BRANCH"; then
               echo "Pushed feature/$FEATURE_BRANCH on attempt $attempt."
@@ -154,7 +273,7 @@ jobs:
             fi
 
             git reset --hard "origin/$FEATURE_BRANCH"
-            git merge "$CLAUDE_SHA" --no-edit
+            merge_session "$CLAUDE_SHA"
             sleep "$attempt"
           done
 
@@ -175,14 +294,28 @@ jobs:
             echo "::error::PAT_TOKEN is missing or empty in repo secrets."
             echo "::error::This workflow needs a Personal Access Token to create the PR and trigger downstream workflows on auto-merge. GITHUB_TOKEN cannot be used as a fallback because PRs merged with it do not trigger workflow runs (e.g. harness-version-bump.yml would never fire)."
             echo "::error::Fix: Settings -> Secrets and variables -> Actions -> add PAT_TOKEN. Fine-grained PAT scoped to this repo with Contents: read/write, Pull requests: read/write, Workflows: read/write. Classic PAT equivalent: 'repo' + 'workflow' scopes."
-            echo "::error::After the secret is set, re-push the claude/ branch to retrigger this workflow. The signal file (.pr-description.md) is still on feature/<name> because cleanup now runs after PR creation."
+            echo "::error::After the secret is set, re-trigger this workflow from the session: change .pr-description.md, commit it as 'chore: trigger auto-merge to preprod' and push (/to-preprod step 8). A push that leaves that file alone does not start this workflow. The signal file is still on feature/<name> because cleanup now runs after PR creation."
             exit 1
           fi
 
           git checkout "$FEATURE_BRANCH"
 
-          # Parse frontmatter fields
-          TITLE=$(sed -n '/^---$/,/^---$/{ /^title:/{ s/^title: *//; p; } }' .pr-description.md)
+          # Parse frontmatter fields. The front matter is read with sed, not a
+          # YAML parser, so a title quoted the YAML way (the natural way to
+          # carry a colon) reached the PR with its quotes on. pr_title strips
+          # one surrounding pair of matching quotes and takes the rest
+          # verbatim; /to-preprod step 5 says the same to the writer.
+          pr_title() {
+            local t
+            t=$(sed -n '/^---$/,/^---$/{ /^title:/{ s/^title: *//; p; } }' "$1" | head -n1)
+            t=${t%"${t##*[![:space:]]}"}
+            case "$t" in
+              \"*\") t=${t#\"}; t=${t%\"} ;;
+              \'*\') t=${t#\'}; t=${t%\'} ;;
+            esac
+            printf '%s' "$t"
+          }
+          TITLE=$(pr_title .pr-description.md)
           if [ -z "$TITLE" ]; then
             TITLE="Merge $FEATURE_BRANCH into preprod"
           fi
@@ -244,6 +377,13 @@ jobs:
           if [ "$REVIEW" != "true" ]; then
             SIGNAL_FILES="$SIGNAL_FILES .railway-url"
           fi
+          # The preview's own variables (.harness/env/<name>.env) go the same
+          # way and for the same reason: they belong to the environment the
+          # merge path just deleted, and a review keeps both. A file path,
+          # not the directory, so git rm needs no -r.
+          if [ "$REVIEW" != "true" ]; then
+            SIGNAL_FILES="$SIGNAL_FILES .harness/env/${FEATURE_BRANCH#feature/}.env"
+          fi
 
           remove_signal_files() {
             git rm -f --ignore-unmatch $SIGNAL_FILES > /dev/null 2>&1 || true
@@ -264,6 +404,34 @@ jobs:
             echo "PR #$PR_NUMBER created for review, skipping auto-merge."
             echo "::notice::PR #$PR_NUMBER is open for review at $(gh pr view $PR_NUMBER --json url --jq .url)"
             exit 0
+          fi
+
+          # A PR that conflicts with preprod never gets a 'check' run: GitHub
+          # starts no pull_request workflow for it. The gate below then waited
+          # out its grace period and blamed a bot-pushed head, which sent the
+          # reader hunting for a token problem that did not exist. Ask GitHub
+          # first. Mergeability is computed after the push, so UNKNOWN is
+          # polled for up to two minutes, the grace the gate itself gives a
+          # missing check; anything but CONFLICTING goes on to the gate.
+          # An answer counts only for the head this run just left on the
+          # branch: right after a push GitHub can still hold the previous
+          # head's CONFLICTING, and trusting it would refuse the very PR a
+          # recovery push has just fixed.
+          EXPECTED_HEAD=$(git ls-remote origin "refs/heads/$FEATURE_BRANCH" 2>/dev/null | cut -f1)
+          MERGEABLE=UNKNOWN
+          for _try in $(seq 1 24); do
+            ANSWER=$(gh pr view "$PR_NUMBER" --json mergeable,headRefOid --jq '"\(.mergeable) \(.headRefOid)"' 2>/dev/null || echo "UNKNOWN none")
+            MERGEABLE=${ANSWER%% *}
+            if [ -n "$EXPECTED_HEAD" ] && [ "${ANSWER#* }" != "$EXPECTED_HEAD" ]; then
+              MERGEABLE=UNKNOWN
+            fi
+            [ "$MERGEABLE" = UNKNOWN ] || break
+            sleep 5
+          done
+          if [ "$MERGEABLE" = CONFLICTING ]; then
+            echo "::error::PR #$PR_NUMBER conflicts with preprod, which moved after the signal push; merge not performed."
+            gh pr comment "$PR_NUMBER" --body "**Merge not performed: this PR conflicts with \`preprod\`,** which moved after the signal push. CI did not fail: GitHub runs no check on a conflicting PR. Recover in the session: merge \`origin/preprod\` into its \`claude/\` branch (never \`$FEATURE_BRANCH\`, which lost its signal files when this PR opened), resolve, record the resolution in \`.pr-description.md\`, commit it as \`chore: trigger auto-merge to preprod\` and push. This PR is reused; no second one opens. See \`/to-preprod\` step 8."
+            exit 1
           fi
 
           # When a check: command is configured in .harness-version, CI is
@@ -438,12 +606,12 @@ jobs:
                 # the reader looking for a broken test; there is none.
                 WHY="head $UNRUNNABLE_HEAD was pushed with a bot token, so GitHub will not run the 'check' workflow on it. CI did not fail on this PR; it never ran on this head."
                 echo "::error::Merge not performed for PR #$PR_NUMBER: $WHY"
-                gh pr comment "$PR_NUMBER" --body "**Merge not performed: the PR head cannot produce a CI check.** The $WHY Re-push the head under a user or PAT identity (for example by removing the bot-authored commit's file again from a local clone), and to-preprod will merge on the green check that follows. Do not read this as a test failure."
+                gh pr comment "$PR_NUMBER" --body "**Merge not performed: the PR head cannot produce a CI check.** The $WHY Re-trigger to-preprod from the session with a push that changes \`.pr-description.md\` (\`/to-preprod\` step 8): its re-strip is a PAT push, which starts a real check run, and it merges on the green that follows. A push that leaves that file alone starts no to-preprod run. Do not read this as a test failure."
               else
                 # Timeouts report the last observed run state (e.g. skipped)
                 # so the operator sees why the gate never resolved.
                 echo "::error::CI status '$CI_RESULT' (last check state: '$CHECK') for PR #$PR_NUMBER; merge not performed."
-                gh pr comment "$PR_NUMBER" --body "**Merge not performed: CI status was '$CI_RESULT'** (last check state: '$CHECK'). Fix the failure (or wait for CI to finish) and merge manually with \`gh pr merge $PR_NUMBER --merge\`, or push a new change to re-trigger to-preprod."
+                gh pr comment "$PR_NUMBER" --body "**Merge not performed: CI status was '$CI_RESULT'** (last check state: '$CHECK'). Fix the failure (or wait for CI to finish) and merge manually with \`gh pr merge $PR_NUMBER --merge\`, or fix it in the session and re-trigger to-preprod: a push re-triggers it only when it changes \`.pr-description.md\` (\`/to-preprod\` step 8)."
               fi
               exit 1
             fi
@@ -463,8 +631,12 @@ jobs:
           if [ "$merged" = 1 ]; then
             echo "PR #$PR_NUMBER merged (or set to auto-merge once required checks pass) into preprod."
           else
-            echo "::warning::merge did not complete for PR #$PR_NUMBER"
-            gh pr comment "$PR_NUMBER" --body "**Auto-merge did not complete**, likely due to merge conflicts with preprod. Check out the feature branch locally, merge preprod into it, resolve conflicts, push, and merge this PR manually."
+            echo "::error::merge did not complete for PR #$PR_NUMBER"
+            gh pr comment "$PR_NUMBER" --body "**Auto-merge did not complete**, likely due to merge conflicts with preprod. Recover in the session: merge \`origin/preprod\` into its \`claude/\` branch (never \`$FEATURE_BRANCH\`, which lost its signal files when this PR opened), resolve, then change \`.pr-description.md\` and push to re-trigger to-preprod (\`/to-preprod\` step 8)."
+            # Red, as the gate's own refusals are: a run that stayed green here
+            # told the session the merge had happened, and step 8, which the
+            # comment points at, is written for a run that failed.
+            exit 1
           fi
 
       - name: Sweep signal files out of preprod

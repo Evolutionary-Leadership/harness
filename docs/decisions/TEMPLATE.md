@@ -4,9 +4,11 @@
 - **Date:** YYYY-MM-DD
 
 <!--
-Copy this file to docs/decisions/NNNN-slug.md (next free number, zero-padded
-to 4 digits), fill it in, and add a row to the ADR table in docs/README.md.
-`/document adr <title>` does all three for you.
+Copy this file to docs/decisions/NNNN-slug.md, fill it in, and add a row to
+the ADR table in docs/README.md. `/document adr <title>` does all three for
+you, and it first claims NNNN on the coordination branch: the next number
+`ls` shows is the one a parallel branch picks too, and git merges the two
+records without a conflict because their filenames differ.
 
 Rules:
 - Accepted ADRs are append-only. Never rewrite the body of an accepted ADR to

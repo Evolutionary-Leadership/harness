@@ -42,6 +42,15 @@ one:
 
 Never start a ticket whose blockers are still open.
 
+**A decision the build turns out to need an ADR for** goes through
+`/document adr <title>` the moment it settles. That skill claims the number on
+the `coordination` branch before the file exists, which is the one thing that
+stops a parallel feature cut from the same `preprod` taking the same number:
+the filenames differ, git merges both without a word, and the gate refuses the
+pair only after each is cited everywhere. Never copy
+`docs/decisions/TEMPLATE.md` by hand, and never take the next number `ls`
+shows.
+
 The pair in steps 1 and 5 is one of the eight seams in `.claude/JOURNEY.md`
 ("Reporting activity"), which owns the voice and the rules. `building` is the
 longest position on the journey, so without it a reader watching the cockpit
