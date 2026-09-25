@@ -46,9 +46,11 @@ jobs:
     #    and the preflight result subject. It is spelled out inline rather
     #    than held in a variable because a job-level `if:` cannot read the
     #    `env` context, and a second copy for the checker to read would be a
-    #    second thing to drift. scripts/check-template-overlay.mjs reads the
-    #    prefixes straight out of this expression and fails the merge gate
-    #    when the skill stops committing one of them.
+    #    second thing to drift. Nothing in this repository enforces the
+    #    pairing: the forge's own overlay checker reads the prefixes out of
+    #    this expression and fails the forge's gate when the skill stops
+    #    committing one of them, but that checker is not shipped here. If you
+    #    reword a subject in /to-preprod or /feature, reword it here too.
     #    Forge decision record 0016.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
@@ -187,8 +189,9 @@ jobs:
           # jq payload. The result is assigned via printf -v rather than
           # echoed, because a command substitution would swallow the
           # ::add-mask:: line along with the value and Actions would never see
-          # it. check-template-overlay.mjs enforces the generate-then-mask
-          # pairing. See the forge's decision record 0007.
+          # it. Keep the pairing when editing: the forge's overlay checker
+          # enforces it in the forge's gate, not in this repository's. See the
+          # forge's decision record 0007.
           gen_masked_secret() {
             local __out_var="$1"
             local __value

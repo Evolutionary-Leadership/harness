@@ -56,8 +56,8 @@ the slug is set before the first push and never renamed later:
 
 - **`.pr-description.md`**: written by `/to-preprod`, it triggers the Action
   that opens a PR from `feature/<name>` → `preprod` and auto-merges it.
-  Frontmatter `review: true` skips the auto-merge (`/review`); `hotfix: true`
-  hands it to the hotfix flow.
+  Frontmatter `review: true` skips the auto-merge (`/review`); on a
+  `hotfix/**` branch the same file hands it to the hotfix flow instead.
 - **`.release-description.md`**: written by `/release`, it triggers the
   release workflow: merge `preprod` into `main`, tag, create a Release.
 - **`.harness-feature`**: line 1 is the slug. Optional line 2, `preview: yes`

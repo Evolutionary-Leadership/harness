@@ -16,7 +16,11 @@ can opt into its own isolated preview environment.
 
 1. **Click "Use this template"** and create your repository. Make sure
    `preprod` is the default branch (it is, unless you changed it).
-2. **Open the new repository in Claude Code.**
+2. **Open the new repository in Claude Code.** A GitHub App sees only
+   the repositories it was granted: if Claude's app, or Railway's for a
+   Railway project, was installed for selected repositories, add this
+   one (or switch the app to all repositories) before `/setup`, or its
+   pushes and deploys never reach the repository.
 3. **Run `/setup`.** It asks a few short questions (first time here?
    deploy to Railway? start from the standard technical foundation? and,
    if your Railway account has more than one workspace, which one), then

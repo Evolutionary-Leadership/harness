@@ -291,13 +291,13 @@ else). Keep it concise; subject lines only. Steps 7 and 8 use the result.
 
 ### 7. Build the new CHANGELOG.md content
 
-**Skip this whole step when the changelog accumulator owns the changelog**,
-which is the same condition as step 2: a `harness-version-bump.yml` plus a
-`VERSION` file. It appends one entry per merge to `## [Unreleased]`, and
-`release.yml` stamps that section with the version this release publishes,
-so the prose is already on `preprod`. Composing one here means holding the
-whole changelog inline in step 9's call, which is how three consecutive
-releases shipped without an entry.
+**Skip this whole step when something else stamps the changelog, and say in one
+line that you skipped it and why.** Two shapes qualify: step 2's accumulator
+(`harness-version-bump.yml` plus `VERSION`) filling `## [Unreleased]` for
+`release.yml` to stamp; or a `release.yml` whose own step rewrites
+`## [Unreleased]` to the release version and runs here (read its `if:`: the
+shipped step needs `VERSION` and `scripts/release-identity.mjs` both, so one of
+them alone still composes). Composing here is how three releases lost theirs.
 
 Otherwise, read the current file from preprod, in case the working tree is
 stale or the file does not exist locally (`git show

@@ -72,8 +72,10 @@ usage: coordination.sh <command> [args]
                             the namespace or the remote is absent.
 
   adr-numbers-on-preprod    Print the ADR numbers present on preprod, one per
-                            line. Falls back to the local working tree
-                            when preprod cannot be read.
+                            line, read from docs/decisions/ and docs/adr/
+                            alike. Falls back to the local working tree
+                            when preprod cannot be read; says so on stderr
+                            when preprod reads fine and holds no record.
 
   features                  Print the slugs of the features that have
                             declared a touched set, one per line, sorted.
@@ -141,14 +143,42 @@ cmd_list() {
     | sort || true
 }
 
+# Where decision records live. The scaffold ships docs/decisions/; a project
+# that adopted the standard onto an existing docs/adr/ tree keeps them there,
+# and one mid-migration has both. Every reader here takes the union, so the
+# number issued is the successor of every record the repository holds,
+# whichever directory it is in. A directory that holds none costs nothing.
+ADR_DIRS="docs/decisions docs/adr"
+
+# Decision-record paths under every layout, on a ref, or in the working tree
+# when no ref is given. Best-effort like every read: a missing directory or
+# an unreadable ref prints nothing.
+adr_paths_on() {
+  local ref="${1-}" dir
+  for dir in $ADR_DIRS; do
+    if [ -n "$ref" ]; then
+      git ls-tree -r --name-only "$ref" "$dir/" 2>/dev/null || true
+    else
+      ls "$dir"/ 2>/dev/null | sed "s|^|$dir/|" || true
+    fi
+  done
+}
+
 cmd_adr_numbers_on_preprod() {
   local listing
   git fetch --quiet "$REMOTE" preprod 2>/dev/null || true
-  listing=$(git ls-tree -r --name-only "$REMOTE/preprod" docs/decisions/ 2>/dev/null || true)
-  # No readable preprod (offline, fresh clone, no remote): the local tree is the
-  # best view available, and a too-low answer is caught by the CI checker.
-  [ -n "$listing" ] || listing=$(ls docs/decisions/ 2>/dev/null || true)
-  printf '%s\n' "$listing" | sed -n 's|.*/\{0,1\}\([0-9]\{4\}\)-.*|\1|p' | sort -u
+  if git rev-parse --verify --quiet "$REMOTE/preprod^{commit}" > /dev/null; then
+    listing=$(adr_paths_on "$REMOTE/preprod")
+    # A preprod that reads fine and holds no record is the one case where
+    # 0001 is the right answer. It used to be silent, and so was looking in
+    # the wrong directory; one line tells the two apart.
+    [ -n "$listing" ] || echo "coordination: preprod reads fine and holds no decision record under ${ADR_DIRS// / or }; 0001 is right only for a repository with none" >&2
+  else
+    # No readable preprod (offline, fresh clone, no remote): the local tree is
+    # the best view available, and a too-low answer is caught by the CI checker.
+    listing=$(adr_paths_on "")
+  fi
+  printf '%s\n' "$listing" | adr_records | cut -d' ' -f1 | sort -u
 }
 
 # The features/ namespace: one record per in-flight feature, named by the
@@ -180,9 +210,12 @@ cmd_feature_branches() {
     | sort || true
 }
 
-# Decision records among a list of paths, as "NNNN path" lines.
+# Decision records among a list of paths, as "NNNN path" lines, under either
+# layout in ADR_DIRS (the one place the list is spelled by hand: a third
+# layout is one edit there and one here). Extended syntax because the
+# alternation must run on BSD sed as well as GNU.
 adr_records() {
-  sed -n 's|^\(docs/decisions/\([0-9]\{4\}\)-[^/]*\.md\)$|\2 \1|p'
+  sed -nE 's#^(docs/(decisions|adr)/([0-9]{4})-[^/]*\.md)$#\3 \1#p'
 }
 
 # A duplicated ADR number is a conflict git cannot see. Two branches cut from
@@ -206,8 +239,8 @@ cmd_adr_collisions() {
   fi
   git fetch --quiet "$REMOTE" preprod 2>/dev/null || true
   git rev-parse --verify --quiet "$REMOTE/preprod^{commit}" > /dev/null || return 0
-  preprod=$(git ls-tree -r --name-only "$REMOTE/preprod" docs/decisions/ 2>/dev/null | adr_records)
-  ours=$(git ls-files --cached --others --exclude-standard -- 'docs/decisions/*.md' 2>/dev/null \
+  preprod=$(adr_paths_on "$REMOTE/preprod" | adr_records)
+  ours=$(git ls-files --cached --others --exclude-standard -- $(printf '%s/*.md ' $ADR_DIRS) 2>/dev/null \
     | sort -u | adr_records | while read -r num path; do
         [ -f "$path" ] || continue
         printf '%s\n' "$preprod" | grep -qxF "$num $path" || printf '%s %s\n' "$num" "$path"
@@ -223,7 +256,7 @@ cmd_adr_collisions() {
     for other in $(git for-each-ref --format='%(refname:short)' "refs/remotes/$REMOTE/feature/"); do
       branch=${other#"$REMOTE"/}
       [ "$branch" = "$mine" ] && continue
-      theirs=$(git ls-tree -r --name-only "$other" docs/decisions/ 2>/dev/null | adr_records)
+      theirs=$(adr_paths_on "$other" | adr_records)
       printf '%s\n' "$theirs" | while read -r tnum tpath; do
         [ "$tnum" = "$num" ] || continue
         [ "$tpath" != "$path" ] || continue

@@ -254,12 +254,12 @@ the position once. Connected: see `CONNECTED.md`, "Nodes in the touched set".
 
 Put what it prints in the closing block and, on an overlap, under `## Parallel work`; it is
 advisory. **An `ADR NNNN:` line is the one thing here that is not**: renumber this branch's
-record now, with the steps in `/to-preprod` step 2. A record the report calls stale (branch
-gone, untouched for a day) goes with `coordination.sh delete features/<slug>.md`; sweep only
-what it names, and on exit 2 (it prints nothing) make the `mcp__github__delete_file`
-call yourself (branch `coordination`, path `features/<slug>.md`, message `coordination:
-sweep <slug>`). Every other failure here warns in one line and continues: the touched set is
-never fail-closed, unlike the mint.
+record now, with the steps in `/to-preprod` step 2. **An overlap that landed on `preprod` is
+merged in** (`git merge origin/preprod`, resolved per that step), never copied in by hand: a
+one-parent "Merge" commit is not a merge. A stale record goes with `coordination.sh delete
+features/<slug>.md`; sweep only what the report names, on exit 2 by `mcp__github__delete_file`
+yourself (branch `coordination`, path `features/<slug>.md`, message `coordination: sweep
+<slug>`). Every other failure warns once and continues: the touched set is never fail-closed.
 
 **Build the brief** and paste its output into the context as `## Brief`:
 

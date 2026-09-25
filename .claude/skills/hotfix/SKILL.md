@@ -98,14 +98,15 @@ not happen. Add these to the PR body as a checklist:
 
 ### 5. Write `.pr-description.md`
 
-Create the signal file with `hotfix: true` in frontmatter. The front matter is
-read line by line, not parsed as YAML: write the title unquoted even though it
-carries a colon (the workflow strips one surrounding pair of quotes and takes
-the rest verbatim):
+Create the signal file. The branch routes it: `hotfix.yml` runs on a push to
+`hotfix/**` that touches this file and reads only `title:` and `version:` from
+the frontmatter, so no other key is needed. The front matter is read line by
+line, not parsed as YAML: write the title unquoted even though it carries a
+colon (the workflow strips one surrounding pair of quotes and takes the rest
+verbatim):
 
     ---
     title: Hotfix: <description>
-    hotfix: true
     version: v1.2.4
     ---
 
