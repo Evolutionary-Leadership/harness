@@ -1,7 +1,6 @@
 ---
 name: harness-upgrade
 description: Upgrade harness infrastructure (workflows, skills, hooks, settings) to a target version, planned against the published template repo.
-disable-model-invocation: true
 argument-hint: "[optional: target version, e.g. 0.7.7]"
 ---
 

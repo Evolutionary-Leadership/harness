@@ -18,7 +18,7 @@ The variants:
 
 | Variant | What it means |
 |---|---|
-| `harness-railway` | Web app on Railway: one-time provisioning of production and preprod (app service, Postgres, object-storage bucket), plus an isolated preview environment per feature branch |
+| `harness-railway` | Web app on Railway: one-time provisioning of production and preprod (app service, Postgres, object-storage bucket), plus an isolated preview environment for each feature that opts in (previews are opt-in per feature, never automatic) |
 | `harness-plain` | Code-only: the full branch-and-release flow, no deploy target |
 
 The Railway machinery ships quarantined under `.claude/setup/railway/`,
@@ -64,7 +64,9 @@ Run `bash .claude/scripts/setup.sh guard` and branch on `outcome:`:
   `inferred-mcp:` lines are the answers, and `inferred-change-prefix:`
   with `inferred-system-key:` say whether the identity lines already
   landed. `none` on the prefix line means Q2c is still owed, so ask it
-  (and verify it, step 5b) before rerunning apply. Rerun
+  (and verify it, step 5b) before rerunning apply; `none` beside a
+  `registry: off` line already in `.harness-version` means Q2c was
+  answered "no registry", so pass `--registry off` again instead. Rerun
   `setup.sh apply` with exactly those answers (apply is idempotent), or
   follow the block's `detail:` line when it names a different finish
   (an unpushed configuration commit only needs its push).
@@ -216,14 +218,21 @@ question is asked here rather than left for later.
 
 > What change-key prefix did the System Registry issue for this system?
 
-Two options, and nothing pre-selected:
+The question underneath is whether this system is registered, and it has
+three answers, nothing pre-selected:
 
 - **I have one**: they type it into the free-text answer. It is a short
   word, `MYPR`, and it gives change keys like `MYPR-7`. Say in the option
   text that the answer goes in the free-text field.
 - **Not yet, there is no registry entry for this system**: a first-class
   answer, not a failure. Most repositories are scaffolded before their
-  registry entry exists.
+  registry entry exists, and the line is added by hand once it does.
+- **No, this repository stays off the registry**: a deliberate answer for
+  a system nobody will register (an experiment, a throwaway, a private
+  tool). It writes `registry: off` into `.harness-version`, and `/feature`
+  then skips the registry lookup at Capture instead of stopping. Say in
+  the option text that it is reversible: registering later is replacing
+  that line with `change-prefix:`.
 
 Frame it as the repository's permanent name for its own changes, not as
 a configuration value. Every feature this repository ever builds gets a
@@ -235,7 +244,9 @@ here and again at the hand-off**: `/feature` cannot start without the
 line, so the first feature waits until the prefix exists and the line is
 added by hand. Nothing else in the repository is affected: the branch
 flow, the checks, the release and (on the railway path) provisioning all
-work without it.
+work without it. **Answering "no registry" costs nothing now**: the first
+feature starts at once, and a system that is registered after all replaces
+`registry: off` with `change-prefix: <PREFIX>` by hand.
 
 **Never guess a prefix, and never derive one from the repository name.**
 A prefix the registry did not issue mints keys that collide with the real
@@ -294,8 +305,8 @@ runs. Then branch on the final status:
 
 ### 5b. Verify the change prefix
 
-Skip this entirely when Q2c answered "not yet": there is nothing to
-verify, and the hand-off says what happens next.
+Skip this entirely when Q2c answered "not yet" or "no registry": there is
+nothing to verify, and the hand-off says what happens next.
 
 The registry client is `.claude/scripts/registry.sh`, and it reads
 `REGISTRY_URL` and `REGISTRY_TOKEN` from the environment. **Where either
@@ -395,7 +406,7 @@ human interaction happens past this point:
     bash .claude/scripts/setup.sh apply --railway <yes|no> \
       --foundation <yes|no> --mcp <yes|no> \
       [--workspace <id>] --first-time <yes|no> \
-      [--change-prefix <PREFIX>] [--system-key <KEY>]
+      [--change-prefix <PREFIX>] [--system-key <KEY>] [--registry off]
 
 Pass `--workspace` only when Q3 was asked. Pass `--first-time` from the
 Q0 answer; the script echoes it back so step 9 can branch without
@@ -404,21 +415,25 @@ remembering.
 Pass `--change-prefix` with the prefix Q2c produced, and `--system-key`
 with the permanent key **only when step 5b verified it and the user
 confirmed the system**. Pass neither when Q2c answered "not yet". Pass
-the prefix alone when step 5b could not check it (exits 3, 4 and 5): the
-key records which system the prefix resolved to, so recording one this
+`--registry off`, and neither prefix flag, when it answered "no registry".
+Pass the prefix alone when step 5b could not check it (exits 3, 4 and 5):
+the key records which system the prefix resolved to, so recording one this
 session never saw would be inventing the answer the check exists to make.
-The script writes both into `.harness-version` and echoes them back as
-`change-prefix:` and `system-key:` in the apply status.
+The script writes the lines into `.harness-version` and echoes them back
+as `change-prefix:`, `system-key:` and `registry:` in the apply status.
 
 The script does the rest: payload copies, the one
-package.json name substitution, the `.harness-version` rewrite, the
-self-delete (quarantine, this skill, the spine script itself, and on
+package.json name substitution, the `.harness-version` rewrite (on the
+foundation path it writes the two merge-gate lines, `check:` and
+`tests:`; the `tests` job runs the second against a Postgres service on
+every pull request), the self-delete (quarantine, this skill, the spine script itself, and on
 the plain path the preflight workflow), the provisioning sentinel, the
 single configuration commit pushed to `preprod`, the checkout move off
 any `claude/` branch, the provisioning watch, the liveness check, and,
-on the foundation path, the verify chain
-(`pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint &&
-pnpm check:docs`) running concurrently with the provisioning watch.
+on the foundation path, the verify chain (`pnpm install
+--frozen-lockfile`, then typecheck, lint and check:docs; the railway
+build and the `tests:` line run on the first pull request, not here)
+running concurrently with the provisioning watch.
 
 While it runs, narrate against the timeline: one line when the status
 output shows each stage starting, so the user always knows which wait
@@ -476,7 +491,7 @@ Shared core, for everyone:
 - A one-line configuration summary (variant, foundation materialized or
   not, and whether the verify chain ran; `verify:` in the status says
   which, honestly).
-- **The change prefix, in one of three shapes.** This is the line that
+- **The change prefix, in one of four shapes.** This is the line that
   decides whether the user's next session works, so it is never left out:
   - **Recorded and verified**: name the prefix and the system it resolved
     to, and say the first feature will be `<PREFIX>-1`.
@@ -492,8 +507,16 @@ Shared core, for everyone:
 
     Say that nothing else is blocked, and that the line can be added at
     any time, by anyone, in any session.
+  - **Registry off** (Q2c answered "no registry"): say that
+    `.harness-version` carries `registry: off`, that `/feature` starts at
+    once and skips the registry at Capture, and that registering later is
+    replacing that line with `change-prefix: <PREFIX>`.
 - The production and preprod URLs, when railway = yes, and whether the
-  liveness check confirmed production serving (`liveness: live`).
+  liveness check confirmed production serving (`liveness: live`). Say in
+  one line that feature previews are opt-in per feature: `/feature`
+  provisions one for a large change or a run bound for `/review`, and
+  `/review` opts in when it opens the PR; smaller changes ship through
+  preprod alone, with no environment forked for them.
 - When mcp = yes: the MCP endpoint is live at `<production-url>/api/mcp`
   and at the preprod URL too. Print it. Say in one line that a client
   authorizes with the same accounts the app uses, so the first
@@ -505,7 +528,9 @@ Shared core, for everyone:
   `/mcp-tool` for adding the next tool.
 - When foundation = yes: the application is already in place, and the
   verify chain ran alongside provisioning (or was skipped, if the
-  session lacked Node 22.11+ or pnpm; say which, honestly).
+  session lacked Node 22.11+ or pnpm; say which, honestly). Name the
+  merge gate in one line: `.harness-version` carries a `check:` line and
+  a `tests:` line, and every pull request runs both.
   Provisioning migrates the database, runs the idempotent seed, and
   serves the app at the preprod URL with the demo login, with zero
   manually set variables: the bootstrap set `BETTER_AUTH_SECRET`
@@ -531,9 +556,10 @@ path, in the same warm register the welcome opened with:
 2. The first feature: start a fresh chat, type `/feature`, and describe
    one small idea in a sentence; the harness drives it from there,
    including the questions. Nothing else to install or configure, **when
-   the prefix was recorded**. When it was not, this is the one thing that
-   is: say so here too, in their words, so the send-off is not the last
-   place a blocker could have been mentioned.
+   the prefix was recorded or the registry was switched off**. When
+   neither holds, this is the one thing that is: say so here too, in
+   their words, so the send-off is not the last place a blocker could
+   have been mentioned.
 3. The send-off, and it is the last thing on the screen. They have
    just watched a project go from nothing to live; close on that, not
    on another instruction. Set it off from the paragraph above with a
@@ -551,6 +577,7 @@ parentheses do the same work.
 
 **Returning-user ending (first-time: no, or a retry)**: one line: fresh
 chat, `/feature`, done. They know the drill; do not tour them. The one
-exception is a missing prefix: that is a second line, because `/feature`
-will not start without it and a returning user has no reason to expect
+exception is a missing prefix (recorded neither as `change-prefix:` nor
+as `registry: off`): that is a second line, because `/feature` will not
+start without one of them and a returning user has no reason to expect
 that.

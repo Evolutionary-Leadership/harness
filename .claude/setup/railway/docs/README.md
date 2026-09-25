@@ -45,7 +45,7 @@ files are exempt: they are scaffolding, not content.
 | [GLOSSARY.md](./GLOSSARY.md) | Domain vocabulary, each term pointing at its canonical file or ADR | A new domain term enters the code or a term's meaning changes |
 | [SECURITY.md](./SECURITY.md) | Trust boundaries, authn/authz mechanics and rationale, rate limits, which tests assert which property, known gaps | Anything touching auth, sessions, secrets, input validation, or limits |
 | [TESTING.md](./TESTING.md) | Test tiers, naming conventions, the "where does a new test go" table, what CI does not run | You add a tier, change the runner, or discover CI does not cover something |
-| [agents/issue-tracker.md](./agents/issue-tracker.md) | The tracker contract: how agents create, read, and label issues, plus the idea-issue, spec-issue, and ticket conventions with blocking edges and the frontier query | The project moves trackers, or a flow skill needs a new tracker operation |
+| [agents/issue-tracker.md](./agents/issue-tracker.md) | The tracker contract: how agents create, read, and label issues, plus the idea-issue, spec-issue, and ticket conventions with blocking edges, the rule that every body opens with a `## Why`, and the frontier query | The project moves trackers, or a flow skill needs a new tracker operation |
 
 ### Architecture
 
@@ -95,7 +95,7 @@ superseded is **deleted**, not archived. Git history is the archive.
 ## Definition of done for documentation
 
 Mirrored in `CLAUDE.md` so it is always in context. If your change matches a
-row, the doc change ships in the same commit.
+row, the doc change lands in the same pull request (it need not share the commit).
 
 | You changed | Update |
 |---|---|

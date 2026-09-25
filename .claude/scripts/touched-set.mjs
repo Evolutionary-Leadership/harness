@@ -2,10 +2,12 @@
 // The touched set: what an in-flight feature declares it will touch.
 //
 // One record per feature under features/ on the coordination branch, named
-// by the feature slug. The coordination branch carries only what exists
-// nowhere else (forge decision record 0014), and the thing that exists
-// nowhere else is the DECLARATION: what a branch says it is about to touch,
-// before the code exists. What a branch has already changed is derivable
+// by the feature slug. The session writes it as .harness/journey/<slug>.md
+// on its own branch (journey.sh), and journey-sync.yml mirrors that file
+// here. The coordination branch carries only what exists nowhere else
+// (forge decision record 0014), and the thing that exists nowhere else is
+// the DECLARATION: what a branch says it is about to touch, before the code
+// exists. What a branch has already changed is derivable
 // from GitHub (compare preprod against the feature branch), so it belongs to
 // GitHub and never to this record. Both ids are spelled out because this
 // file lands in a downstream scaffold, where a bare `ADR 0014` would name
@@ -41,12 +43,19 @@ const SCALARS = [
   "updated_at",
   "spec",
   "phase",
+  "size",
+  "phases",
 ];
 const LISTS = ["paths", "nodes"];
-// Every scalar but this one is required. Derived rather than re-listed, so a
-// field added above cannot become optional by omission.
-const OPTIONAL = new Set(["key"]);
+// Every scalar but these is required. Derived rather than re-listed, so a
+// field added above cannot become optional by omission. `size` is the tier
+// the change was sized at (S, M or L); `phases` is the comma-separated,
+// append-only history of every position written, in order, so a reader can
+// see the gap an S-tier run leaves between `captured` and `committed`. A
+// record from before either field parses as it always did.
+const OPTIONAL = new Set(["key", "size", "phases"]);
 const REQUIRED = SCALARS.filter((field) => !OPTIONAL.has(field));
+export const SIZES = ["S", "M", "L"];
 
 // The journey, in layout order: a state (a milestone reached, named in the
 // past participle) then the transition leaving it (work in progress, named
@@ -206,6 +215,16 @@ function validate(record) {
   if (!POSITIONS.includes(record.phase)) {
     return `phase is not a journey position: ${record.phase}`;
   }
+  if (record.size !== undefined && !SIZES.includes(record.size)) {
+    return `size is not a tier (S, M or L): ${record.size}`;
+  }
+  if (record.phases !== undefined) {
+    for (const entry of record.phases.split(",")) {
+      if (!POSITIONS.includes(entry)) {
+        return `phases names a position the journey does not have: ${entry || "(empty)"}`;
+      }
+    }
+  }
   if (!Array.isArray(record.paths) || record.paths.length === 0) {
     return "paths is missing or empty";
   }
@@ -358,12 +377,14 @@ export function renderReport(result) {
 const USAGE = `usage: touched-set.mjs <command> [flags]
 
   render    Compose a record. --slug --branch --author --spec --phase are
-            required; --key, --path (repeatable) and --node (repeatable) are
-            optional. Prints the record on stdout.
+            required; --key, --size (S, M or L), --path (repeatable) and
+            --node (repeatable) are optional. Prints the record on stdout.
 
   refresh   Read a record from --from, add any --path and --node given, move
-            --phase when one is given, and bump updated_at. Prints the record
-            on stdout.
+            --phase when one is given, set --size when one is given, and bump
+            updated_at. Prints the record on stdout. --phase takes one
+            position or a comma-separated list: the record's phase becomes
+            the last, and every one is appended to the phases history.
 
   overlap   Read --mine and every *.md in --dir, and print the report.
             --branches-file holds the live branch names, one per line; an
@@ -386,6 +407,15 @@ function flags(argv) {
   return { ...single, paths: many.path, nodes: many.node };
 }
 
+// `--phase=a,b`: the positions this write records, in order. Several in one
+// call is how a run that skips positions still leaves an honest history
+// (`journey.sh phase committed,building`). Blank entries are dropped, so a
+// trailing comma is not a position; anything else is validated on parse.
+function positionsWritten(value) {
+  if (!value) return [];
+  return value.split(",").map((p) => p.trim()).filter(Boolean);
+}
+
 async function main(argv) {
   const [command, ...rest] = argv;
   const flag = flags(rest);
@@ -394,6 +424,7 @@ async function main(argv) {
 
   if (command === "render") {
     const stamp = flag["declared-at"] || nowStamp();
+    const written = positionsWritten(flag.phase);
     const record = {
       slug: flag.slug,
       branch: flag.branch,
@@ -402,7 +433,9 @@ async function main(argv) {
       declared_at: stamp,
       updated_at: flag["updated-at"] || stamp,
       spec: flag.spec || "none",
-      phase: flag.phase,
+      phase: written.at(-1),
+      size: flag.size,
+      phases: written.join(",") || undefined,
       paths: flag.paths,
       nodes: flag.nodes.length > 0 ? flag.nodes : undefined,
     };
@@ -426,8 +459,9 @@ async function main(argv) {
     // shim has the same lifetime as the optional `key`: one release, until
     // no record from before the field can be in flight.
     let text = readFileSync(flag.from, "utf8");
-    if (flag.phase && !/^phase:/m.test(text)) {
-      text = text.replace(/^(spec: .*)$/m, `$1\nphase: ${flag.phase}`);
+    const written = positionsWritten(flag.phase);
+    if (written.length > 0 && !/^phase:/m.test(text)) {
+      text = text.replace(/^(spec: .*)$/m, `$1\nphase: ${written.at(-1)}`);
     }
     const read = parseTouchedSet(text);
     if (!read.ok) {
@@ -440,7 +474,16 @@ async function main(argv) {
       const nodes = [...new Set([...(record.nodes ?? []), ...flag.nodes])];
       record.nodes = nodes.filter((n) => n !== "none" || nodes.length === 1).sort();
     }
-    if (flag.phase) record.phase = flag.phase;
+    if (written.length > 0) {
+      // The history is append-only: every position written, in order, and
+      // the last one is where the record is. A record from before the field
+      // starts its history at the position it already held, so the first
+      // refresh after an upgrade does not read as a change that began here.
+      const history = record.phases ? record.phases.split(",") : [record.phase];
+      record.phases = [...history, ...written].join(",");
+      record.phase = written.at(-1);
+    }
+    if (flag.size) record.size = flag.size;
     record.updated_at = flag["updated-at"] || nowStamp();
     const text2 = renderTouchedSet(record);
     const back = parseTouchedSet(text2);

@@ -1,118 +1,100 @@
 ---
 name: release
-description: Ship preprod to production. Create a release PR, tag a version, and generate a GitHub Release. Production Railway deploys automatically.
-disable-model-invocation: true
-argument-hint: "[optional: major|minor|patch (default: patch)] [--quick]"
+description: Ship preprod to production. Merge preprod onto main, tag a version, and publish a GitHub Release. Production Railway deploys automatically.
+argument-hint: "[optional: major|minor|patch (default: the step 2 proposal)] [--quick]"
 allowed-tools: Bash(git *), Bash(bash .claude/scripts/*), Bash(node scripts/*), Read, Write, Edit, Glob, Grep, AskUserQuestion, mcp__github__push_files, mcp__github__list_pull_requests, mcp__github__pull_request_read, mcp__github__issue_write, mcp__github__add_issue_comment
 ---
 
 # Release to production
 
-Push a release commit directly to preprod via the GitHub MCP server. The
-`release.yml` workflow then creates a PR from preprod to main, merges it,
-tags the version, and creates a GitHub Release.
+Push one release commit to `preprod`. The `release.yml` workflow then merges
+`preprod` onto `main` (`--no-ff`, falling back to a pull request only when the
+direct push is refused), tags the version, publishes a GitHub Release and
+fast-forwards `preprod` to `main`.
 
-**Important:** This skill pushes directly to preprod. On `preprod` it does NOT go
-through the to-preprod workflow chain.
-
-**This skill knows where it is being run from.** Releasing is not a local
-act: it ships everything sitting on `preprod`, not just your own work. Two
-things follow, and they are steps 1, 3 and 4 below. Every run reports its
-**blast radius**, so nobody ships a colleague's half-finished feature
-without seeing it. And a run started from a `claude/` branch whose work
-has not landed asks one deliberate question before taking the feature all
-the way to `main` in one go.
-
-**Why MCP and not `git push`:** In the harness sandbox, `origin` is a
-local git proxy that only allows pushes to the current session's
-`claude/<branch>`. Pushes to `preprod`, `main`, or any other branch are
-rejected with HTTP 403. `mcp__github__push_files` goes through
-api.github.com using the harness's PAT and bypasses the proxy. The
-same call also works in a non-sandboxed checkout, so the skill has a
-single code path for both environments.
+**This skill knows where it is being run from.** Releasing ships everything
+sitting on `preprod`, not just your own work. Every run reports its **blast
+radius** (step 3), so nobody ships a colleague's half-finished feature
+without seeing it, and a run from a `claude/` branch whose work has not
+landed takes the feature all the way to `main` in one go (steps 4 and 5).
 
 ## Authority
 
 **This skill reaches production, so a session may complete it only under
 authority.** It ships everything queued on `preprod` to `main`, tags it, and
 publishes a GitHub Release; in a repository that syncs a template, it reaches
-every downstream scaffold too.
-
-**Check this first, before any other step.** Work you are not allowed to file
-is work you should not start, and discovering the block at the exit is the
-failure this section exists to remove (forge decision record 0037).
+every downstream scaffold too. **Check this first, before any other step.**
+Work you are not allowed to file is work you should not start, and
+discovering the block at the exit is the failure this section exists to
+remove (a forge decision record).
 
     AUTHORITY=$(sed -n 's/^agent-authority: *//p' .harness-version | tail -1)
 
-Authority is satisfied by **either** of these, and by nothing else:
+Authority is satisfied by **any** of these three forms, and by nothing else:
 
-1. **A grant.** `release` appears in that `agent-authority:` list. The person
-   who owns this repository granted it ahead of time, in a commit.
+1. **A grant.** `release` appears in `agent-authority:` in `.harness-version`.
+   The person who owns this repository granted it ahead of time, in a commit.
 2. **A user asking, in this turn.** They typed `/release`, or said in words to
    do it, or picked it at a `/feature` phase 5 exit gate. A relayed report
    that somebody once approved releases is not this; the ask is in the turn.
+3. **`--ship` in the invocation of the `/feature` run that chained here.** A
+   person typed it about this session, so it is release authority. Step 4's
+   confirmation is skipped under it; step 3's blast-radius report is always
+   produced and recorded.
 
-**A flag is not the second form, and `--ship` in particular is not.** A
-`/feature --ship` run reaches this skill having asked nobody anything: the
-flag was typed before any code existed, so it cannot be informed consent about
-a specific release. What the phase 5 exit gate is, and what a flag can never
-be, is a choice made with the diff, the check result and the review findings
-in front of you, at the last moment before anything reaches `preprod`. The
-same goes for any later argument, alias or wrapper that means "do not stop":
-the test is whether a person decided about THIS release, not whether they
-decided about this session.
+**`--ship` is the third form because a person typed it about this session.**
+It is a decision made in the invocation, by the person who started the run,
+about the work this run would produce: the owner's decision, recorded in a
+forge decision record together with the trade it accepts (a one-command path
+from an idea to a tagged release on `main`, against the protection a grant
+alone gave). `/hotfix` and `/rollback` keep their two forms; the flag reaches
+neither.
 
-So a `--ship` run releases under form 1 or not at all. That is the point of
-putting the grant in `.harness-version`: it is the informed decision, made
-once, by the person who owns the repository, in a commit that can be reviewed
-and revoked. Without this paragraph the flag would quietly become a
-production-access token, and a typo in a prompt would become a release.
+**Under form 1 or form 3 the run goes all the way, and does not stop to ask
+again.** The grant or the flag is the consent and says nobody is there to be
+asked twice, so step 4's confirmation is answered and skipped, exactly as
+`--quick` skips it, and the run takes the feature from its branch to
+`preprod` to `main` carrying everything already queued there. **Step 3's
+blast-radius report is still produced in full and still recorded** (in the
+reply, and in the feature context when `/feature` chained here): a release
+nobody was asked about is allowed; a release nobody can read afterwards is
+not.
 
-**Where form 1 does hold, a `--ship` run goes all the way, and does not stop
-to ask again.** The grant is the consent; the flag says nobody is there to be
-asked a second time. So the one confirmation in step 4 is answered by the pair
-and skipped, exactly as `--quick` skips it, and the run takes the feature from
-its branch to `preprod` to `main` carrying everything already queued there.
-Standing down at that question would make the grant worthless for the case it
-was granted for: an owner who wrote `agent-authority: release` and started an
-unattended run has asked for precisely this. **Step 3's blast-radius report is
-still produced in full and still recorded** (in the reply, and in the feature
-context when `/feature` chained here). A release nobody was asked about is
-allowed by the grant; a release nobody can read afterwards is not.
-
-**If neither holds, stop here and stand down.** Do not compute anything, do not
-write a signal file, do not push. Emit the stand-down block
+**If none of the three holds, stop here and stand down.** Do not compute
+anything, do not write a signal file, do not push. Emit the stand-down block
 (`getting-started`, Step 3c) with `reason: authority-not-granted`, and say
 plainly what this session did finish and that it is not complete.
 
 **Performing these steps by hand is the same act, and is refused the same
-way.** Forge decision record 0017 lets a session reach this procedure by
-reading this file rather than invoking the skill, and that route is still open; what it is not is a way
-around this section. Writing the signal file, committing it and pushing it
-without authority IS this skill, whatever it is called at the time. A guard
-that stopped only the literal invocation would guard nothing.
+way.** A forge decision record lets a session reach this procedure by reading
+this file rather than invoking the skill; that route is open, and it is not a
+way around this section. Writing the signal file, committing it and pushing
+it without authority IS this skill, whatever it is called at the time. A
+guard that stopped only the literal invocation would guard nothing.
+
+## The invocation
+
+```text
+$ARGUMENTS
+```
+
+It carries at most a bump type (`major`, `minor`, `patch`) and `--quick`.
 
 ## The closing block
 
-Every reply carries one, per the contract in `getting-started`. A release is
-the one place the block is load-bearing rather than convenient:
+Every reply carries one, per the contract in `getting-started` (Step 3b). A
+release is the one place the block is load-bearing rather than convenient:
 
 - `Good to know`: the **blast radius** first, always. Everything queued on
   `preprod`, not just this feature, and the number the release will consume.
-  Nobody should approve a release from prose alone.
+  Nobody should approve a release from prose alone. Connected: the items
+  `CONNECTED.md` names, once step 10b has run.
 - `Act later`: anything this release does not carry, naming where it belongs.
 - `Act next`: the single confirmation the user owes, or, once the release is
   away, what to watch and where (the workflow, the tag, the template sync).
-- **(connected)** Once step 10b has run, `Good to know` also carries what was
-  promoted, then the claim write-back: how many criteria were claimed, every
-  `drifted` claim by node and criterion, and which change issues were closed
-  under this version. The same item carries the test claims: how many criteria
-  a passed test claimed, and how many anchored tests did not pass and so
-  claimed nothing, with the link to the evidence comment.
 
-Run as `/feature` phase 5's exit, or chained after `/to-preprod`, this skill
-contributes items into the outermost skill's block rather than emitting a
-second one.
+Run as `/feature` phase 5's exit or chained after `/to-preprod`, this skill
+adds its items to the outermost skill's block rather than emitting a second.
 
 ## Steps
 
@@ -121,111 +103,98 @@ second one.
     CURRENT_BRANCH=$(git branch --show-current)
 
 Abort with a clear message if the current branch is `main`; you cannot
-release from main.
+release from main. Note the GitHub owner and repo for step 9: the last two
+path components of `git config --get remote.origin.url`, whether the remote
+points at github.com or the harness local proxy.
 
-Determine the GitHub owner and repo from the remote URL, you will need
-them for the MCP call in step 9:
-
-    REMOTE_URL=$(git config --get remote.origin.url)
-
-The owner/repo is the last two path components (e.g.
-`some-org/some-repo`), regardless of whether the remote points at
-github.com or the harness local proxy.
-
-**Parse `$ARGUMENTS` for `--quick`** as well as the version type. `--quick`
-is the user asserting they have already thought about what this ships. It
-skips the question in step 4. It does not skip the report in step 3.
-
-**Work out the situation**, because the next three steps differ by it:
+**Fetch once.** Steps 1, 2 and 3 share this fetch; nothing before step 5
+fetches again:
 
     git fetch origin preprod main --tags
+    LAST_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo "v0.0.0")
     git log origin/preprod..HEAD --oneline
+
+**Work out the situation**, because the next steps differ by it:
 
 | Situation | How to tell | What it means |
 |---|---|---|
 | **On `preprod`** | `CURRENT_BRANCH` is `preprod` | The ordinary release. Everything being shipped is already on `preprod` |
 | **Landed feature** | on a `claude/` branch, and `git log origin/preprod..HEAD` is empty | This session's work is already merged. Behaves exactly like the `preprod` case |
-| **Unlanded feature** | on a `claude/` branch with commits not on `preprod` | The chain case: this feature has to reach `preprod` before it can reach `main`. Steps 4 and 8 handle it |
+| **Unlanded feature** | on a `claude/` branch with commits not on `preprod` | The chain case: this feature has to reach `preprod` before it can reach `main`. Steps 4 and 5 handle it |
 
-Anything else (a `feature/` branch, a detached head, a hand-made branch)
-is the unlanded case if it has commits `preprod` does not, and the landed case
-if it does not.
+Anything else (a `feature/` branch, a detached head, a hand-made branch) is
+the unlanded case if it has commits `preprod` does not, else the landed case.
 
 ### 2. Determine version
-
-    git fetch origin preprod main --tags
-
-Get the last release tag, which step 3 needs either way:
-
-    LAST_TAG=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo "v0.0.0")
 
 **Which rule applies depends on whether something else already owns the
 version.** Check once:
 
     test -f .github/workflows/harness-version-bump.yml && test -f VERSION
 
-**If both exist, compute the next version from `VERSION`.** Merges no
-longer move `VERSION`: they add their prose to the changelog's
-`## [Unreleased]` section and leave the number alone, so `VERSION` on
-`preprod` is the *last released* version and this release consumes exactly
-one number, by decision. That is what makes the number knowable here, before
-anything is pushed, which is what the release note has to be named for:
+**If both exist, compute the next version from `VERSION`.** A merge adds its
+prose to the changelog's `## [Unreleased]` and leaves the number alone, so
+`VERSION` on `preprod` is the *last released* version and this release
+consumes exactly one number, knowable here, before anything is pushed:
 
     CURRENT=$(git show origin/preprod:VERSION | tr -d '[:space:]')
-    NEW_VERSION="v$(node scripts/release-identity.mjs next-version "$CURRENT" patch)"
+    NEW_VERSION="v$(node scripts/release-identity.mjs next-version "$CURRENT" <type>)"
 
-Pass `minor` or `major` instead of `patch` when `$ARGUMENTS` asked for one;
-that judgement is one you can only make here, looking at step 3's blast
-radius. Do **not** write `VERSION` yourself: `release.yml` stamps it, the
-migration and the changelog together from the version in the signal file,
-so one step owns all four.
+Do **not** write `VERSION` yourself: `release.yml` stamps it, the migration
+and the changelog together from the version in the signal file, so one step
+owns all four. **If either is missing, calculate from `$LAST_TAG`:** `major`
+bumps v1.2.3 to v2.0.0, `minor` to v1.3.0, `patch` to v1.2.4.
 
-**If either is missing, calculate as before.** Parse the version type from
-`$ARGUMENTS` (default: `patch`):
-- `major` to bump major (e.g., v1.2.3 to v2.0.0)
-- `minor` to bump minor (e.g., v1.2.3 to v1.3.0)
-- `patch` to bump patch (e.g., v1.2.3 to v1.2.4)
+**Propose the type before anyone picks one.** Scan the range for the words
+a breaking change tends to carry, in subjects and bodies, and new migration
+files for a dropped column:
 
-Calculate the new version from `$LAST_TAG` accordingly.
+    git log "$LAST_TAG"..origin/preprod --format='%h %s%n%b' \
+      | grep -inE '!:|BREAKING|\bdrop\b|\bremove\b|\bretire\b'
+    for f in $(git diff --name-only --diff-filter=A "$LAST_TAG" origin/preprod -- migrations drizzle); do
+      git show "origin/preprod:$f" | grep -in 'DROP COLUMN' | sed "s|^|$f:|"
+    done
 
-Either way, store the result as `$NEW_VERSION`.
+Any hit proposes `minor` while the current version is below 1.0 and `major`
+from 1.0 on; no hit proposes `patch`. The proposal quotes every matching
+line, so the reader judges the words and not the grep. The type is then
+settled in this order: a type named in the invocation wins; otherwise the
+proposal stands under `--quick`, under `--ship`, and wherever step 4 asks
+nothing; otherwise step 4's question carries the proposal with its quoted
+lines and the answer may change it. Store the result as `$NEW_VERSION`.
 
 ### 3. Compute the blast radius
 
-**Do this on every run, from every branch, including under `--quick`.**
-This is the step that answers "what am I actually shipping", and the
-answer is almost never "my feature".
+**Do this on every run, from every branch, including under `--quick` and
+`--ship`.** This is the step that answers "what am I actually shipping", and
+the answer is almost never "my feature".
 
     git log "$LAST_TAG"..origin/preprod --oneline
 
 That range is everything already queued on `preprod` for the next release.
-Group it by the pull request each commit merged in (`git log
-"$LAST_TAG"..origin/preprod --merges --oneline` gives the merge commits; the
-PR number is in their subject), and count it.
+Group it by the pull request each commit merged in and count it. The merge
+commits carry the PR number in their subject and the author is the second
+parent's, so no API call is needed:
 
-If that returns nothing, the repo squash-merges and there are no merge
-commits to group by. Do not report "no pull requests": fall back to the
-`(#NN)` reference in each commit subject, and where even that is absent,
-list the commits ungrouped. An empty grouping must never read as an empty
-blast radius.
+    git log "$LAST_TAG"..origin/preprod --merges --format='%h %s' \
+      | while read -r sha subject; do
+          echo "$subject :: $(git log -1 --format=%an "$sha^2")"
+        done
 
-In the unlanded case, add this feature's own commits, which are not in
-that range yet:
+If that returns nothing, the repo squash-merges: fall back to the `(#NN)`
+reference and `%an` of each commit, and where even that is absent, list the
+commits ungrouped. An empty grouping must never read as an empty blast
+radius, and never report "no pull requests". In the unlanded case, add this
+feature's own commits, which are not in that range yet (`git log
+origin/preprod..HEAD`, fetched in step 1).
 
-    git log origin/preprod..HEAD --oneline
-
-Present the two groups **distinctly labelled**, because they carry
-different risk:
-
-- **Yours**: the commits from this session, which you know the state of.
-- **Riding along**: everything else in the range, merged by someone else,
-  which you are shipping to production whether or not you have looked at
-  it. Name each PR and its author.
-
-Then a one-line count: "N commits across M pull requests, K of them yours."
-
-If both groups are empty, abort with: "Nothing to release: preprod and main
-are at the same point."
+Present the two groups **distinctly labelled**, because they carry different
+risk: **Yours**, the commits from this session, which you know the state of;
+and **Riding along**, everything else in the range, merged by someone else,
+which you are shipping to production whether or not you have looked at it.
+Name each PR and its author. Then a one-line count: "N commits across M pull
+requests, K of them yours." If both groups are empty, abort with: "Nothing
+to release: preprod and main are at the same point."
 
 Hold this report. Step 4 uses it as the body of the question, and step 10
 prints it in the summary whether or not step 4 ran.
@@ -234,217 +203,128 @@ prints it in the summary whether or not step 4 ran.
 
 Skip this step entirely in three cases:
 
-1. `--quick` was passed.
-2. **The run is unattended under a standing grant**: a `/feature --ship` run
-   reached this skill, and `.harness-version` carries
+1. `--quick` was passed: the user asserting they have already thought about
+   what this ships. It takes step 2's proposal and never skips step 3's report.
+2. **The run is unattended under authority form 1 or form 3**: a
+   `/feature --ship` run reached this skill, or `.harness-version` carries
    `agent-authority: release`. The `## Authority` section above is where that
-   is settled; there is nobody to ask, and the grant already answered. Say in
-   the reply that the question was skipped and why, and record it.
+   is settled; there is nobody to ask, and the flag or the grant already
+   answered. Say in the reply that the question was skipped and why, and
+   record it.
 3. The situation is `preprod` or landed-feature with nothing riding along that
    the user has not already seen.
 
 Otherwise ask exactly one question with `AskUserQuestion`, with the step 3
-report as its body.
+report and step 2's bump proposal as its body. In the **unlanded** case, the
+question names the whole path explicitly: this takes the feature from its
+branch, to `preprod`, to `main`, and tags a release, in one command; the
+merge to `preprod` happens first and everything riding along ships with it.
+In the **preprod** and **landed** cases, ask only when something is riding
+along: "this ships N commits you did not write, listed above". A release of
+only your own reviewed work needs no question. If the user declines, stop.
+Do not offer a partial release; there is no such thing.
 
 **Step 3's report is produced and reported whatever happens here.** Skipping
 the question never skips the blast radius: the whole of `LAST_TAG..preprod`
 goes in the reply, and in the feature context when `/feature` chained here, so
 the decision is auditable even when nobody made it in the moment.
 
-In the **unlanded** case, the question names the whole path explicitly:
-this takes the feature from its branch, to `preprod`, to `main`, and tags a
-release, in one command. Say that the merge to `preprod` happens first and
-that everything riding along ships with it.
+### 5. Unlanded case only: run the merge, then settle
 
-In the **preprod** and **landed** cases, ask only when something is riding
-along: "this ships N commits you did not write, listed above". A release
-of only your own reviewed work needs no question.
-
-If the user declines, stop. Do not offer a partial release; there is no
-such thing.
-
-### 5. Unlanded case only: run the merge, then wait for preprod to settle
-
-Skip this step entirely in the `preprod` and landed-feature cases.
-
-The feature has to reach `preprod` before it can reach `main`, and `preprod` has to
-come to rest before the release can be composed from it.
+Skip this step entirely in the `preprod` and landed-feature cases. The
+feature has to reach `preprod` before it can reach `main`, and where a
+changelog accumulator exists, its entry has to land before the release can be
+composed from it.
 
 **Run the merge by following the merge skill's own file:**
 
 Read `.claude/skills/to-preprod/SKILL.md` and work its steps in order.
 
 That means all of them: resolve the feature name, merge `preprod` in and
-resolve conflicts with its discipline, run the docs-updater agent, retire
-the feature context, write `.pr-description.md`, push the branch, then push
-the signal file. Do not reimplement any of it here; a second copy of the
-conflict discipline and the docs audit would drift from the first.
+resolve conflicts with its discipline, run the docs-updater agent, retire the
+feature context, write `.pr-description.md`, push the branch, then push the
+signal file. Do not reimplement any of it here; a second copy would drift
+from the first. Following a user-invoked skill's file is deliberate and is
+recorded in a forge decision record; the authorization for THIS step is the
+authority checked at the top of this file, which the run already satisfied,
+and step 4's question, where it ran, was about the blast radius and not
+about permission.
 
-Following a user-invoked skill's file is deliberate and is recorded in ADR
-0017. `disable-model-invocation` gates the Skill tool, not a file read. The
-authorization for THIS step is the authority checked at the top of this file,
-which the run already satisfied to get here; step 4's question, where it ran,
-is about the blast radius and not about permission (forge decision record
-0037). `/to-preprod` itself is ungated and would also fire through the Skill tool.
-
-**Then wait: merge, then settle.**
+**Then wait for the merge to land.** Poll every 10 s, capped at about ten
+minutes:
 
     git fetch origin preprod
     git merge-base --is-ancestor <the merge commit> origin/preprod
 
-Poll that until the merge is an ancestor of `origin/preprod`. Then keep
-fetching until `origin/preprod`'s tip has stopped moving for about a minute.
-Cap the whole wait at about ten minutes.
+**Then settle, only where the accumulator exists**
+(`test -f .github/workflows/harness-version-bump.yml`). It fires on the same
+merge and appends that merge's prose to `## [Unreleased]` in its own
+`[changelog]` commit a moment later, so a changelog read before it lands is
+missing the very feature this release is being cut for. Wait for that
+specific commit: poll `git fetch origin preprod` every 10 s, capped at 5
+minutes, until this succeeds:
 
-The settle window is the point, and it is not padding. Where a changelog
-accumulator workflow exists it fires on the same merge and appends that
-merge's prose to `## [Unreleased]` a moment later, so a changelog read
-before it lands is missing the very feature this release is being cut for,
-and the note composed from it says nothing about it. Repos without one
-settle at once. One rule covers both.
+    git log <the merge commit>..origin/preprod --format=%s | grep -q '\[changelog\]'
+
+Where the workflow is absent there is nothing to wait for: continue at once.
 
 **On timeout, stop.** Say plainly which of these happened, and that no
-release was cut either way:
+release was cut either way: the merge landed but the `[changelog]` commit
+never did (re-run `/release` from `preprod` once the accumulator has run; the
+feature is safe on `preprod`, only the release is outstanding), or the merge
+never landed (the to-preprod workflow has not finished or has failed; point at
+its recovery section, "If the workflow fails" in the merge skill, which owns
+that diagnosis). Do not push a release after a timeout on the assumption it
+will be fine.
 
-- The merge landed but `preprod` never settled: re-run `/release` from `preprod`
-  once it is quiet. The feature is safe on `preprod`; only the release is
-  outstanding.
-- The merge never landed: the to-preprod workflow has not finished or has
-  failed. Point at its recovery section ("If the workflow fails" in the
-  merge skill), which owns that diagnosis.
-
-Do not push a release after a timeout on the assumption it will be fine.
-
-**Recompute from the settled tip.** Everything after this step reads
+**Recompute from the landed tip.** Everything after this step reads
 `origin/preprod` again. The blast radius from step 3 was measured before the
 merge, so the feature's commits have moved from "yours, not yet on preprod"
 into the range itself; say so when you print it in step 10 rather than
 showing a stale split.
 
-### 6. Generate release notes
+### 6. Categorize the commits
 
-Gather commit messages and categorize them into:
-- **Features**: new functionality (commits containing "feat", "add", "new")
-- **Fixes**: bug fixes (commits containing "fix", "bug", "patch")
-- **Improvements**: everything else (refactors, chores, docs, etc.)
-
-Keep notes concise. Use commit subject lines only.
+Categorize the commit subjects into **Features** (containing "feat", "add",
+"new"), **Fixes** ("fix", "bug", "patch") and **Improvements** (everything
+else). Keep it concise; subject lines only. Steps 7 and 8 use the result.
 
 ### 7. Build the new CHANGELOG.md content
 
 **Skip this whole step when the changelog accumulator owns the changelog**,
 which is the same condition as step 2: a `harness-version-bump.yml` plus a
-`VERSION` file. Such a workflow appends one entry per merge to the
-`## [Unreleased]` section, and `release.yml` stamps that whole section with
-the version this release publishes, so the prose is already on
-`preprod` and there is nothing to compose. Composing one here would mean
-holding the entire changelog inline in step 9's call, which is how three
-consecutive releases shipped without an entry when nobody noticed the step
-had been skipped.
+`VERSION` file. It appends one entry per merge to `## [Unreleased]`, and
+`release.yml` stamps that section with the version this release publishes,
+so the prose is already on `preprod`. Composing one here means holding the
+whole changelog inline in step 9's call, which is how three consecutive
+releases shipped without an entry.
 
-Otherwise, read the current CHANGELOG.md from preprod (in case the working tree
-is stale or the file does not exist locally):
-
-    git show origin/preprod:CHANGELOG.md 2>/dev/null || echo ""
-
-If it returned content, prepend the new release section after the
-`# Changelog` heading. If it returned empty, build a fresh file with
-the heading.
-
-Format:
-
-    # Changelog
-
-    ## [v1.3.0] - YYYY-MM-DD
-
-    ### Features
-    - Dark mode toggle (#45)
-
-    ### Fixes
-    - Fix login redirect (#43)
-
-    ### Improvements
-    - Refactor auth module
-
-Hold the full new content in memory as `$CHANGELOG_CONTENT`. You may
-optionally write it to the local working tree for inspection; step 9
-will revert any working-tree changes before the skill exits.
+Otherwise, read the current file from preprod, in case the working tree is
+stale or the file does not exist locally (`git show
+origin/preprod:CHANGELOG.md 2>/dev/null || echo ""`). If it returned content,
+prepend the new release section after the `# Changelog` heading; if empty,
+build a fresh file with the heading. The section is `## [v1.3.0] -
+YYYY-MM-DD` followed by step 6's categories as `### Features`, `### Fixes`,
+`### Improvements`, one bullet per commit with its `(#NN)`. Hold the full new
+content in memory as `$CHANGELOG_CONTENT`; step 9 writes it into the release
+commit.
 
 ### 7b. Generate the downstream release note
 
 **Skip this step entirely where `release-notes/` or
 `scripts/release-notes-brief.mjs` is absent.** Only the authoring repo
 publishes to a template repo; a downstream project has neither, and this
-step is written to disappear there rather than to be deleted.
-
-Where they exist, the note is **required**: `release.yml` fails the
-release when `release-notes/$NEW_VERSION.md` is missing, because a
-release that publishes no note leaves the template repo carrying new
-content under the previous release (forge decision record 0023).
-
-Draft it rather than writing from a blank file:
-
-    node scripts/release-notes-brief.mjs --version <version without the leading v> --draft \
-      > release-notes/<version>.md
-
-That writes a complete five-section note: the brief spans every bump since
-the last published note, drops the versions whose migrations touched
-nothing under `templates/`, drops bullets about the factory (the checkers,
-this repo's own docs and decisions), prefixes a railway-only range, and
-strips the issue references, repo names and em dashes the composer
-rejects. Run it without `--draft` to read the same material as a report:
-
-    node scripts/release-notes-brief.mjs --version <version without the leading v>
-
-**A non-zero exit from `--draft` means it could not write the note.** The
-release changes something a downstream project can act on, but no prose was
-found to write it from, so the file it just wrote carries one
-`RELEASE NOTE UNWRITTEN` line instead of a claim about the release. Do not
-ship it and do not delete the marker on its own: read the report, write the
-note by hand from it, and replace the marker line. Two causes are worth
-checking first, and the report tells you which:
-
-- **`prose read from:` says nothing was found.** The line says which of the
-  two it is. `origin/preprod is not readable here` means the ref is missing
-  or unfetched, so `git fetch origin preprod` and run the brief again; the
-  brief reads the remote-tracking ref and never fetches for you, so a stale
-  one answers as if it were current. `the accumulator is empty locally and
-  on origin/preprod` means no prose exists yet, and the note has to be
-  written from the file list.
-- **`prose read from:` names a ref, but the draft is still a placeholder.**
-  Every bullet was dropped as factory prose. The material is in the report;
-  the bullets it dropped are the ones to rewrite for a downstream reader.
-
-**Then edit what it produced.** The draft is assembled from changelog
-prose written for people who work on the harness, so it will name
-internals and describe changes from the maintainer's side. Rewrite each
-bullet for someone who runs a scaffolded project and has never seen this
-repository, drop anything they cannot act on, and keep the five sections
-in order. Two markers in the report explain what the draft did:
-
-- **`factory only, omit from the note`**: that version changed nothing
-  under `templates/`, so a downstream project cannot act on it. Leave its
-  prose out entirely.
-- **`railway only`**: prefix those bullets with `**Railway only:** `.
-
-Follow `release-notes/README.md` for the rules the draft cannot apply for
-you: say what a reader can do or must know rather than which file moved,
-and omit a section rather than padding it.
-
-Validate before going further, which is the same check `release.yml` and
-the sync will run:
-
-    node scripts/compose-release-notes.mjs --notes release-notes/$NEW_VERSION.md
-
-Fix anything it reports. Step 9 carries the file in the release commit.
+step is written to disappear there rather than to be deleted. Where they
+exist the note is **required** (`release.yml` fails the release without
+`release-notes/$NEW_VERSION.md`): read `RELEASE-NOTE.md` beside this file and
+work it in order. It drafts, validates and accepts the note; step 9 carries
+the file it produces.
 
 ### 8. Build `.release-description.md` content
 
 This is a single signal file at the repo root (NOT `.pr-description.md`).
-Hold its content in memory as `$RELEASE_DESC_CONTENT`:
-
-When the chain ran from a `claude/` branch (step 5), add a
-`cleanup-branch:` key naming that branch:
+Hold its content in memory as `$RELEASE_DESC_CONTENT`; the body after the
+front matter is step 6's categorized list under `## Release v1.3.0`:
 
     ---
     version: v1.3.0
@@ -452,90 +332,74 @@ When the chain ran from a `claude/` branch (step 5), add a
     cleanup-branch: claude/<name>
     ---
 
-`release.yml` parses that key and deletes the branch server-side with the
-harness PAT, which is the only deletion path that works from inside the
-sandbox. Omit the key entirely in the `preprod` and landed-feature cases;
-there is no orphan to clean up.
-
-    ---
-    version: v1.3.0
-    type: minor
-    ---
-
     ## Release v1.3.0
 
     ### Features
     - Dark mode toggle (#45)
 
-    ### Fixes
-    - Fix login redirect bug (#43)
+The `cleanup-branch:` key names the `claude/` branch when the chain ran from
+one (step 5). `release.yml` parses it and deletes the branch server-side
+with the harness PAT, which is the only deletion path that works from inside
+the sandbox. Omit the key entirely in the `preprod` and landed-feature cases;
+there is no orphan to clean up.
 
-### 9. Push directly to preprod via the GitHub MCP server
+### 9. Push the release commit to preprod
 
-This is the critical step. Do NOT use `git push origin preprod`: the
-harness proxy rejects it with HTTP 403, and even outside the harness
-the MCP path works the same.
+The commit carries, always, `.release-description.md` (step 8); plus
+`release-notes/<version>.md` whenever step 7b ran (the release fails without
+it); plus `CHANGELOG.md` when step 7 composed one. Its message is
+`chore: release $NEW_VERSION`. **Never push `VERSION` from here.**
+`release.yml` writes it, the migration and the changelog stamp in one commit,
+from the version in the signal file; pushing it here as well would give one
+number two owners, which is the failure that rule exists to prevent.
 
-Call `mcp__github__push_files` with:
+**Try the direct path first, with a dry run.** Build the commit in a
+throwaway worktree on `origin/preprod`, so the session's branch and working
+tree never change, then ask the remote whether it would take the push:
 
-- `owner`: the owner parsed in step 1
-- `repo`: the repo parsed in step 1
-- `branch`: `preprod`
-- `message`: `chore: release $NEW_VERSION`
-- `files`: always
-  `{ path: ".release-description.md", content: <RELEASE_DESC_CONTENT from step 8> }`,
-  plus `{ path: "release-notes/<version>.md", content: <the note from step 7b> }`
-  whenever step 7b ran (the release fails without it),
-  plus `{ path: "CHANGELOG.md", content: <CHANGELOG_CONTENT from step 7> }`
-  when step 7 composed one.
+    WT=$(mktemp -d) && git worktree add --detach "$WT" origin/preprod
+    (cd "$WT" && <write the files above> && git add -A && git commit -q -m "chore: release $NEW_VERSION")
+    git -C "$WT" push --dry-run origin HEAD:refs/heads/preprod
 
-  **Never push `VERSION` from here.** `release.yml` writes it, the migration
-  and the changelog stamp in one commit, from the version in the signal file.
-  Pushing it here as well would give one number two owners, which is the
-  failure that rule exists to prevent.
+**On success, push for real:** `git -C "$WT" push origin HEAD:refs/heads/preprod`.
 
-The MCP call creates a single commit on origin/preprod. It does not modify the
-local working tree or local refs.
+**On refusal, push through the GitHub API instead.** In the harness sandbox,
+`origin` is a local git proxy that allows pushes only to the session's own
+`claude/<branch>`; a push to `preprod` is rejected with HTTP 403, and the dry
+run learns that before anything is sent. Call `mcp__github__push_files` with
+`owner` and `repo` from step 1, `branch` `preprod`, the message above, and
+`files` holding the same paths and contents; it creates a single commit on
+`origin/preprod` and modifies nothing locally. If it returns an error,
+surface the error and stop; the direct push was refused already, so there is
+nothing to retry.
 
-After the call succeeds, leave the working tree clean:
+Either way, remove the worktree, then fetch so the new commit is visible:
 
-    # Discard any local edits made while composing the files in steps 7 and 8
-    git checkout -- CHANGELOG.md VERSION 2>/dev/null || true
-    rm -f .release-description.md
-
-Then fetch so the new commit is visible locally:
-
+    git worktree remove --force "$WT"
     git fetch origin preprod
     git log origin/preprod -1 --oneline
 
-The latest commit should be `chore: release $NEW_VERSION`.
-
-If `mcp__github__push_files` returns an error, do NOT fall back to
-`git push origin preprod`: it will 403 in the harness. Surface the error
-to the user and stop. The working tree should still be clean because
-nothing was committed locally.
+The latest commit should be `chore: release $NEW_VERSION`. **Remember which
+path took the push**; step 10 reports it.
 
 ### 10. Inform the user
 
 Tell the user:
-- The release commit was pushed to `preprod` via the GitHub API
-  (`mcp__github__push_files`), bypassing the local git proxy.
-- The `release.yml` workflow will now:
-  1. Create a PR from preprod to main
-  2. Merge the PR
-  3. Tag version `$NEW_VERSION` and create a GitHub Release
-- Share the version number and key changes.
+- Which path pushed the release commit to `preprod`: the direct push, or
+  `mcp__github__push_files` after the dry run was refused.
+- The `release.yml` workflow will now merge `preprod` onto `main` with
+  `--no-ff` (a PR, gated by any required checks, only if that push is
+  refused), tag `$NEW_VERSION`, create a GitHub Release, fast-forward `preprod`.
+- The version number, the bump type and why (step 2's quoted lines when
+  there were any), and key changes.
 - **Print the step 3 blast-radius report**, whether or not step 4 asked
-  anything. `--quick` skips the question, never the record: after the
-  fact, "what shipped" has to be answerable.
-- If main has branch protection with required checks, the merge will
-  wait for checks to pass (auto-merge).
-
-- **(connected)** That step 10b follows: the session stays open until
+  anything. `--quick` and `--ship` skip the question, never the record:
+  after the fact, "what shipped" has to be answerable.
+- Connected: that step 10b follows, so the session stays open until
   production serves the release, then claims conformance and closes the
   change issues.
 
-### 10b. Claim conformance and close the changes **(connected)**
+### 10b. Claim conformance and close the changes (connected)
 
 **This step forks on one key.** Read it first:
 
@@ -545,165 +409,27 @@ Tell the user:
 specification, there is nothing to claim and no change issue to close, and
 nothing about the loop is mentioned to the user. The release ends at step 10.
 
-The release is not done when the workflow is: it is done when production
-SERVES it. Only then is a conformance claim honest, and only then is a change
-issue closed, so that closed means live means promoted in Spec Universe.
-Branch and preprod results are never claimed, from here or anywhere.
-
-**Wait for the release to land on `main`.** Poll:
-
-    git fetch origin main
-    git merge-base --is-ancestor <the release commit from step 9> origin/main
-
-until it is an ancestor, capped at about ten minutes. On timeout stop and say
-so: the release workflow has not finished or has failed, nothing is claimed,
-and re-running this step by hand once `main` carries the release is the
-recovery.
-
-**Verify production.** The production URL has one home: the
-`production-url:` line in the body of the bootstrap cleanup commit on
-`preprod` (`chore: remove harness bootstrap files (one-time use)`), which
-`.claude/HARNESS.md` defines as a contract parsed by line key:
-
-    PROD_URL=$(git log origin/preprod --format=%B | sed -n 's/^production-url: *//p' | head -1)
-    bash .claude/scripts/verify-deploy.sh "$PROD_URL" "$(git rev-parse origin/main)"
-
-Three verdicts, and only one of them stops:
-
-- `deploy-verified:` continues. Production serves the release.
-- `deploy-equivalent:` continues, and **is reported as what it is**: no
-  watched path differs between the sha production serves and the release sha,
-  so no deploy was due and production already serves the same build
-  (`docs/architecture/railway-environments.md` owns why). Name both shas and
-  say no deploy was expected, so a reader never has to wonder why "verified"
-  names a sha that is not the release. Without this verdict every docs-only
-  release polls out on `deploy-pending:` and strands its work item open.
-- `deploy-pending:` stops this step: say plainly that production is not yet
-  serving the release, that no claim was written and no issue closed, and that
-  re-running this step later re-checks; `serving:` naming an older sha means
-  the previous version is still up.
-
-Never reason about equivalence yourself: the verifier decides it, and it is
-`deploy-pending:` whenever it cannot. A skill that talks itself past a pending
-verdict is the failure this whole step exists to prevent.
-
-**Gather the verdicts.** They travel in the PR bodies, because the feature
-context is deleted at the merge. For every pull request in the step 3 blast
-radius (the `(#NN)` references, plus the release PR itself), read its body
-(`mcp__github__pull_request_read`) and take its `## Spec verdicts` table and
-the change key and work item from its `## Spec` section. Union the tables. A
-PR with neither section shipped without a verdict (a `/to-preprod` older than
-this step, or a merge around it): list it as unclaimed rather than inventing
-rows.
-
-**Promote each change, before claiming anything.** A change whose
-specification moved ships its amendments as part of shipping its code, so that
-"live" and "current in the specification" are one statement rather than two
-that drift. Promotion comes FIRST, so every claim below describes the text
-that is now current instead of text the release has already superseded:
-
-    SU="bash .claude/scripts/spec-universe.sh"
-    IDEMPOTENCY_KEY="release-$NEW_VERSION-promote-<KEY>" $SU release <KEY>
-
-once per change key the PR bodies named. The call is idempotent and is never
-refused: it promotes what it can and returns what it left behind, as
-`promoted`, `unacceptedAtRelease` and `notPromoted`.
-
-Read that answer and report it. **`promoted` is named node by node** in the
-report. **`unacceptedAtRelease` and `notPromoted` are named too, never
-swallowed**: a proposal nobody accepted is a decision that was never taken,
-and a release that promoted around it must say so, because the preprod gate
-only guards drifted-vs-current and a proposal can reach production unaccepted.
-A non-zero exit from the client stops this step exactly as a failed
-verification does, with nothing claimed and no issue closed.
-
-**Claim, per criterion, over `/v1`.** Through the shared client, which fails
-closed on any non-zero exit (`.claude/SPEC-LOOP.md`). The
-idempotency key makes a re-run after a stop safe:
-
-    RELEASE_PR=<the URL of the preprod-to-main PR the workflow merged>
-    IDEMPOTENCY_KEY="release-$NEW_VERSION-<node>-<criterion>" \
-      $SU claim <node slug> <matched|drifted> source-code <criterion id> "$RELEASE_PR"
-
-One claim per verdict row: the value from the verdict, basis `source-code`
-(the judge read the code and ran nothing), the criterion the row's `ac-N`
-(omitted for a whole-node row), evidence the release PR URL. **A `drifted`
-verdict is claimed `drifted`, honestly**, and every drifted claim is reported
-to the user by node and criterion: a release that carries known drift is a
-fact Spec Universe must show, never one the claim step tidies away.
-`unverifiable` rows are claimed as nothing (neither value can be claimed) and
-listed as anchors to repair.
-
-**Claim by test, from a run at the release commit.** The harness asks CI to
-run no suite, so the run that says which anchored tests passed is this
-session's own, at the commit production serves, in a worktree that is thrown
-away afterwards. A criterion anchor (`fr-14/ac-3`) on a test file that PASSED
-is claimed `matched` with basis `test`; a file that failed, was skipped or
-never ran claims nothing and is listed, because a session without a database
-fails the integration tier for want of one, and that is not drift.
-
-    RELEASE_SHA=$(git rev-parse origin/main)
-    WT=$(mktemp -d) && git worktree add --detach "$WT" "$RELEASE_SHA"
-    REPORT=$(mktemp -t run-report-XXXXXX.json)
-    (cd "$WT" && <the project's install command> \
-      && node scripts/check-spec.mjs --quiet \
-      && <the project's test command, writing a Vitest-shaped JSON report to "$REPORT">) || true
-
-The `|| true` is deliberate: a red tier is expected in a session without a
-database, and the script below is what decides what a red file means. The
-report's shape is the contract: `{ testResults: [{ name, status }] }`, which
-is what `vitest run --reporter=json --outputFile` writes; a runner that emits
-something else needs converting to it before this step, not a second format
-here. Then run the intersection twice, because the evidence is a comment whose
-URL the claims carry:
-
-1. Once to produce the evidence. The markdown goes to stderr:
-
-        node scripts/spec-test-claims.mjs --coverage="$WT/.harness/spec-coverage.json" \
-          --report="$REPORT" --root="$WT" --version="$NEW_VERSION" --sha="$RELEASE_SHA" \
-          --evidence=pending 2> /tmp/evidence.md > /dev/null
-
-   Post `/tmp/evidence.md` as a comment on the release PR
-   (`mcp__github__add_issue_comment`, the PR number is an issue number) and
-   take the comment's URL.
-
-2. Once more with that URL as `--evidence`. Stdout is one shared-client call
-   per claim, each under the key `release-<version>-<node>-<criterion>-test`
-   (distinct from the `source-code` key for the same criterion, so both bases
-   stand). Run every line as printed.
-
-Then `git worktree remove --force "$WT"`. A non-zero exit from the client
-stops the claims where they are; the keys make the re-run safe. Report the
-count claimed, the count not claimed, and the evidence URL.
-
-**Close the changes.** For every change key the PR bodies named, close its
-work item (`<KEY>: ...`) with a comment naming the version:
-
-    Shipped in <NEW_VERSION>; production serves it and its conformance is
-    claimed in Spec Universe.
-
-`/release` is the only skill that closes a work item. Tickets were closed by
-`/implement` as they landed; the work item closes here, on the strength of
-production, and nowhere earlier.
+**Otherwise read `CONNECTED.md` beside this file and work it in order**: wait
+for `main` to carry the release, verify production with `verify-deploy.sh`
+(only `deploy-verified:` or `deploy-equivalent:` continues), gather the
+verdicts from the gate run records, promote each change, claim in one batch
+by verdict and by test, close the change issues, and carry its items in the
+closing block.
 
 ### 11. Best-effort orphan branch cleanup
 
 **`cleanup-branch:` does the `claude/` branch already.** When step 8 wrote
 that key, `release.yml` deletes that branch server-side with the harness
-PAT once the release lands. This step is about what is left over, and
-about the case where no key was written.
-
-A `claude/<name>` session creates a `feature/<name>` branch and Railway
-environment only once it pushes (the slug commit from
-`set-feature-name.sh`, or any code push); the source `claude/<name>`
-branch is then normally deleted by `claude-to-feature-branch.yml`. Since
-the release skill bypasses the feature-branch chain entirely, if such a
-branch exists neither cleanup is guaranteed to have happened. Deleting
-the remote `feature/<name>` branch (when it succeeds) triggers
+PAT once the release lands. This step is about what is left over, and about
+the case where no key was written: a `claude/<name>` session creates a
+`feature/<name>` branch and Railway environment only once it pushes (the
+slug commit from `set-feature-name.sh`, or any code push), and
+`claude-to-feature-branch.yml` then normally deletes the source
+`claude/<name>` branch. The release skill bypasses that chain, so if such a
+branch exists neither cleanup is guaranteed to have happened. Deleting the
+remote `feature/<name>` branch (when it succeeds) triggers
 `feature-branch-cleanup.yml`, which removes any associated Railway
-environment automatically.
-
-Attempt deletion, but treat it as best-effort:
+environment automatically. Attempt deletion, but treat it as best-effort:
 
     if [[ "$CURRENT_BRANCH" == claude/* ]]; then
       FEATURE_NAME=$(bash .claude/scripts/resolve-feature-name.sh "$CURRENT_BRANCH")
@@ -711,21 +437,18 @@ Attempt deletion, but treat it as best-effort:
       git push origin --delete "$CURRENT_BRANCH" 2>/dev/null || true
     fi
 
-**Harness limitation:** The local git proxy rejects deletes of branches
-it does not consider session-owned (HTTP 403), and there is no
-GitHub-MCP tool for deleting a branch. Expect these deletes to fail in
-the sandbox.
-
-What to tell the user when they do fail depends on step 8. If
-`cleanup-branch:` was written, the `claude/` branch is the workflow's
-problem now and needs no mention; say only that `feature/<name>` may
-linger. If it was not (the `preprod` and landed-feature cases), fall back to
-the old advice: the orphan branches may need cleaning up by hand on
+**Harness limitation:** the local git proxy rejects deletes of branches it
+does not consider session-owned (HTTP 403), and there is no GitHub-MCP tool
+for deleting a branch, so expect these deletes to fail in the sandbox. What
+to tell the user then depends on step 8: if `cleanup-branch:` was written,
+the `claude/` branch is the workflow's problem now and needs no mention; say
+only that `feature/<name>` may linger. If it was not (the `preprod` and
+landed-feature cases), the orphan branches may need cleaning up by hand on
 GitHub, or will be cleaned up by the workflows that respond to the preprod
 push.
 
-The working tree must be clean when the skill exits. If anything was
-left modified by step 7 or step 8, revert it now:
+The working tree must be clean when the skill exits; step 9 built the
+release commit in a worktree, so revert anything still modified:
 
     git checkout -- CHANGELOG.md VERSION 2>/dev/null || true
     rm -f .release-description.md

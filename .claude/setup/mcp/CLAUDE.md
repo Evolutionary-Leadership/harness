@@ -27,7 +27,7 @@ Auth, TanStack Query with a fully optimistic UI. Product vision and behaviour li
 | Preview URLs, per-environment Postgres | [`docs/architecture/railway-environments.md`](docs/architecture/railway-environments.md) |
 | Agents calling this app, MCP tools, OAuth | [`docs/architecture/mcp-server.md`](docs/architecture/mcp-server.md) |
 | Auth, sessions, ownership, input trust, limits | [`docs/SECURITY.md`](docs/SECURITY.md) |
-| Where a new test goes, what CI skips | [`docs/TESTING.md`](docs/TESTING.md) |
+| Where a new test goes, which tier runs where | [`docs/TESTING.md`](docs/TESTING.md) |
 | Setting up Railway by hand | [`docs/runbooks/railway-setup.md`](docs/runbooks/railway-setup.md) |
 | Why something is built this way | `docs/decisions/` (numbered ADRs) |
 | What a domain term means | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) |
@@ -56,7 +56,7 @@ Changing any of these is a project-wide migration, not a refactor.
 | Repositories are the only code that touches a table | Services take repositories, never the Drizzle client |
 | argon2id, database sessions, no cookie cache | Revocation is immediate |
 | `NODE_ENV` is a runtime switch, NOT an environment label | "Is this production" reads `RAILWAY_ENVIRONMENT_NAME` (ADR 0003) |
-| CI runs no tests | A green PR check is not a passing test suite (ADR 0005) |
+| The unit tier gates every merge, in CI | A green PR check means the unit tier passed, not the whole suite; `pnpm verify` runs every Vitest tier (decision: [run the unit tier in CI](docs/decisions/0008-run-the-unit-tier-in-ci-and-the-integration-tier-with-a-service-container.md)) |
 | The MCP endpoint is per-user OAuth, revision 2026-07-28 only | No shared token, no legacy clients (ADR 0007) |
 
 ## Layer rules
@@ -107,7 +107,7 @@ Things that have already cost someone a session.
 
 A change is done when all of these hold:
 
-- `pnpm verify` passes (`typecheck && lint && check:docs && test:run`)
+- `pnpm verify` passes (`check:docs && typecheck && lint && test:unit && test:int`)
 - New behaviour has at least one test, at the LOWEST tier that can hold it
 - Every external input (form data, request body, search params, env var) is
   validated with Zod at the boundary
@@ -116,9 +116,8 @@ A change is done when all of these hold:
 - No `any`, and no `@ts-expect-error` without a tracked issue
 - The owning doc is updated in the same commit (see the table in `docs/README.md`)
 
-**`pnpm verify` is the real gate, not CI.** CI runs
-`typecheck && lint && check:docs` only, because the runner has no Docker. A green PR
-check does not mean tests passed.
+The gate is the `check:` and `tests:` lines in `.harness-version`; `/implement` runs
+both. Locally, `pnpm verify` runs the same in fast-fail order.
 
 ## Schema changes
 

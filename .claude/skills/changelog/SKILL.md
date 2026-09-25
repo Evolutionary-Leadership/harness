@@ -1,7 +1,6 @@
 ---
 name: changelog
 description: Auto-generate or update CHANGELOG.md from merged PRs since the last release tag.
-disable-model-invocation: true
 argument-hint: "[optional: version label, e.g. v1.2.0]"
 allowed-tools: Bash(git *), Bash(gh *), Read, Write, Glob, Grep
 ---

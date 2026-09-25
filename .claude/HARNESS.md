@@ -2,15 +2,10 @@
 
 This project was scaffolded from the
 [`evolutionary-leadership/harness`](https://github.com/evolutionary-leadership/harness)
-template repo using GitHub's "Use this template" button, then configured
-by the one-shot `/setup` skill (variant: **harness-plain**). The template
-added automated CI/CD infrastructure (feature branches, auto-merge,
-releases), not application code. Understanding what it set up helps you
-work with it instead of against it.
-
-The template content is authored elsewhere and synced into this template
-repo on every harness release. You never need to read the authoring repo:
-everything an upgrade uses is published here, at a tag per release.
+template repo, then configured by the one-shot `/setup` skill (variant:
+**harness-plain**). It added CI/CD infrastructure (feature branches,
+auto-merge, releases), not application code, and is synced into the template
+repo at a tag per release, which is all an upgrade reads.
 
 ## Architecture
 
@@ -25,334 +20,244 @@ feature/<name>                 ← created automatically from preprod
 preprod                        ← PR auto-merged
 ```
 
-- The session branch starts with a random codename
-  (`claude/<adjective-scientist>-<id>`). To get a meaningful name, Claude
-  runs `bash .claude/scripts/set-feature-name.sh <slug>` as its first
-  action; it writes `.harness-feature` and pushes.
-- The feature name is resolved as: use the slug in `.harness-feature` if
-  present and valid, otherwise fall back to the codename (the `claude/`
-  prefix and `-<sessionId>` suffix stripped). See "Feature naming" below.
-- Pushing to a `claude/` branch triggers the Action that creates/updates
-  the corresponding `feature/<name>` branch.
+Pushing to a `claude/` branch triggers the Action that creates or updates
+the corresponding `feature/<name>` branch, named after the work rather than
+the random session codename:
 
-### Feature naming
+- **Source of truth:** a committed file `.harness-feature` whose line 1 is a
+  kebab-case slug, set as Claude's first action via
+  `bash .claude/scripts/set-feature-name.sh <slug> [--preview=yes|no]`
+  (sanitizes, writes, commits, pushes).
+- **Resolution (everywhere):** the slug if present and valid
+  (`^[a-z0-9][a-z0-9-]{0,40}$`, not `preprod` or `main`), else the codename
+  (`claude/` prefix and `-<sessionId>` suffix stripped). The shared resolver
+  `.claude/scripts/resolve-feature-name.sh` reads line 1 only; the workflows
+  apply the identical check.
+- **Set it before the first push.** Never set, the first code push still
+  creates `feature/<codename>`: naming is an improvement, not a requirement.
+- **No leak to preprod:** the to-preprod workflow removes it before the
+  merge. It stays out of `.gitignore`: the workflows read it from the commit.
 
-Feature branches are named after the work, not the random session codename.
-The mechanism:
-
-- **Source of truth:** a committed file `.harness-feature` holding a
-  kebab-case slug. Claude sets it early via
-  `bash .claude/scripts/set-feature-name.sh <slug>`, which sanitizes the
-  input, writes the file, commits, and pushes.
-- **Resolution (everywhere):** use the slug if `.harness-feature` is
-  present and valid (`^[a-z0-9][a-z0-9-]{0,40}$`, and not `preprod` or `main`),
-  otherwise fall back to the codename. The shared resolver is
-  `.claude/scripts/resolve-feature-name.sh`; the workflows
-  (`claude-to-feature-branch.yml`, `claude-to-preprod.yml`) apply the
-  identical check.
-- **Set it before the first push** so the feature branch is created with the
-  good name from the start.
-- **Graceful fallback:** if `set-feature-name.sh` is never called, the first
-  code push still creates `feature/<codename>`. Naming is an improvement,
-  never a requirement.
-- **No leak to preprod:** `.harness-feature` is removed by the to-preprod workflow
-  before the merge, so a future session cloned from preprod never inherits a
-  stale name. For this reason it must stay out of `.gitignore` (the
-  workflows read it from the commit).
-
-**Where do I look for X:**
-
-| What | Where |
+| Where do I look for | Where |
 |------|-------|
-| Provisioning trigger | A `claude/` push (the slug commit, or first code push) |
-| Feature branch | `feature/<name>` |
-| CI checks | Only on the PR to `preprod`/`main` |
+| The feature branch | `feature/<name>`, created by the first `claude/` push (slug commit or code) |
+| CI checks | On every `claude/**` code push and on the PR; the PR run is the gate |
 | Current feature name | `bash .claude/scripts/resolve-feature-name.sh` |
 
 ### Signal files
 
-- **`.pr-description.md`**: Committing this file to the repo root triggers
-  the GitHub Action to create a PR from `feature/<name>` → `preprod` and
-  auto-merge it. The `/to-preprod` skill writes this file for you. If the
-  frontmatter contains `review: true`, the PR is created but NOT auto-merged
-  (used by the `/review` skill). If `hotfix: true`, the hotfix workflow
-  handles it instead.
-- **`.release-description.md`**: Committing this file triggers the release
-  workflow to create a PR from `preprod` → `main`, tag a version, and create a
-  GitHub Release. The `/release` skill writes this file.
-- **`.harness-feature`**: A committed one-line kebab-case slug naming this
-  feature, written by `set-feature-name.sh`. The workflows and shell
-  scripts resolve the feature name from it (with a codename fallback). It
-  is removed before the merge to preprod (by `claude-to-preprod.yml`) so the name
-  never leaks onto preprod and into the next session. Unlike the other signal
-  files it must stay tracked (not in `.gitignore`), because the workflows
-  read it from the commit.
+- **`.pr-description.md`**: written by `/to-preprod`, it triggers the Action
+  that opens a PR from `feature/<name>` → `preprod` and auto-merges it.
+  Frontmatter `review: true` skips the auto-merge (`/review`); `hotfix: true`
+  hands it to the hotfix flow.
+- **`.release-description.md`**: written by `/release`, it triggers the
+  release workflow: merge `preprod` into `main`, tag, create a Release.
+- **`.harness-feature`**: line 1 is the slug. Optional line 2, `preview: yes`
+  or `preview: no` (default `no`), says whether a deploy variant provisions a
+  preview environment: `/feature` writes `yes` for an L change and for a run
+  whose exit is `/review`; `/review` flips a `no` to `yes`. Removed before
+  the merge by `claude-to-preprod.yml`; unlike the others it stays tracked.
 
 ### `.harness-version` configuration
-
-The `.harness-version` file supports these fields:
 
 ```yaml
 harness: harness-plain
 version: 0.7.7
 repo: Evolutionary-Leadership/harness
-check: node scripts/check-docs.mjs && npm test && npm run lint
+check: node scripts/check-docs.mjs && npm run lint
+tests: npm test
 reviewers: teammate1, teammate2
 spec_product: myproduct
 change-prefix: MYPR
+registry: off
 gate-mode: evaluate
 agent-authority: release
 ```
 
-- **`harness`**: variant identifier, written by `/setup` on first run
-  (`harness-plain` or `harness-railway`).
-- **`version`**: harness version installed; used by `/harness-upgrade` to
-  diff against the latest release.
-- **`repo`**: the published harness template repo
-  (`Evolutionary-Leadership/harness`), which `/harness-upgrade` reads. Each
-  release is a tag there holding the exact tree a scaffold receives, so an
-  upgrade compares your repo against a real tree rather than replaying a
-  list of changes. It is public: upgrades need no credentials.
-- **`check`**: CI command to run on PRs to preprod. Keep
-  `node scripts/check-docs.mjs` at the front of the chain so documentation
-  drift fails the merge gate like any other error. When configured, the
-  `feature-branch-checks.yml` workflow runs this command (also on every
-  push to a `claude/**` branch, for feedback before the merge PR exists),
-  and to-preprod polls the run's conclusion on the PR head, merging only on
-  success. The check chain must finish within the gate's 12-minute budget.
-- **`reviewers`**: Default reviewers assigned when using `/review`.
-- **`agent-authority`**: the production-reaching skills a session may complete
-  without a person present, space or comma separated. Absent or empty grants
-  none, which is the default. Only `release`, `hotfix` and `rollback` are
-  gated, so only those three mean anything here; `/to-preprod` and `/review`
-  reach no production surface and are always available to a session. This key
-  is project-owned and an upgrade never rewrites it: the grant is the owner's,
-  and it is a commit, so it is reviewable and revertible like any other. See
-  "What a session can finish alone" below, and forge decision record 0037.
+- **`harness`**: the variant, written by `/setup`. **`version`**: the harness
+  version installed, which `/harness-upgrade` diffs against the latest.
+- **`repo`**: the published template repo. Each release is a tag there
+  holding the exact tree a scaffold receives; public, so upgrades need no
+  credentials.
+- **`check`**: the CI command. Keep `node scripts/check-docs.mjs` at the
+  front so documentation drift fails the merge gate like any other error.
+  `feature-branch-checks.yml` runs it as the `check` job on every `claude/**`
+  code push (feedback before the merge PR exists) and on the PR to
+  `preprod`; the PR run is the gate, and `/to-preprod` polls its conclusion
+  on the PR head, merging only on success, within a 12-minute budget. A push
+  touching only the feature context skips it.
+- **`tests`**: the test command, run by the `tests` job of the same workflow
+  beside a Postgres service (`TEST_DATABASE_URL` and `DATABASE_URL` are
+  `postgres://postgres:postgres@localhost:5432/app_test`); the gate then
+  waits for both run names. The gate is these two lines and nothing else;
+  `/implement`'s full check runs `check:` then `tests:`.
+- **`reviewers`**: default reviewers assigned by `/review`. **`registry`**:
+  `off` makes Capture skip the System Registry lookup entirely.
+- **`agent-authority`**: the production-reaching skills a session may
+  complete without a person present, space or comma separated; absent or
+  empty grants none. Only `release`, `hotfix` and `rollback` are gated;
+  `/to-preprod` and `/review` reach no production surface. Project-owned: an
+  upgrade never rewrites it, and a commit is reviewable and revertible.
+  `/feature --ship` is release authority in its own right (a person typed the
+  flag about this session, and the run ends in a tagged release on `main`);
+  the key still decides the exit for a no-flag unattended run that reaches
+  the phase 5 gate with nobody answering, and it still gates `/hotfix` and
+  `/rollback`. See "What a session can finish alone".
 
 ### The registry keys and the spec loop's keys
 
-Four keys, two concerns. `change-prefix` and `system-key` are this
-repository's identity in the System Registry, and `/setup` writes them when it
-can. `spec_product` and `gate-mode` are the spec loop, which is absent from a
-fresh scaffold and asleep while `spec_product` is. See `.claude/SPEC-LOOP.md`
-for the loop's whole mechanism; this is what the file holds and what each key
-switches.
+`change-prefix` and `system-key` are this repository's identity in the System
+Registry, written by `/setup` when it can. `spec_product` and `gate-mode` are
+the spec loop, asleep while `spec_product` is; `.claude/SPEC-LOOP.md` owns it.
 
-- **`spec_product`**: the Spec Universe product slug this repository's
-  specification lives under, and the switch for the whole loop. Absent or
-  blank, `check:spec` prints one line, `spec loop not connected`, and exits 0
-  before it reads a credential or walks the tree, and every spec section of
-  every skill is skipped: `/code-review`'s Spec axis falls back to the
-  tracker's spec issue, `/to-spec` writes a spec issue rather than proposals,
-  and `/feature` neither captures a change key nor retrieves. Naming a product
-  wakes all of it at once.
-- **`change-prefix`**: the registry-issued prefix every change key of this
-  repository carries (`MYPR-7`, never `MYPR-007`, never a padded form). It is
-  a cached copy of an immutable fact: a prefix is issued once and never
-  released, because the keys minted under it exist forever, and a copy of a
-  value that cannot change is a cache rather than a second authority. It is
-  verified against the registry once, when the line is written, and never
-  again, with one exception that costs nothing: where `REGISTRY_URL` and
-  `REGISTRY_TOKEN` are both set, `/feature` re-checks the prefix at Capture,
-  in the last moment before a key is minted under it. Reading it live as the
-  source instead would put a registry credential in every repository that
-  mints a key, so the check refuses only on an answer (the prefix resolves to
-  nothing, or to a different system) and never on an outage.
-  **This key is not switched by `spec_product`**: every
-  `/feature` mints a change key and opens a work item, connected or not,
-  because the work item is where the journey's first artefacts live
-  (`.claude/JOURNEY.md`). A repository without a `change-prefix:` line cannot
-  start a feature; `/feature` phase 0 stops and says which line to add.
-- **`system-key`**: the permanent key of the system that `change-prefix`
-  resolved to when `/setup` verified it, and the only reason it is written
-  down. It is never used to look anything up and never read offline: it is an
+- **`spec_product`**: the Spec Universe product slug, and the switch for the
+  whole loop. Absent or blank, `check:spec` prints `spec loop not connected`
+  and exits 0 before reading a credential, and every spec section of every
+  skill is skipped (no skill reads its `CONNECTED.md`): `/code-review`'s Spec
+  axis falls back to the tracker's spec issue, `/to-spec` writes a spec issue
+  rather than proposals, `/feature` neither captures a change view nor
+  retrieves. Naming a product wakes all of it.
+- **`change-prefix`**: the registry-issued prefix every change key carries
+  (`MYPR-7`, never `MYPR-007`), a cache of an immutable fact (`SPEC-LOOP.md`,
+  "The change key"), verified when the line is written and never again,
+  except that where `REGISTRY_URL` and `REGISTRY_TOKEN` are both set and
+  `registry:` is not `off`, `/feature` re-checks it at Capture, refusing only
+  on an answer (resolves to nothing, or to a different system), never on an
+  outage. **Not switched by `spec_product`**: every `/feature` mints a key
+  and opens a work item. Without the line, phase 0 stops and names it.
+- **`system-key`**: the permanent key of the system `change-prefix` resolved
+  to when `/setup` verified it. Never used to look anything up: an
   **assertion**, not a cache, so a later `/feature` can tell "still the same
-  system" from "someone edited the prefix line". A public identifier, never a
-  credential. **Absent is normal and never blocks**: without it, Capture can
-  check that the prefix resolves and not what it resolves to. `/setup` writes
-  it only where the lookup succeeded and the human confirmed the system;
-  `/feature` offers the line and never writes it, because a session that
-  recorded whatever came back would be asserting the very thing the check
-  exists to test.
-- **`gate-mode`**: how the preprod gate treats drift, `evaluate` or `enforce`.
-  **An absent key reads `evaluate`**, which is the shipped default and not an
-  oversight: a scaffold has no recorded conformance yet, so every baseline
-  reads `pending` and `enforce` would block nothing, while `evaluate` still
-  writes the ledger the decision to enforce is later made from. Both modes
-  compute identical rows and print identical words; `evaluate` adds one line
-  saying the merge proceeded. Only drift the branch INTRODUCED is ever a
-  blocking row. A feature context may TIGHTEN this to `enforce` for one branch
-  and may never loosen it, because a branch that can switch off the gate it is
-  failing is not a gate. Two things ignore the mode and stop in both: a
-  proposal on a `legal` or `contractual` node accepted by an identity that is
-  not a `user`, and a specification that could not be read.
+  system" from "someone edited the prefix line". Public, never a credential.
+  **Absent is normal and never blocks.** `/setup` writes it only where the
+  human confirmed the system; `/feature` offers it and never writes it.
+- **`gate-mode`**: how the preprod gate treats drift, `evaluate` or
+  `enforce`. **Absent reads `evaluate`**: a scaffold has no recorded
+  conformance yet, so `enforce` would block nothing, while `evaluate` still
+  writes the ledger the decision to enforce is made from. Both compute
+  identical rows; `evaluate` adds one line saying the merge proceeded. Only
+  drift the branch INTRODUCED is ever a blocking row. A feature context may
+  TIGHTEN this to `enforce` and never loosen it. `SPEC-LOOP.md` names the
+  two things that stop in both modes.
 
 **There is no `spec_url`, and there never will be.** The base URL travels with
-the credential, as `SPEC_UNIVERSE_URL` beside `SPEC_UNIVERSE_TOKEN` in the
-environment, so a session and a CI job are configured identically and no
-checked-in file names a host. `feature-branch-checks.yml` passes both from
-repository secrets to the check step unconditionally; an unset secret is an
-empty string, which a dormant checker never reads. The three faults those two
-variables can produce are told apart by what fixes each: an unset variable and
-a refused token are configuration faults and say so, and only a genuine failure
-to read reports an outage.
-
-**Prerequisites for CI checks:**
-- None: the merge gate polls the check run directly, so it works without
-  branch protection (unavailable on private free-plan repos, where
-  auto-merge would silently degrade to an immediate merge)
-- Optionally add a branch protection rule for `main` with required status
-  checks to gate releases and hotfixes
+the credential, `SPEC_UNIVERSE_URL` beside `SPEC_UNIVERSE_TOKEN`, so a session
+and a CI job are configured identically and no checked-in file names a host;
+`feature-branch-checks.yml` passes both from secrets unconditionally (an
+unset secret is an empty string a dormant checker never reads). **CI checks
+need no branch protection**: the merge gate polls the check run directly
+(protection is unavailable on private free-plan repos anyway).
 
 ### Hooks
 
-- **SessionStart**: Runs `.claude/scripts/session-start.sh` on every new
-  session. On a `claude/` branch, it resolves the feature name and, if a
-  matching `feature/<name>` branch already exists, merges previous work. It
-  no longer pushes an init commit: a fresh session just prints naming
-  guidance (skipped while the one-shot `/setup` skill is still present,
-  since the only sane first move then is `/setup`, which pushes to `preprod`,
-  never to this branch). The feature branch is created on Claude's first
-  push, ideally
-  the `set-feature-name.sh` slug commit (see "Feature naming"). You do not
-  need `/feature` to start; just describe what you want to build and Claude
-  names the session before its first push.
-- **PreToolUse (Write/Edit/Bash)**: Runs
-  `.claude/hooks/prevent-em-dash.sh`, which blocks any write that contains
-  a U+2014 em dash.
+**A hook never sleeps; polling is a script the session runs on purpose.** A
+hook does one fetch or check and returns; anything that waits is a script.
+
+- **SessionStart**: `.claude/scripts/session-start.sh`. On a `claude/`
+  branch it resolves the feature name and merges previous work from a
+  matching `feature/<name>` branch. It sets a repo-local git identity
+  (`Claude`, `noreply@anthropic.com`) when none is configured, pings the
+  Product Cockpit once where one is configured (a 404 names the repository
+  the cockpit does not know), and tells the session to read
+  `getting-started` before anything else (it holds the closing block, the
+  stand-down block and the rule that skills are mandatory), with the
+  flavour line: `/chat`, `/brainstorm` or `/feature`. It pushes nothing: naming guidance only
+  (skipped while `/setup` is present); the feature branch is created on the
+  first push, ideally the slug commit.
+- **PreToolUse (Write, Edit, Bash and the GitHub MCP write tools)**:
+  `.claude/hooks/prevent-em-dash.sh` blocks any write containing a U+2014 em
+  dash; for `Bash` only commands carrying a message or a heredoc are scanned,
+  for the MCP tools every string in the tool input.
+- **PreToolUse (Write, Edit)**: `.claude/hooks/protect-frozen-docs.sh`
+  refuses to rewrite a doc whose `docs/README.md` row reads `Frozen: Yes`
+  unless the new content only appends.
 
 ## The feature flow
 
 ### The three-rung ladder
 
-Every session starts by stating its flavor explicitly (the opening
-question in `/getting-started`):
+Every session starts by stating its flavor (the opening question in
+`/getting-started`): **Talk** is `/chat`, which writes nothing; **Think** is
+`/brainstorm`, which writes to the tracker only (an idea issue, if kept);
+**Build** is `/feature`, which writes the repo through the gated phases its
+size tier selects. `/brainstorm` runs `/feature` phase 1's interview engine
+and ends by asking where the thinking lands: nowhere, an idea issue, or
+`/feature #<issue>`, which grills only the remaining frontier
+(`docs/agents/issue-tracker.md` has the tracker rules).
 
-| Rung | Skill | Writes to |
-|---|---|---|
-| Talk | `/chat` | nothing |
-| Think | `/brainstorm` | the tracker only (an idea issue, if kept) |
-| Build | `/feature` | the repo, through five gated phases |
-
-`/brainstorm` runs the same interview engine as `/feature` phase 1
-(`/grilling` plus `/domain-modeling`) and ends by asking where the
-thinking lands: nowhere, an idea issue, or straight into `/feature`.
-`/feature #<issue>` consumes an idea issue and grills only the remaining
-frontier. All tracker conventions live in `docs/agents/issue-tracker.md`.
-
-Every `/feature` is also a change on the journey the Product Cockpit draws:
-twelve states alternating with eleven transitions, from `captured` to
-`evaluated`. `.claude/JOURNEY.md` is the one home for what each position
-means in harness terms (which skill, which artefact, when a transition is
-ready and done, what blocked means), and `/feature` writes the position it is
-at into the touched-set record as it moves, so a person or the cockpit can see
-where a feature is without inferring it.
+Every `/feature` is sized at the end of Capture (`S`, `M` or `L`; the rubric
+is `### Size` in `/feature`), and the tier decides which phases run. Every
+`/feature` is also a change on the journey the Product Cockpit draws: twelve
+states alternating with eleven transitions, from `captured` to `evaluated`.
+`.claude/JOURNEY.md` is the one home for what each position means, and
+`/feature` writes its position into the touched-set record as it moves.
 
 ### The feature context
 
 `.harness/feature-context/<feature-slug>.md`, committed on the feature
-branch, is the feature's memory across sessions and colleagues: colleague
-A stops mid-feature, colleague B runs `/continue` the next day and lands
-mid-flow with the reasoning intact. It exists to serve `/continue` and to
-be the current summary of the feature at any point in time; it is not
-application documentation, which lives in `docs/` (the docs standard owns
-it after the merge).
+branch, is the feature's memory across sessions and colleagues: `/continue`
+lands mid-flow with the reasoning intact. It is the feature's current
+summary, not application documentation (`docs/`). One file per slug,
+rewritten in place, never an append-only log: staleness, not length, is the
+fault. Sections:
 
-**Format.** One file per feature slug (so concurrent features never
-collide), rewritten in place, never an append-only log. Length is fine;
-staleness is not. Sections:
-
-- **Phase and next step**: where the flow stands and the single explicit
-  next action.
+- **Phase and next step**: where the flow stands and the single next action.
+- **The change**: key, work item, challenge and build verdicts with reasons.
+- **Size**: the tier and its one-line reason.
+- **Brief**: `brief.sh`'s output: the `CLAUDE.md` guardrails, glossary terms,
+  decision records and architecture docs matching the change. Skills read it
+  first and the full docs only when it names them.
 - **Decisions settled**: each with the reasoning and the rejected
-  alternatives. Mark one-way decisions; write "ADR to follow", never an
-  `ADR NNNN` number before that ADR file exists (the docs checker
-  validates ADR references it can see).
-- **Open frontier**: the questions still unanswered.
-- **Out of scope**: the boundary the grill settled.
-- **Tracker**: spec issue, ticket issues and their state, the idea issue
-  if one started this.
-- **Exit route**: `/to-preprod`, `/review` or `/release`, once chosen;
-  "awaiting human review" while a `/review` PR is open.
-- **Autonomy granted**: whether grill autonomy or phase autopilot was used,
-  so a reader knows why a phase carries no approvals. It is a record, not a
-  setting: a resumed session never re-arms either.
-- **The change**: the change key and its work item, the challenge verdict
-  from phase 1a and the build verdict from phase 1d, each with its reasoning.
-- **Blocked**: present only while a session has stood down on something it
-  could not get past: what blocks, since when, and what would unblock it.
-  Rewritten, never appended; deleted when the block clears, together with the
-  `blocked` label on the work item (`.claude/JOURNEY.md`, "Blocked").
+  alternatives; mark one-way ones as "ADR to follow", never a number before
+  that file exists.
+- **Open frontier**: the questions still unanswered. **Out of scope**: the
+  boundary the grill settled.
+- **Tracker**: spec issue, tickets and their state, the idea issue if any.
+- **Exit route**: `/to-preprod`, `/review` or `/release`, once chosen
+  ("awaiting human review" while a `/review` PR is open).
+- **Autonomy granted**: whether grill autonomy, phase autopilot or `--ship`
+  was used, so a reader knows why a phase carries no approvals. A record,
+  not a setting: a resumed session never re-arms any of them.
+- **Docs verdict**: phase 4's docs-updater verdict; `/to-preprod` reads it
+  instead of auditing again.
+- **Blocked**: only while a session has stood down: what blocks, since when,
+  what would unblock it. Rewritten, never appended; deleted when the block
+  clears, with the `blocked` label on the work item (`.claude/JOURNEY.md`).
 
-Where the spec loop is connected (`spec_product:` above), the same file also
-carries, and a dormant repository carries none of them:
+Where the spec loop is connected (`spec_product:` above), and only then, it
+also carries **The change view** (Spec Universe's, beside the key);
+**Retrieved specification** (the block phase 1 wrote: interview context,
+never a write's source, dying with this file; `SPEC-LOOP.md`, "The interview
+retrieves"); **Conflict decisions** (every card answered with the option and
+reason, plus a **strict pause waiting** line; `CONFLICT-PROTOCOL.md`); and
+**Spec verdicts**, then **Suspect rows**, then **Tier disagreements**, the
+three sections `/code-review` writes, whose order is load bearing because the
+gate's parser stops at the next heading (`SPEC-LOOP.md`, "The preprod gate").
 
-- **The change view**: the Spec Universe change view, beside the key and the
-  work item every repository records.
-- **Retrieved specification**: the block `/feature` phase 1 wrote, holding the
-  three to six nodes the change's own words reached, with the read timestamp,
-  the terms and each node's version. It is INTERVIEW CONTEXT and never the
-  text a write is built from: `/to-spec` re-reads live the node it is about to
-  propose against, because this block ages while the specification moves. It
-  is scoped to one feature and dies with this file at the merge, which is what
-  keeps it from becoming a second copy of the specification. A run that could
-  not read Spec Universe records the client's fault here by its code, so an
-  interview that proceeded blind says so rather than looking like one that
-  found nothing.
-- **Conflict decisions**: every conflict card answered, with the option taken
-  (amend, retire, conform) and the reason; and a **strict pause waiting** line
-  while an amendment on a legal or contractual node waits for a person to
-  accept it in Spec Universe.
-- **Spec verdicts**, then **Suspect rows**, then **Tier disagreements**: the
-  three sections `/code-review` wrote, in that order and no other. The first
-  is the fixed six-column table `/to-preprod` gates on and copies into the PR
-  body. The second holds `drifted` verdicts that showed no concrete input and
-  wrong result, which gate nothing and are never claimed, and travels into the
-  PR body because this file is deleted at the merge. The third is calibration
-  and nothing parses it. **The order is load bearing**: the gate's parser
-  stops at the next heading and faults on a fourth verdict, so a suspect row
-  above or inside the verdict table makes every gate run report a malformed
-  table.
+Link issues by `#number` or URL, never by relative markdown link.
 
-Link issues by `#number` or URL; never use relative markdown links in
-this file.
-
-**Lifecycle.** `/feature` phase 0 creates it. Any agent that finishes
-work on the feature refreshes it whenever the result changes what a fresh
-reader would need (a decision settled, a ticket landed, direction
-changed). Commits are cheap and continuous; pushes ride along with pushes
-already happening, plus a mandatory push at every phase gate and at
-session end (only the pushed copy survives the container). Commit a pure
-context refresh (a commit touching only this file) with the message
-prefix `chore(context):`; the harness workflows use both signals to skip
-busywork, and pushes that touch only this file skip the CI checks
-(`feature-branch-checks.yml` ignores the path). At merge time
-`/to-preprod` uses it to draft the PR
-description, promotes anything permanent into `docs/`, and deletes it: it
-never reaches `preprod`. If a merge bypasses `/to-preprod` (the GitHub merge
-button), `feature-merge-cleanup.yml` removes the leftover from preprod, and
-`/continue` and `/to-preprod` also sweep strays as a safety net.
+**Lifecycle.** `/feature` phase 0 creates it; any agent that finishes work on
+the feature refreshes it whenever the result changes what a fresh reader
+would need. It is committed at every gate and pushed at three checkpoints
+(after Capture, with the naming push; after the plan gate; at the end of
+phase 4), at phase 5 and at every stand-down: only the pushed copy survives
+the container. A pure context refresh carries the prefix `chore(context):`;
+the workflows use both signals to skip busywork, and a push touching only
+this file skips the CI checks. `/to-preprod` drafts the PR description from
+it, promotes anything permanent into `docs/`, and deletes it: it never
+reaches `preprod`; `feature-merge-cleanup.yml`, `/continue` and `/to-preprod`
+sweep a stray left by a bypassed merge.
 
 ### The touched set
 
 `features/<feature-slug>.md` on the `coordination` branch is what this
-feature declares it is going to touch. It is the feature context's opposite
-half: the context is this feature's reasoning, private to the branch and
-deleted at the merge; the touched set is a handful of facts, public to every
-other session in the repository from phase 0, so a parallel feature sees a
-collision before the merge rather than at it.
-
-**A declaration, never a mirror of the diff.** What a branch has already
-changed is derivable from GitHub (compare `preprod` against the feature
-branch), and the coordination branch never keeps a second copy of something
-GitHub owns. What does not exist anywhere else is what a branch says it is
-*about to* touch, which is also the only half a branch that has pushed
-nothing can offer.
-
-**Format.** Front matter and no body, the shape `claims/adr/NNNN.md` already
-uses. `.claude/scripts/touched-set.mjs` composes it, reads it back and
-computes the overlap.
+feature declares it is going to touch: the feature context's opposite half,
+public to every other session from phase 0, so a parallel feature sees a
+collision before the merge rather than at it. **A declaration, never a mirror
+of the diff**: what a branch has already changed is derivable from GitHub, and
+the coordination branch never keeps a second copy of something GitHub owns.
+Front matter and no body, the shape `claims/adr/NNNN.md` uses;
+`.claude/scripts/touched-set.mjs` composes it, reads it and computes overlap.
 
 | Field | Holds |
 |---|---|
@@ -362,399 +267,233 @@ computes the overlap.
 | `author` | Provenance, the same field a claim carries |
 | `declared_at`, `updated_at` | ISO 8601 UTC. The pair is how stale a declaration is |
 | `spec` | The `spec_product`, or the literal `none` |
-| `phase` | The journey position the feature is at, one of the 23 keys `touched-set.mjs` lists, spelled as the Product Cockpit's lifecycle spells them. A state key means that state's artefact exists; a transition key means a session is working on it. Written at phase 0 as `captured` and at every phase boundary after, twice per transition (`.claude/JOURNEY.md`). The record only ever carries the front half, through `built`: it dies at the merge, and from `verified` on the evidence is on GitHub |
+| `phase` | The journey position, one of the 23 keys `touched-set.mjs` lists, spelled as the cockpit spells them. A state key means that state's artefact exists; a transition key means a session is working on it. Written at phase 0 as `captured` and at every phase boundary after: state writes always, transition writes where a cockpit is configured (`.claude/JOURNEY.md`). Front half only, through `built`: the record dies at the merge, and from `verified` on the evidence is on GitHub |
+| `size` | The tier, `S`, `M` or `L`, set at Capture |
+| `phases` | The append-only history of every position written, so a gap under S reads as a tier, not as missing states |
 | `paths` | Repository-relative paths or prefixes. A `**` tail is compared by its literal segments |
 | `nodes` | Specification node slugs, or the single `none`. Only where `spec` names a product |
 
-**Two halves, and one of them is dormant.** `paths` is written by every
-repository, because two sessions collide over files whether or not a
-specification is connected. `nodes` is written only where `.harness-version`
-names a `spec_product`. The absence is declared and never silent (`spec:
-none`, and a connected change touching no node writes the single node
-`none`), which is the rule `Spec: support` already applies to anchors.
+**Two halves, one dormant.** `paths` is written everywhere; `nodes` only under
+a `spec_product`, the absence declared (`spec: none`, or the node `none`).
 
-**The beat is the feature context's beat.** `/feature` phase 0 declares it
-once the branch is named; every refresh of the feature context refreshes it;
-every phase boundary refreshes it with `--phase`; phase 5 reports the overlap
-again with the diff in hand. `updated_at` moving is therefore also the signal
-that a session is working: a reader (the cockpit above all) treats a record
-older than four working hours as no longer in progress, and shows the change
-back at the last state it completed. That fallback is deliberate, and it is
-why there is no `blocked_since` field: a stalled session must not keep
-claiming a transition it is not working on. Writing on every
-push instead would buy a mirror, which is the thing this is not. The reason
-is not the one `feature-branch-checks.yml` gives for rationing context
-pushes: no workflow triggers on `coordination` at all, so a write here costs
-one API call and no CI.
+**The beat is the feature context's beat.** Phase 0 declares it once the
+branch is named; every refresh of the feature context refreshes it; every
+phase boundary refreshes it through `journey.sh phase`; phase 5 reports the
+overlap again with the diff in hand. `updated_at` moving is the signal that a
+session is working: a reader (the cockpit above all) treats a record older
+than four working hours as stalled and shows the change back at the last
+state it completed, which is why there is no `blocked_since` field.
 
-**One writer per file, which is why there is one file per feature.** Nothing
-here needs the compare-and-swap `claims/` needs. Writes go through the
-contents API with the sha, because they are updates by the file's owner.
+**One writer per file, which is why there is one file per feature**, and no
+compare-and-swap. The session's copy is `.harness/journey/<slug>.md` on its
+own branch: `journey.sh` refreshes it, commits it alone and pushes (the check
+and merge workflows ignore the path). `journey-sync.yml`
+(`.claude/scripts/journey-sync.sh`) mirrors it onto `coordination` under its
+`GITHUB_TOKEN` 20 to 40 seconds later, then rings the cockpit from Actions
+`BOARD_URL` (variable or secret) and the `BOARD_TOKEN` secret.
 
-**It dies at the merge.** `/to-preprod` deletes the record in the step that
-retires the feature context. After that the code is on `preprod` and GitHub
-owns it, so keeping the record would be the second copy the branch forbids. A
-record whose branch is gone from the remote **and** which has not been
-touched in a day has no writer left, so the next reader sweeps it; that is
-the same rule `claims/adr` uses before it releases a number, and it is what
-covers a merge that went around `/to-preprod`. The day is not caution for its
-own sake: phase 0 writes the record before `feature/<slug>` exists, because
-the branch is created by a workflow moments after the naming push, and
-without the guard the first reader through that window would sweep the record
-of a branch that has pushed nothing, which is the exact case this exists for.
+**It dies at the merge.** `/to-preprod` retires it with the feature context
+(`journey.sh retire` stages the deletion; the signal commit's push has
+`journey-sync.yml` delete the copy). A record whose branch is gone from the
+remote **and** untouched for a day has no writer left, so the next reader
+sweeps it, which covers a merge that went around `/to-preprod`; the day guards
+the window in which phase 0 has written the record and the workflow has not
+yet created `feature/<slug>`.
 
 **Nothing here blocks anything.** An overlap is reported to a person, in the
-closing block and in the feature context, and never to a gate. A missing
-branch, a dead network, an absent tool or a malformed record is one warning
-line and the flow continues. This is deliberately not the change-key mint's
-fail-closed rule: a guessed key welds two changes together forever, while an
-unwritten touched set costs one advisory warning.
+closing block and in the feature context, never to a gate; a missing branch,
+a dead network, an absent tool or a malformed record is one warning line.
+Only the change-key mint fails closed: a guessed key welds two changes.
 
 ### The gate run record
 
-`.harness/gate-runs/<KEY>-<n>.json` is the opposite of the feature context and
-the one thing under `.harness/` that MUST reach `preprod`. `/to-preprod`
-writes one file per gate run (`scripts/gate-run.mjs`) holding the mode and
-where it came from, the head sha and merge base, rows by verdict, the drifted
-rows split into new, known and pending, the blocking rows with their reasons,
-the outcome, and a `dispositionUrl` pointing at the work-item comment where a
-person writes `true-drift` or `false-drift`.
-
-It exists to make one number: after ten features, the rate at which the gate
-would have stopped a merge that should have merged, which is what the decision
-to run `gate-mode: enforce` is made from. So it is committed, never
-gitignored, and never deleted at the merge. A ledger that dies at the merge is
-not a ledger. A dormant repository never has one.
-
-`.harness/spec-coverage.json`, by contrast, is derived from the tree and a
-live read, so it belongs in `.gitignore`: a committed copy would be the second
-copy the anchor convention exists to prevent.
+`.harness/gate-runs/<KEY>-<n>.json` is the one thing under `.harness/` that
+MUST reach `preprod`: `/to-preprod` writes one per gate run
+(`scripts/gate-run.mjs`), with a `dispositionUrl` at the work-item comment
+where a person writes `true-drift` or `false-drift`; committed, never
+gitignored, never deleted at the merge (`SPEC-LOOP.md`, "The preprod gate").
+Dormant repositories have none. `.harness/spec-coverage.json` is derived: gitignore it.
 
 ### The closing block
 
 Every reply a session gives the user ends with one closing block: the same
 three sections in the same order, whichever skill is running and whether or
-not one is. The contract is defined in
-`.claude/skills/getting-started/SKILL.md`, which the session start hook
-forces every session to read. It is not repeated here, because a second copy
-is the thing that drifts.
+not one is. The contract is `.claude/skills/getting-started/SKILL.md`, Step
+3b, which the session start hook names on every start; a second copy here
+is the thing that would drift.
 
 ### The two reviews
 
 - **`/code-review` reviews code**: two axes (Standards, Spec) in parallel
-  sub-agents, run automatically at the end of `/feature` phase 4.
+  sub-agents for an M or L change, one merged prompt for S, at the end of
+  `/feature` phase 4.
 - **`/review` requests humans**: opens a non-auto-merged PR carrying the
-  `/code-review` findings and the spec link. Approved `/review` PRs land
-  via `/to-preprod` (which reuses the open PR), never the GitHub merge
-  button.
+  `/code-review` findings and the spec link. Approved `/review` PRs land via
+  `/to-preprod` (which reuses the open PR), never the GitHub merge button.
 
-`/feature` phase 5 always asks which exit the user wants, suggesting
-`/review` when `.harness-version` configures `reviewers:` and `/to-preprod`
-otherwise.
+`/feature` phase 5 asks which exit the user wants (`/review` suggested when
+`reviewers:` is configured); under `--ship` the exit is `/release`, unasked.
 
 ### What a session can finish alone
 
-An autonomous session must know, before it starts, whether it will be allowed
-to file the work it is about to do. A session that builds for an hour and then
-discovers it cannot merge has wasted the hour and, worse, tends to report
-itself finished. The rule is one axis: **does this act reach production?**
+A session that builds for an hour and then finds it cannot merge tends to
+report itself finished, so it must know first. One axis: **does this act
+reach production?**
 
 | Skill | A session alone | Why |
 |---|---|---|
-| `/to-preprod` | **Yes, always** | Auto-merged PR into `preprod`. `preprod` is the branch before production, not production |
-| `/review` | **Yes, always** | Opens a PR and merges nothing; its whole purpose is to put people in the loop |
-| `/feature`, `/brainstorm`, `/chat`, `/continue`, and the technique skills | **Yes** | They build, think and record. None of them ships |
-| `/release` | **Only under a grant** | Ships everything queued on `preprod` to `main`, tags it, publishes a Release |
+| `/to-preprod` | **Yes, always** | Auto-merged PR into `preprod`, the branch before production |
+| `/review` | **Yes, always** | Opens a PR and merges nothing; it puts people in the loop |
+| `/feature`, `/brainstorm`, `/chat`, `/continue`, the technique skills | **Yes** | They build, think and record. None of them ships |
+| `/release` | **Under a grant, or under `--ship`** | Ships everything queued on `preprod` to `main`, tags it, publishes a Release |
 | `/hotfix` | **Only under a grant** | Straight to `main`, no `preprod` gate in front of it |
 | `/rollback` | **Only under a grant** | Moves production back, undoing work somebody shipped deliberately |
 
-The grant is one line in `.harness-version`, and it is the owner's to write:
+The grant is one line in `.harness-version`, the owner's to write:
 
 ```yaml
 agent-authority: release rollback
 ```
 
-Two things satisfy a gated skill's authority and nothing else does: that grant,
-or a user asking for the skill in the turn. A session cannot assert its own
-authority, which is why there is no `--autonomous` flag anywhere.
+Three things satisfy `/release`'s authority and nothing else does: that grant,
+a user asking for the skill in the turn, or `--ship` in the invocation of the
+`/feature` run that chained there (`/hotfix` and `/rollback` take the first
+two only). `--ship` counts because a person typed it about this session, and
+phase 0 says the run ends in a tagged release on `main`. A session still
+cannot assert its own authority, so there is no `--autonomous` flag; and a
+`reviewers:` line does not lower `--ship` (reviewers are requested on the PR
+for the record; the merge is not withheld).
 
 **The gate binds the act, not the command.** A session may reach a skill's
-procedure by reading its `SKILL.md` and following the steps (forge decision
-record 0017), and
-that route stays open. What it is not is a way around the gate: writing a
-release's signal file, committing it and pushing it without authority is a
-release, whatever it is called while it happens. A guard that stopped only the
-literal `/release` would guard nothing.
+procedure by reading its `SKILL.md` and following the steps; that route stays
+open and is not a way around the gate: writing a release's signal file,
+committing and pushing it without authority is a release, whatever it is called.
 
 **A blocked session says so in one shape and never claims success.** The
-stand-down block is defined in `.claude/skills/getting-started/SKILL.md` under
-Step 3c, which every session is made to read at start. It names what was
-finished, what was not, and the smallest thing that would unblock it. The rule
-that matters most: a reply carrying that block must not describe the work as
-complete. Six sessions once stalled at their exits in six different phrasings
-and two of them reported success while their work sat unmerged; the fixed shape
-exists so a coordinator can tell the difference at a glance.
+stand-down block is `.claude/skills/getting-started/SKILL.md`, Step 3c: what
+was finished, what was not, the smallest thing that would unblock it; a reply
+carrying it must not describe the work as complete, so a coordinator can tell
+a stall from a success at a glance.
 
 #### What a session cannot do at all
 
-Distinct from authority, and not fixable by a grant. These are environment
-limits, so a session should name them rather than retry:
+Environment limits, not fixable by a grant; name them rather than retry:
 
-- **Delete a remote branch.** The harness git proxy accepts pushes only to the
-  session's own `claude/<name>` ref, and there is no GitHub MCP tool for
-  deleting a branch, so `git push origin --delete` returns 403 in the sandbox.
-  One case is already automated: `/release` writes a `cleanup-branch:` key into
-  `.release-description.md` and `release.yml` deletes that `claude/` branch
-  server-side with the harness PAT. Everything else is human work, most often a
-  `feature/<name>` branch left behind when a release bypassed the feature-branch
-  chain. A session that hits this reports it with `reason: capability-missing`
-  and names the branch; it does not treat the failed delete as done.
-- **Push to `preprod` or `main` with `git`.** Same proxy rule. `/release` uses
-  `mcp__github__push_files`, which goes through api.github.com instead.
+- **Delete a remote branch.** The harness git proxy accepts pushes only to
+  the session's own `claude/<name>` ref, and no GitHub MCP tool deletes a
+  branch, so `git push origin --delete` returns 403. `/release` automates
+  one case (a `cleanup-branch:` key in `.release-description.md`, deleted by
+  `release.yml` with the harness PAT). The rest is human work, most often a
+  `feature/<name>` branch left behind when a release bypassed the chain:
+  report `reason: capability-missing`, name the branch, never call it done.
+- **Push to `preprod` or `main` with `git`.** Same proxy rule. `/release`
+  uses `mcp__github__push_files`, which goes through api.github.com.
+- **Write the contents API through the proxy.** It refuses every such write
+  with 403; a journey write pushes its branch instead and the sweep uses MCP.
 
 ### The variants differ only in the Railway steps
 
-The skill catalog is the same across the two variants. Seven flow skills
-(`continue`, `feature`, `getting-started`, `hotfix`, `release`,
-`review`, `status`) carry a Railway override whose delta is limited to
-preview-URL and environment mentions; `feature/SKILL.md` may differ only
-in the Railway-specific steps of phase 0 (provisioning note) and phase 5
-(preview-URL reporting). Any other difference between the variants'
-skills is a bug; report it upstream rather than working around it.
+Seven flow skills (`continue`, `feature`, `getting-started`, `hotfix`,
+`release`, `review`, `status`) carry a Railway override whose delta is limited
+to preview-URL and environment mentions (`feature`: phase 0's preview marker
+and phase 5's URL report). Any other difference is a bug; report it upstream.
 
 ## How an upgrade decides what to change
 
-`/harness-upgrade` compares two real trees: the tag for the version you
-are moving to, and your repository. It does not replay a list of changes,
-which is why it stays correct even when you have edited a managed file by
-hand, and why asking for a specific version gives you exactly that
-version's content.
+`/harness-upgrade` compares two real trees, the tag you are moving to and
+your repository, never a list of changes: so it stays correct when you edited
+a managed file by hand, and a requested version gives exactly that version.
+It reads only public data. Every path falls into one of five classes, decided
+by the path itself, in this precedence (the first matching rule wins):
 
-Every path falls into one of three classes, decided by the path itself:
+| Class | Paths | On upgrade |
+|---|---|---|
+| Blocked | `.claude/setup/**`, `.claude/skills/setup/**`, `.claude/scripts/setup.sh`, the `harness-preflight.yml` and `harness-railway.yml` workflows, `.harness-bootstrap`, `.harness-preflight` | Never written: one-shot machinery that must never re-arm |
+| Blocked | `README.md` | Never written: the template's README is not your project's |
+| Stamp | `.harness-version` | Only the `version:` line moves; every other field survives |
+| Config | `.claude/settings.json`, `.github/dependabot.yml`, `railway.json`, `.env.example` | Merged, never copied over: new keys are added, values you set are kept, a differing list is put to you |
+| Starter (app) | `server.js`, `package.json`, `.gitignore`, `LICENSE`, `NOTICE` | Created only when missing, per file; never overwritten, never recreated once you delete it |
+| Starter (docs) | `docs/**`, `scripts/**` | Same write-once rule; a partial `docs/` tree gets only its missing pieces |
+| Managed (named) | `scripts/check-spec.mjs`, `gate-run.mjs`, `judge-plan.mjs`, `retrieval.mjs`, `spec-test-claims.mjs` (the spec loop, inert while `spec_product` is unset) and `scripts/strip-em-dash.sh` (the em-dash hook's helper) | Named exceptions to the starter prefix: replaced, so a fix reaches you |
+| Managed (workflows) | The `.github/workflows/*.yml` the harness ships | Replaced with the target version's content |
+| Managed (`.claude/`) | `hooks/`, `skills/`, `scripts/`, `agents/`, `HARNESS.md`, `JOURNEY.md`, `SPEC-LOOP.md`, `journey-bindings.json`, `harness-manifest.json` | Replaced. Do not edit; your changes are overwritten |
+| Project-owned | Everything the harness never shipped: `CLAUDE.md`, your application code, skills and agents you added | Never touched |
 
-- **Managed**: replaced with the new version's content. Workflows, hooks,
-  skills, agents and the harness scripts.
-- **Write-once**: created only when missing, evaluated per file. Your
-  `server.js`, `package.json`, `.gitignore`, `docs/` and `scripts/` are
-  yours once they exist. They are never overwritten, and never recreated
-  if you delete them.
-- **Never written**: one-shot setup and bootstrap machinery, plus this
-  template repo's own `README.md`. Restoring the setup spine would leave
-  it armed in a repo that must never run it again, and the template's
-  README is not your project's README. `LICENSE` and `NOTICE` are
-  write-once instead, so a project that never received them still can.
-
-Files the harness has retired can be removed, but only inside directories
-the harness owns outright, and only after you confirm.
-
-The upgrade reads only public data and needs no credentials.
+Retired harness files are removed only inside the managed `.claude/` trees
+and `.github/workflows/`, and only after you confirm.
 
 ## Harness-managed files
 
-These files are maintained by the harness and replaced on
-`/harness-upgrade`. Do not edit them; your changes will be overwritten.
-
-| File | Purpose |
-|------|---------|
-| `.github/workflows/harness-bootstrap.yml` | Guarantees the three branches (`main`, `preprod`, and the orphan `coordination`). Idempotent; dispatch it if a branch goes missing |
-| `.github/workflows/claude-to-feature-branch.yml` | Merges `claude/` branches into `feature/` branches. A signal-file conflict resolves to the `claude/` side; a push that lost the name its branch set is refused rather than given a codename branch |
-| `.github/workflows/claude-to-preprod.yml` | Creates PR from `feature/` to `preprod` and auto-merges (or opens for review); names a PR that conflicts with `preprod` as one |
-| `.github/workflows/feature-branch-checks.yml` | Runs CI checks on PRs to preprod (reads `check:` from `.harness-version`) |
-| `.github/workflows/release.yml` | Creates release PR preprod → main, tags version, creates GitHub Release |
-| `.github/workflows/hotfix.yml` | Handles hotfix PRs to main, tags patch release, back-merges to preprod |
-| `.github/workflows/feature-merge-cleanup.yml` | Deletes feature branch after merge to preprod, and removes a leftover feature-context file if the merge bypassed `/to-preprod` |
-| `.github/workflows/feature-branch-remove.yml` | Dispatched by hand or by a session: removes a stray `feature/*` branch a session cannot delete itself, refusing one with an open PR or a touched-set record |
-| `.claude/scripts/session-start.sh` | Session startup hook |
-| `.claude/scripts/list-skills.sh` | Skill discovery script |
-| `.claude/scripts/resolve-feature-name.sh` | Resolves the feature name (slug from `.harness-feature`, else session codename); shared by the hooks, scripts, and workflows |
-| `.claude/scripts/set-feature-name.sh` | Names the session's feature: sanitizes a slug, writes `.harness-feature`, commits, and pushes to trigger branch creation |
-| `.claude/SPEC-LOOP.md` | The spec loop: how to connect it, the anchor grammar, the judge, the gate, the claim flow, and which file owns each mechanism. Read it only once `spec_product` is set |
-| `.claude/JOURNEY.md` | The journey: the twelve states and eleven transitions the Product Cockpit draws, what each means in harness terms (skill, artefact, ready, done, how it is seen), the gate verdicts, what blocked means, the `phase` write recipe, and "Reporting activity": the eight seams, the ref shapes, the pair rule and the sentence voice. Read from `/feature`, `/continue`, `/to-preprod`, `/grilling`, `/implement` and `/code-review` |
-| `.claude/journey-bindings.json` | The journey binding manifest: one entry per position naming the cockpit rule expression that observes it and its recency window, the `join` patterns for the change key, the work item title and the two branch names, and the harness version it shipped as. Machine-readable; `.claude/JOURNEY.md` is the prose that owns the meanings |
-| `.claude/scripts/cockpit.sh` | The one Product Cockpit client, for the one cockpit credential an environment holds: `post` puts the stand-down ask the journey defines on the Board (marker `blocked`), `read` reads it, `ping` tells the cockpit a fact it reads has changed, and `report` says in one sentence what is happening inside the position a change is at. `BOARD_URL` and `BOARD_TOKEN`, plus an optional `COCKPIT_SOFT_TIMEOUT` (default 5s) shared by the two fail-soft commands. `post` and `read` fail with the same three exits as `spec-universe.sh`; `ping` and `report` never exit non-zero at runtime, are silent when no cockpit is configured, and are one line otherwise; a report refusal that covers the whole session (a rejected credential, or a repository no product in the cockpit is configured against) is one `COCKPIT REPORTS OFF` line, said once per session. A ping carries an ADDRESS (`repository`, `changeKey`, `sources`) and never a fact, a position or a session identity: the credential is the author. A report carries a sentence and the position it happened at, stored as the producer's own words and never consulted when the cockpit places the change; it goes out at eight seams and no more, listed in `.claude/JOURNEY.md` under "Reporting activity" |
-| `.claude/scripts/registry.sh` | The one `/v1` client the skills share for the System Registry: `prefix <PREFIX>` and `system <key-or-slug>`, with `REGISTRY_URL` and `REGISTRY_TOKEN`. Read-only, because the registry refuses a machine token on every write. Adds exit 1, a definitive "no such entry", to the three exits `spec-universe.sh` uses; only exits 1 and 2, the two answers about the prefix itself, may stop a Capture |
-| `.claude/scripts/coordination.sh` | Reads the `coordination` branch: the claimed ADR numbers, the in-flight touched sets, and the live feature branches. `adr-collisions` names every ADR number this branch adds that `preprod`, another feature branch or another feature's claim already holds, so a shared number is found while both branches are in flight. Every read is best-effort and exits 0 |
-| `.claude/scripts/touched-set.mjs` | The touched-set record: composes it, reads it back, and computes the overlap between two in-flight features. Advisory; nothing it returns is an exit code |
-| `.claude/scripts/spec-universe.sh` | The one `/v1` client every skill shares for Spec Universe: reads, proposes, patches, claims and promotes with `SPEC_UNIVERSE_URL` and `SPEC_UNIVERSE_TOKEN`, fails closed with three distinguishable exits, and offers no generic pass-through. Inert while `spec_product` is unset |
-| `scripts/check-spec.mjs`, `gate-run.mjs`, `judge-plan.mjs`, `retrieval.mjs`, `spec-test-claims.mjs` | The spec loop: the anchor gate, the preprod gate, the judge, the interview's retrieval, and the test-basis claims. Managed rather than write-once, unlike everything else under `scripts/`, so a fix reaches you. All five are inert while `spec_product` is unset |
-| `.claude/skills/code-review/judge-prompt.md` | The Spec axis judge's brief, below its horizontal rule sent verbatim. Managed on purpose: the shape was measured, and a brief that drifts silently changes every verdict downstream |
-| `.claude/skills/feature/CONFLICT-PROTOCOL.md` | The conflict card, the A/B/C fork, where a decision is recorded, and the strict pause. Read from `/feature` at any phase and from `/to-spec`'s conflict sweep |
-| `.claude/hooks/prevent-em-dash.sh` | Blocks writes containing U+2014 em dashes |
-| `.claude/skills/getting-started/SKILL.md` | Orientation skill: the session-opening flavor question, the skill catalog, the two-review pair |
-| `.claude/skills/feature/SKILL.md` | `/feature` skill: the five-phase gated flow (name, grill, spec, tickets, implement, hand over) |
-| `.claude/skills/brainstorm/SKILL.md` | `/brainstorm` skill: standalone grilling that writes to the tracker only |
-| `.claude/skills/to-preprod/SKILL.md` | `/to-preprod` skill: merge to preprod; owns the merge-conflict discipline and retires the feature context |
-| `.claude/skills/review/SKILL.md` | `/review` skill: submit PR for team review, with `/code-review` findings in the body |
-| `.claude/skills/release/SKILL.md` | `/release` skill: ship preprod to production; from an unmerged `claude/` branch it also runs the merge and waits for `preprod` to settle first |
-| `.claude/skills/hotfix/SKILL.md` | `/hotfix` skill: emergency production fix |
-| `.claude/skills/status/SKILL.md` | `/status` skill: team dashboard |
-| `.claude/skills/changelog/SKILL.md` | `/changelog` skill: generate changelog |
-| `.claude/skills/deps/SKILL.md` | `/deps` skill: handle Dependabot PRs |
-| `.claude/skills/continue/SKILL.md` | `/continue` skill: resume an in-progress feature via its feature context |
-| `.claude/skills/chat/SKILL.md` | `/chat` skill: conversation mode (no file changes) |
-| `.claude/skills/endchat/SKILL.md` | `/endchat` skill: clean up the orphan feature branch left behind by `/chat` |
-| `.claude/skills/rollback/SKILL.md` | `/rollback` skill: revert bad deploy |
-| `.claude/skills/harness-upgrade/SKILL.md` | `/harness-upgrade` skill |
-| `.claude/skills/document/SKILL.md` | `/document` skill: scaffold an ADR, audit docs against the diff, route a fact to its one home |
-| `.claude/skills/grilling/` | `/grilling` skill: the relentless-interview engine (frontier, design tree) |
-| `.claude/skills/domain-modeling/` | `/domain-modeling` skill: glossary and ADR discipline while designing |
-| `.claude/skills/to-spec/` | `/to-spec` skill: synthesize the conversation into a spec issue |
-| `.claude/skills/to-tickets/` | `/to-tickets` skill: slice a spec into tracer-bullet tickets with blocking edges |
-| `.claude/skills/implement/` | `/implement` skill: work the ticket frontier, `/tdd` at agreed seams |
-| `.claude/skills/tdd/` | `/tdd` skill: the red-green loop, seams, test anti-patterns |
-| `.claude/skills/code-review/` | `/code-review` skill: two-axis (Standards, Spec) agent review of a diff |
-| `.claude/skills/diagnosing-bugs/` | `/diagnosing-bugs` skill: feedback-loop-first debugging discipline |
-| `.claude/skills/codebase-design/` | `/codebase-design` skill: deep-module vocabulary and design patterns |
-| `.claude/skills/writing-for-agents/` | `/writing-for-agents` skill: how to write skills and agent-facing docs |
-| `.claude/agents/docs-updater.md` | Documentation auditor agent (runs during `/to-preprod` and `/review`) |
-| `.claude/HARNESS.md` | This file |
-| `.harness-version` | Version tracking |
-
-## Harness-provided starting points
-
-The harness created these files as a starting point. You own them, so edit
-freely to match your project. On `/harness-upgrade`, these are diffed and
-you choose whether to accept upstream changes.
-
-| File | What to customize |
-|------|-------------------|
-| `.claude/settings.json` | Add your own hooks and tool permissions alongside the harness-provided ones |
-| `.github/dependabot.yml` | Add entries for your package ecosystems (npm, pip, Docker, etc.) |
-
-The harness ships `.claude/settings.json` with an `env` block that sets
-`API_TIMEOUT_MS=900000` and `CLAUDE_CODE_MAX_RETRIES=15` to harden
-sessions against stream idle timeouts. Keep these values (or raise them)
-when you add your own keys; see "Avoiding stream timeouts" in
-`claude-md-snippet.md` for context.
+`.claude/harness-manifest.json` lists every file the harness ships at its
+final path, with its class and the variant that receives it (`both` or
+`railway`), plus the five classes above as data; `/harness-upgrade`
+classifies from the same rules. A `managed` file is replaced on upgrade: do
+not edit it. A file absent from the manifest is yours. The config files are
+starting points: `.claude/settings.json` (add hooks and permissions beside
+the harness ones; keep or raise its `env` block, `API_TIMEOUT_MS=600000` and
+`CLAUDE_CODE_MAX_RETRIES=5`, the retry envelope against stream idle timeouts)
+and `.github/dependabot.yml` (add your package ecosystems). This variant
+ships no app scaffold: with no deploy target, a starter app has nowhere to
+run.
 
 ## Documentation standard
 
-The harness scaffolds a documentation layout built for AI readers. Nearly
-every reader of this repo's docs is an agent starting a fresh session with
-no memory, and `CLAUDE.md` is the only part that loads automatically, on
-every session. So the layout minimizes auto-loaded context and pushes
-detail into files retrieved on demand.
-
-| Layer | Path | Owns | Budget |
-|---|---|---|---|
-| Router | `CLAUDE.md` | Conventions, one-way decisions, definition of done, don't-touch list, writing rules, and a map of which doc to read | 300 lines |
-| Reference | `docs/architecture/*.md` | Per-subsystem catalogs, each declaring `sources:` globs in YAML front-matter | 400 lines each |
-| Rationale | `docs/decisions/NNNN-*.md` | Numbered ADRs, append-only once accepted | no limit |
-| Procedure | `docs/runbooks/*.md` | Operations that have bitten someone | no limit |
-| Manifest | `docs/README.md` | The index: every doc, what it owns, when to update it | no limit |
+A documentation layout built for AI readers: nearly every reader is an agent
+starting a fresh session with no memory, and `CLAUDE.md` is the only part
+that loads automatically, so the layout minimizes auto-loaded context and
+pushes detail into files retrieved on demand. `docs/README.md`, the index,
+owns the layer table and its budgets (`CLAUDE.md` the router at 300 lines,
+`docs/architecture/` the reference catalogs with `sources:` globs,
+`docs/decisions/` the rationale, `docs/runbooks/` the procedures).
 
 Four rules hold it together: one home per fact; code is truth for WHAT and
-docs for WHY and WHERE; accepted ADRs are superseded, never rewritten; and
-freshness is mechanical, enforced by `scripts/check-docs.mjs`.
-
-Wire the checker into `.harness-version` so broken docs block auto-merge
-exactly like a type error:
-
-```
-check: node scripts/check-docs.mjs && npm test
-```
-
-`/document` writes ADRs, audits the diff against the manifest, and routes a
-fact to its owning doc. The `docs-updater` agent runs the same taxonomy
-automatically during `/to-preprod` and `/review`.
-
-The rationale for the layout ships as ADR 0001 in `docs/decisions/`.
-
-## Starter scaffold (write-once)
-
-Write-once scaffold files are created once on first install, never
-overwritten on `/harness-upgrade`, and never recreated if you delete them.
-Skip-if-exists applies **per file**, so a partial `docs/` tree gets only its
-missing pieces.
-
-| File | Why write-once |
-|---|---|
-| `docs/README.md` | Your index. The harness must never clobber your rows |
-| `docs/GLOSSARY.md`, `docs/SECURITY.md`, `docs/TESTING.md` | Skeletons you fill in with project facts |
-| `docs/architecture/TEMPLATE.md`, `docs/decisions/TEMPLATE.md`, `docs/runbooks/TEMPLATE.md` | Starting points you copy, not files you edit in place |
-| `docs/decisions/0001-adopt-the-ai-native-documentation-standard.md` | A record with a date; rewriting it upstream would rewrite your history |
-| `scripts/check-docs.mjs` | Zero-dependency checker you may extend with project-specific rules |
-
-Some variants also ship a write-once app scaffold (`server.js`,
-`package.json`, `.gitignore`) so the deploy pipeline has something to build
-on the first push. **This variant ships none of those.** It has no deploy
-target, so a starter app would have nowhere to run.
-
-## Project-owned files
-
-Everything else belongs to the project. The harness does not touch:
-
-- **`CLAUDE.md`**: Your project instructions. The harness provides
-  `claude-md-snippet.md` as a starting point; copy what you need.
-- **All application code**: Source files, configs, tests, etc.
-- **Custom skills**: Any skill you add to `.claude/skills/` that isn't
-  listed above.
+docs for WHY and WHERE; accepted decision records are superseded, never
+rewritten; freshness is mechanical, enforced by `scripts/check-docs.mjs`,
+which `check:` keeps at the front of the chain so broken docs block
+auto-merge like a type error. `/document` writes decision records, audits the
+diff against the manifest, and routes a fact to its owning doc; the
+`docs-updater` agent runs the same taxonomy on the scope `check-docs.mjs
+--diff` names, in `/feature` phase 4 (or in `/to-preprod` and `/review` when
+phase 4 left no verdict). The rationale ships as the seed decision record in
+`docs/decisions/`. Write-once scaffold: `docs/README.md` (your index), the
+`GLOSSARY`, `SECURITY` and `TESTING` skeletons, the three `TEMPLATE.md` files
+(copy, never edit in place), the seed record, `scripts/check-docs.mjs`.
 
 ## How to extend
 
-### Adding a skill
+- **A skill**: `.claude/skills/<name>/SKILL.md` with YAML frontmatter
+  (`name`, `description`). **An agent**: `.claude/agents/<name>.md` (`name`,
+  `description`, `allowed-tools`), run in its own context via the Agent tool.
+  **A workflow**: a new file in `.github/workflows/`. Upgrades touch none.
 
-Create `.claude/skills/<name>/SKILL.md` with YAML frontmatter (`name`,
-`description`). Custom skills are not touched by `/harness-upgrade`.
+## Variants and upgrading
 
-### Adding an agent
-
-Create `.claude/agents/<name>.md` with YAML frontmatter (`name`,
-`description`, `allowed-tools`). Agents are autonomous specialists that
-run in their own context via the Agent tool. Custom agents are not touched
-by `/harness-upgrade`.
-
-### Adding workflows
-
-Prefer adding new workflow files in `.github/workflows/` over modifying
-harness-managed ones. New files won't be touched by upgrades.
-
-## Variants
-
-This template repo ships one tree; the variant is chosen by the one-shot
-`/setup` skill on first run and recorded in `.harness-version`:
+One tree ships; `/setup` chooses the variant and records it in
+`.harness-version`:
 
 | Variant | What you get |
 |---------|--------------|
 | **`harness-plain`** *(this project)* | Feature branches + auto-merge, no deploy target |
 | `harness-railway` | + Railway preview environments per feature with isolated PostgreSQL and S3-compatible bucket |
 
-Switching from `harness-plain` to `harness-railway` after setup is not
-an automated migration; it requires re-scaffolding from the template
-(answering the Railway question yes this time) and porting your
-application code over.
+Switching variants after setup is not an automated migration: re-scaffold
+from the template and port your application code over.
 
-## Upgrading (same variant)
-
-Run `/harness-upgrade` to check for version updates within your current
-variant. It shows what changed and why, drawn from the published release
-notes, with any breaking items above the confirmation prompt, and then the
-exact list of files it would write. Nothing is changed until you approve
-it. See `.harness-version` for current version info.
-
-The narrative comes out of the tree it clones, not from an API, so an
-upgrade works offline, behind a proxy and in a sandboxed agent session.
-
-**An upgrade is a reviewed commit, not an auto-push.** It rewrites the
-workflows, skills and hooks that decide how every future session in this
-repository behaves, and no person wrote any of it. Read `git diff`, check
-that the workflows and hooks still run, and commit it yourself. The version
-stamp is written last, and only after the result verifies, so a repo that
-holds a half-applied upgrade says so rather than claiming the new version.
-
-### Version numbering
-
-Harness versions use semver (`MAJOR.MINOR.PATCH`):
-- **PATCH** bumps automatically on each feature merge upstream
-- **MINOR** bumps are a developer decision for significant releases
-- **MAJOR** is reserved for breaking architecture changes
+Run `/harness-upgrade` to move to a newer version within your variant. It
+shows what changed and why, from the release notes rendered into the tree it
+clones (so it works offline, behind a proxy and in a sandboxed session), with
+breaking items above the confirmation prompt, then the exact list of files it
+would write. Nothing changes until you approve. **An upgrade is a reviewed
+commit, not an auto-push**: it rewrites the workflows, skills and hooks that
+decide how every future session behaves, and no person wrote any of it, so
+read `git diff`, check the workflows and hooks still run, and commit it
+yourself. The version stamp is written last, only after the result verifies.
+Versions are semver: PATCH for merged features, MINOR for significant
+releases, MAJOR for breaking ones.
 
 ## License
 
-The Harness Companion is licensed under the **Apache License 2.0**.
-See the `LICENSE` and `NOTICE` files in the root of this repository.
-
-The NOTICE file must be preserved in any derivative works or forks.
-It attributes this project to its origin:
-[The Harness Companion](https://www.harnesscompanion.com)
-by Evolutionary Leadership Coöperatie U.A.
+The Harness Companion is licensed under the **Apache License 2.0** (`LICENSE`
+and `NOTICE` in the repository root). The NOTICE file must be preserved in any
+derivative work or fork; it attributes this project to its origin, [The
+Harness Companion](https://www.harnesscompanion.com) by Evolutionary Leadership Coöperatie U.A.

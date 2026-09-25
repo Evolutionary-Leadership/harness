@@ -1,7 +1,6 @@
 ---
 name: chat
 description: Think, brainstorm, and discuss without modifying the repo. Pair with /endchat to clean up the auto-created feature branch when done.
-disable-model-invocation: true
 argument-hint: "<topic or question>"
 allowed-tools: Read, Glob, Grep, WebSearch, WebFetch
 ---

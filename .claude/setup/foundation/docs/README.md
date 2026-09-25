@@ -31,7 +31,7 @@ The rationale for the layout is [ADR 0001](./decisions/0001-adopt-the-ai-native-
 | Procedure | `docs/runbooks/*.md` | Operations that have bitten someone, step by step | no limit |
 | Vocabulary | `docs/GLOSSARY.md` | Domain terms, with the file or ADR that defines each | no limit |
 | Trust | `docs/SECURITY.md` | Trust boundaries, authn/authz, rate limits, known gaps | no limit |
-| Verification | `docs/TESTING.md` | Test tiers, naming, where a new test goes, what CI skips | no limit |
+| Verification | `docs/TESTING.md` | Test tiers, naming, where a new test goes, which tier runs where | no limit |
 
 ## Index
 
@@ -45,7 +45,7 @@ files are exempt: they are scaffolding, not content.
 | [PROJECT.md](./PROJECT.md) | Product vision, the behaviour built so far, and an explicit "not built yet" list. WINS over `CLAUDE.md` for product questions | Scope changes, behaviour ships, or something moves off the not-built list |
 | [GLOSSARY.md](./GLOSSARY.md) | Domain vocabulary, each term pointing at its canonical file or ADR | A new domain term enters the code or a term's meaning changes |
 | [SECURITY.md](./SECURITY.md) | Trust boundaries, authn/authz mechanics and rationale, rate limits, which tests assert which property, known gaps | Anything touching auth, sessions, secrets, input validation, or limits |
-| [TESTING.md](./TESTING.md) | Test tiers, naming conventions, the "where does a new test go" table, what CI does not run | You add a tier, change the runner, or discover CI does not cover something |
+| [TESTING.md](./TESTING.md) | Test tiers, naming conventions, the "where does a new test go" table, which tier runs where | You add a tier, change the runner, or move a tier between local and CI |
 | [agents/issue-tracker.md](./agents/issue-tracker.md) | The tracker contract: how agents create, read, and label issues, plus the idea-issue, spec-issue, and ticket conventions with blocking edges and the frontier query | The project moves trackers, or a flow skill needs a new tracker operation |
 
 ### Architecture
@@ -83,8 +83,9 @@ Scaffold the next one with `/document adr <title>`.
 | [0002](./decisions/0002-pin-typescript-and-eslint-below-latest.md) | Pin TypeScript and ESLint below latest | Accepted | 2026-08-17 |
 | [0003](./decisions/0003-node-env-is-not-an-environment-label.md) | NODE_ENV is a runtime switch, not an environment label | Accepted | 2026-08-17 |
 | [0004](./decisions/0004-undo-banners-render-outside-the-list.md) | Undo banners render outside the list they archive from | Accepted | 2026-08-17 |
-| [0005](./decisions/0005-ci-runs-no-tests.md) | CI runs no tests, and a green PR check does not mean tests passed | Accepted | 2026-08-17 |
+| [0005](./decisions/0005-ci-runs-no-tests.md) | CI runs no tests, and a green PR check does not mean tests passed | Superseded by 0008 | 2026-08-17 |
 | [0006](./decisions/0006-actions-return-failures-as-values.md) | Actions return failures as values and never throw | Accepted | 2026-08-17 |
+| [0008](./decisions/0008-run-the-unit-tier-in-ci-and-the-integration-tier-with-a-service-container.md) | Run the unit tier in CI, the integration tier with a service container, the e2e tier by hand | Accepted | 2026-09-24 |
 
 ### Runbooks
 

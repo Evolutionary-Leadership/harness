@@ -1,7 +1,6 @@
 ---
 name: brainstorm
 description: Think an idea through with a relentless interview, without building anything. Writes to the issue tracker only, never to the repo.
-disable-model-invocation: true
 argument-hint: "<topic to think through>"
 ---
 

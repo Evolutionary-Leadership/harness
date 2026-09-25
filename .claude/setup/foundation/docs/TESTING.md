@@ -8,9 +8,23 @@ nothing runs.
 
 | Tier | Location | Runner | Needs |
 |---|---|---|---|
-| Unit | `tests/unit/*.test.ts` | Vitest | nothing |
-| Integration | `tests/integration/*.test.ts` | Vitest | Docker (Testcontainers Postgres 16) or `TEST_DATABASE_URL` |
+| Unit | `tests/unit/*.test.ts` | Vitest, project `unit` | nothing |
+| Integration | `tests/integration/*.test.ts` | Vitest, project `integration` | one Postgres 16 per run: Docker (Testcontainers), or `TEST_DATABASE_URL` (`scripts/test-db.sh` prints one) |
 | E2E | `tests/e2e/*.spec.ts` | Playwright | a running server (the config builds and starts one) |
+
+## Running them
+
+| Command | Runs |
+|---|---|
+| `pnpm test` | the unit project, in watch mode |
+| `pnpm test:unit` | the unit project, once |
+| `pnpm test:int` | the integration project, once |
+| `pnpm test:run` | both Vitest projects, once |
+| `pnpm test:e2e` | Playwright; it builds and boots the app itself |
+| `pnpm verify` | `check:docs && typecheck && lint && test:unit && test:int`, in fast-fail order: the cheapest check that can fail runs first |
+
+`vitest.config.ts` declares the two projects; `--project unit` or
+`--project integration` selects one on any Vitest command.
 
 ## Where a new test goes
 
@@ -44,20 +58,49 @@ itself is not.
 
 ## The integration harness
 
-`tests/integration/helpers/database.ts`. One container per file
-(`fileParallelism: false` in `vitest.config.ts`, so N files do not mean N
-simultaneous containers), all migrations applied from scratch, and a
-`TRUNCATE ... RESTART IDENTITY CASCADE` between tests followed by re-seeding the
-fixture users. Fixture rows reference real user ids and the foreign keys are real.
+One Postgres per run, one database per file.
 
-`TEST_DATABASE_URL` is a documented escape hatch: point it at any reachable
-Postgres 16 and Testcontainers is skipped entirely, which is what makes this tier
-runnable with no Docker daemon. **Never point it at a database holding real data:
-the harness truncates every table.**
+`tests/integration/helpers/global-setup.ts` runs once, before the project's files:
+it adopts the server at `TEST_DATABASE_URL` or starts one Testcontainers Postgres
+16, applies every migration from scratch into a template database
+(`template_app`), and exports the server URL to the workers, through `process.env`
+(the workers fork after it runs, so they and any subprocess a test spawns inherit
+it) and through Vitest's `provide()`.
 
-`tests/integration/seed.test.ts` REQUIRES `TEST_DATABASE_URL`, because it runs
-`pnpm seed` as a subprocess and a subprocess cannot reach a container URL held only
-in the test process. It says so in its own error message.
+`tests/integration/helpers/database.ts` is what each file calls in `beforeAll`:
+`CREATE DATABASE test_<id> TEMPLATE template_app`, dropped again in `afterAll`.
+Files never share a database, which is why the project runs them in parallel
+(`fileParallelism: true`). Between tests, `TRUNCATE ... RESTART IDENTITY CASCADE`
+and a re-seed of the fixture users. Fixture rows reference real user ids and the
+foreign keys are real. `ctx.url` is the file's own database, for anything that runs
+as a subprocess: `tests/integration/seed.test.ts` hands it to `pnpm seed` as
+`DATABASE_URL`.
+
+`TEST_DATABASE_URL` skips Testcontainers entirely, which is what makes the tier
+runnable with no Docker daemon. Its role needs `CREATEDB`; the database named in
+the URL is only ever connected to, never migrated or truncated. Two runs against
+one server at the same time collide on the template name. `scripts/test-db.sh`
+prints a fitting URL when `initdb` is installed: it starts one throwaway cluster
+under `${TMPDIR:-/tmp}` (trust auth on `127.0.0.1` only, fsync off), adopts it on
+the next call, runs it as an unprivileged user when invoked as root, and
+`bash scripts/test-db.sh stop` removes it:
+
+```
+export TEST_DATABASE_URL=$(bash scripts/test-db.sh)
+pnpm test:int
+```
+
+## Fakes for third parties
+
+The foundation calls no third party over the network (Postgres is real in the
+integration tier; Better Auth is a library). When the first one arrives, its client
+gets an interface in `src/` and one stateful fake in
+`tests/integration/helpers/fakes/<name>.ts`, one file per third party, built on
+`recordingFake` from `tests/integration/helpers/fakes/recording.ts`: the fake holds
+the state the real service would and records every call in order, across fakes, so
+a test asserts on effects and sequence rather than on mocks. A new client method is
+a one-file edit: add it to the fake. `tests/unit/recording-fake.test.ts` pins the
+pattern.
 
 ## E2E scope
 
@@ -82,22 +125,28 @@ images that ship browsers whose build number does not match the pinned
 server. `playwright.config.ts` derives both the base URL and the `webServer` PORT
 from it, so it moves them together.
 
-## What CI does NOT run
-
-**CI runs no tests.** The runner has no Docker daemon, so `.harness-version`'s
-`check:` line is:
-
-```
-pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm check:docs
-```
-
-**A green PR check means the code typechecks, lints, and the docs are consistent. It
-does not mean any test ran.** Full reasoning and the alternatives in ADR 0005.
-
-`pnpm verify` is the real gate, run before pushing:
+**In a sandbox, confirm the app can fetch its own origin before the Playwright
+tier.** A server-side fetch from the app to its own origin (Next and Better Auth
+both make them) can hang rather than fail where an outbound proxy captures loopback
+traffic. The run then times out on `webServer`'s readiness `url` or on the first
+page, and looks like a broken app. With the built app running, from the same shell:
 
 ```
-pnpm typecheck && pnpm lint && pnpm check:docs && pnpm test:run
+curl -sS --max-time 5 http://localhost:3210/login
 ```
 
-`pnpm test:e2e` is separate, because it builds and boots a server.
+When that hangs, the environment is the problem, not the code: run the tier
+elsewhere (locally, or against a deployed preview).
+
+## What runs where
+
+| Tier | Where |
+|---|---|
+| Unit | Every PR: the `tests:` line in `.harness-version` (`pnpm test:unit`) runs in its own CI job, next to the `check:` line's job; `/implement` runs both; `pnpm verify` locally |
+| Integration | `pnpm verify` locally, and `/implement`'s full check. The CI job that runs `tests:` has a Postgres 16 service and exports `TEST_DATABASE_URL`, so widening the line to `pnpm test:unit && pnpm test:int` is a one-line edit of `.harness-version` |
+| E2E | By hand, `pnpm test:e2e`, before a change to the journey is pushed. Never in the gate |
+
+**A green PR check means the code typechecks, lints, the docs are consistent, and
+the unit tier passed.** It does not mean the integration or e2e tiers ran. Why the
+line is drawn there, and why the earlier "CI runs no tests" rule was retired:
+[run the unit tier in CI, the integration tier with a service container, the e2e tier by hand](./decisions/0008-run-the-unit-tier-in-ci-and-the-integration-tier-with-a-service-container.md).

@@ -7,9 +7,20 @@ set -euo pipefail
 # code push (falls back to the random codename). So this hook no longer
 # pushes an init commit. It only resumes work when a feature branch already
 # exists for this session's resolved name.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
+
+# A git identity, once, for the repository only. A sandbox that can name
+# nobody would otherwise refuse the first commit of every skill that commits;
+# set-feature-name.sh's per-command fallback stays as the backstop. A session
+# that already has an identity (local Claude Code, a person's own config) is
+# left exactly as it is, and nothing here is ever written globally.
+if [ -z "$(git config user.email 2>/dev/null || true)" ]; then
+  git config user.name "Claude" 2>/dev/null || true
+  git config user.email "noreply@anthropic.com" 2>/dev/null || true
+fi
+
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 if [[ "$BRANCH" == claude/* ]]; then
-  SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
   FEATURE_NAME=$(bash "$SCRIPT_DIR/resolve-feature-name.sh" "$BRANCH")
   FEATURE_BRANCH="feature/$FEATURE_NAME"
 
@@ -54,9 +65,27 @@ if [ -d .claude/skills/setup ]; then
 SETUP
 fi
 
+# One ping when a cockpit is configured, so the cockpit hears the session
+# before any seam reports, and the one refusal that means "no product knows
+# this repository" is read here rather than at the tenth report. No key: none
+# is minted yet. A repository that derives nothing gets the client's own line.
+if bash "$SCRIPT_DIR/cockpit.sh" configured; then
+  PING=$(bash "$SCRIPT_DIR/cockpit.sh" ping 2>&1 || true)
+  case "$PING" in
+    *"(404)"*)
+      REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#/*$##; s#\.git$##; s#^.*[:/]([^/:]+/[^/]+)$#\1#' || true)
+      echo "cockpit: no product is configured against ${REPO:-this repository} (404); reports will not be recorded until it is linked in the cockpit"
+      ;;
+    "") ;;
+    *) echo "$PING" ;;
+  esac
+fi
+
 cat <<'HARNESS'
 <EXTREMELY_IMPORTANT>
-You have Superpowers.
-**RIGHT NOW, go read**: .claude/skills/getting-started/SKILL.md
+RIGHT NOW, go read: .claude/skills/getting-started/SKILL.md
+It holds the closing block every reply ends with (Step 3b), the stand-down
+block (Step 3c) and the rule that skills are mandatory (Step 3).
+Session flavour: /chat (talk), /brainstorm (think) or /feature (build).
 </EXTREMELY_IMPORTANT>
 HARNESS

@@ -2,12 +2,18 @@
 /**
  * gate-run.mjs: the preprod gate, as a deterministic answer.
  *
- * Zero dependencies. Requires Node 22+. Run from the repo root, from step 4b
- * of `.claude/skills/to-preprod/SKILL.md`:
+ * Zero dependencies. Requires Node 22+. Run from the repo root, from the preprod gate section
+ * of `.claude/skills/to-preprod/CONNECTED.md`:
  *
  *   node scripts/gate-run.mjs --key=<CHANGE KEY> --verdicts=<feature context.md> \
  *     --nodes=<node payloads.json> --proposals=<change proposals.json> \
- *     --head-sha=<sha> --merge-base=<sha> --work-item=<url> --branch=<name>
+ *     --head-sha=<sha> --merge-base=<sha> --work-item=<url> --branch=<name> \
+ *     [--changed-files=<one path per line>]
+ *
+ *   node scripts/gate-run.mjs --verdicts-from-record=<.harness/gate-runs/<KEY>-<n>.json>
+ *
+ * The second form is the one reader of a run record's verdict rows: `/release`
+ * claims from what the record carries, and never re-parses a PR body.
  *
  * The gate refuses a merge that carries drift the branch itself introduced and
  * nobody decided. It does NOT refuse drift that was already recorded before
@@ -23,9 +29,12 @@
  *
  * The baseline is not a new artifact: Spec Universe already records
  * conformance per criterion, and `/release` refreshes it at every release, so
- * the record IS the state as of the last release. The three baseline states
- * and what each does to a `drifted` row have one home, the gate section of
- * .claude/SPEC-LOOP.md; `baselineOf` below is that table in code.
+ * the record IS the state as of the last release. The baseline states and what
+ * each does to a `drifted` row have one home, the gate section of
+ * .claude/SPEC-LOOP.md; `baselineOf` below is that table in code. The fourth
+ * state, `known-stale-baseline`, is a drifted row on a file this branch never
+ * touched: the drift predates the branch and the recorded `matched` is stale,
+ * so it is reported under its own heading and never blocks.
  *
  * Structure: everything above the CLI section at the foot of this file is pure
  * and exported, so a project's own unit tests drive it with in-memory input and
@@ -33,6 +42,7 @@
  * section and `main()` read a file or exit.
  */
 
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -53,6 +63,10 @@ export const VERDICTS = ["matched", "drifted", "unverifiable"];
 
 /** The heading a blocking row is printed under, in BOTH modes. */
 export const STOP_HEADING = "Rows that stop this merge:";
+
+/** The fourth baseline value, and the heading its rows are printed under. */
+export const STALE_BASELINE = "known-stale-baseline";
+export const STALE_HEADING = "Drifted before this branch (baseline stale, never blocking):";
 
 /** The one line `evaluate` adds, and `enforce` does not. */
 export const EVALUATE_NOTE =
@@ -198,6 +212,14 @@ export function parseVerdictTable(markdown) {
 
 const unwrapNode = (payload) => (payload && payload.node ? payload.node : payload);
 
+/**
+ * The client's `{ proposals: [...] }` envelope, or a bare array, or an
+ * `items` list: a raw `change-proposals` answer redirected into `--proposals`
+ * must read as the list it carries, never crash on `proposals.filter`.
+ */
+export const unwrapProposals = (body) =>
+  Array.isArray(body) ? body : (body?.proposals ?? body?.items ?? []);
+
 const localPart = (slug) => String(slug ?? "").split(".").pop();
 
 /**
@@ -207,6 +229,10 @@ const localPart = (slug) => String(slug ?? "").split(".").pop();
  * every node is indexed under its full slug AND its local part, because a
  * verdict table may name either.
  */
+/** A node payload list, a `{ nodes: [...] }` envelope, or one bare payload. */
+export const unwrapNodes = (body) =>
+  Array.isArray(body) ? body : body?.nodes ? body.nodes : body ? [body] : [];
+
 export function baselineIndex(payloads = []) {
   const index = new Map();
   for (const payload of payloads) {
@@ -242,6 +268,29 @@ export function baselineOf(recorded) {
   if (recorded === "matched") return "matched";
   if (recorded === "drifted") return "known";
   return "pending";
+}
+
+/** The file a `where` cell names (`src/a.js:12` is `src/a.js`). */
+export const whereFile = (where) =>
+  String(where ?? "")
+    .trim()
+    .replace(/^`|`$/g, "")
+    .replace(/^\.\//, "")
+    .split(":")[0]
+    .trim();
+
+/**
+ * The changed-file set the stale class reads: the paths with a hunk in
+ * `<merge-base>...<head>`, one per line. A missing or empty list reads as
+ * "unknown", and an unknown set never produces the stale class: the gate
+ * would otherwise call every drifted row stale when it could not run git.
+ */
+export function readChangedFiles(text) {
+  const files = String(text ?? "")
+    .split("\n")
+    .map((l) => l.trim().replace(/^\.\//, ""))
+    .filter(Boolean);
+  return files.length ? new Set(files) : null;
 }
 
 // ------------------------------------------------------------- the gate table
@@ -304,11 +353,28 @@ const REASONS = {
  * `matched`, or when it is judged against a proposal, whose text has no prior
  * conformance record to have drifted from.
  */
-export function classify({ rows = [], index = new Map(), proposals = [], changeKey = "" } = {}) {
+export function classify({
+  rows = [],
+  index = new Map(),
+  proposals = [],
+  changeKey = "",
+  changedFiles = null,
+} = {}) {
   return rows.map((row) => {
     const againstCurrent = /^current$/i.test(row.judgedAgainst);
     const recorded = againstCurrent ? recordedFor(index, row) : null;
-    const baseline = againstCurrent ? baselineOf(recorded) : "n/a (judged against a proposal)";
+    let baseline = againstCurrent ? baselineOf(recorded) : "n/a (judged against a proposal)";
+    // A drifted row against current text, recorded matched, on a file with no
+    // hunk in this branch: the branch did not introduce that drift, the
+    // record did not see it. Stale baseline, its own class, never a stop.
+    if (
+      row.verdict === "drifted" &&
+      baseline === "matched" &&
+      changedFiles instanceof Set &&
+      !changedFiles.has(whereFile(row.where))
+    ) {
+      baseline = STALE_BASELINE;
+    }
     const coverage = coverageFor(row, proposals);
     const isNew = row.verdict === "drifted" && (againstCurrent ? baseline === "matched" : true);
 
@@ -359,6 +425,7 @@ export function summarise(classified = []) {
     driftedNew: drifted.filter((r) => r.isNew).length,
     driftedKnown: drifted.filter((r) => r.baseline === "known").length,
     driftedPending: drifted.filter((r) => r.baseline === "pending").length,
+    driftedStale: drifted.filter((r) => r.baseline === STALE_BASELINE).length,
     blocking: count((r) => r.blocking),
     alwaysBlocking: count((r) => r.alwaysBlocking),
   };
@@ -381,7 +448,7 @@ export function renderReport({ mode, modeSource, changeKey, classified = [], fau
   const out = [
     `Preprod gate: ${mode} (from ${modeSource}), change ${changeKey}`,
     `  ${s.rows} verdict rows: ${s.matched} matched, ${s.drifted} drifted, ${s.unverifiable} unverifiable`,
-    `  drifted: ${s.driftedNew} new, ${s.driftedKnown} known, ${s.driftedPending} pending`,
+    `  drifted: ${s.driftedNew} new, ${s.driftedKnown} known, ${s.driftedPending} pending, ${s.driftedStale} stale baseline`,
   ];
 
   const stops = classified.filter(wouldStop);
@@ -395,6 +462,14 @@ export function renderReport({ mode, modeSource, changeKey, classified = [], fau
     }
   } else {
     out.push("", "Nothing would have stopped this merge.");
+  }
+
+  const stale = classified.filter((r) => r.baseline === STALE_BASELINE);
+  if (stale.length) {
+    out.push("", STALE_HEADING);
+    for (const r of stale) {
+      out.push(`  ${r.node} ${r.criterion}: ${r.where} has no hunk in this branch; recorded ${r.recorded}`);
+    }
   }
 
   const unverifiable = classified.filter((r) => r.verdict === "unverifiable");
@@ -446,7 +521,28 @@ export function runRecord({
     headSha,
     mergeBase,
     rows: { matched: s.matched, drifted: s.drifted, unverifiable: s.unverifiable, total: s.rows },
-    drifted: { new: s.driftedNew, known: s.driftedKnown, pending: s.driftedPending },
+    drifted: {
+      new: s.driftedNew,
+      known: s.driftedKnown,
+      pending: s.driftedPending,
+      staleBaseline: s.driftedStale,
+    },
+    // Every verdict row, so the record is the one place `/release` reads the
+    // rows back from (`--verdicts-from-record`), long after the PR body.
+    verdicts: classified.map((r) => ({
+      node: r.node,
+      strict: Boolean(r.strict),
+      criterion: r.criterion,
+      judgedAgainst: r.judgedAgainst,
+      verdict: r.verdict,
+      specLine: r.specLine,
+      where: r.where,
+      baseline: r.baseline,
+      recorded: r.recorded,
+    })),
+    staleBaseline: classified
+      .filter((r) => r.baseline === STALE_BASELINE)
+      .map((r) => ({ node: r.node, criterion: r.criterion, where: r.where, recorded: r.recorded })),
     blocking: stops.map((r) => ({
       node: r.node,
       criterion: r.criterion,
@@ -500,7 +596,55 @@ const readJson = (path, fallback) => {
   }
 };
 
+/**
+ * The `## Spec verdicts` table from a run record's rows: the same six columns
+ * `parseVerdictTable` reads, so the record round-trips through the one parser.
+ */
+export function renderRecordVerdicts(record) {
+  const rows = record?.verdicts;
+  if (!Array.isArray(rows)) return null;
+  const cell = (r) => (r.strict ? `${r.node} **strict**` : r.node);
+  return [
+    "## Spec verdicts",
+    "",
+    "| node | criterion | judged against | verdict | spec line | where |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...rows.map(
+      (r) => `| ${cell(r)} | ${r.criterion} | ${r.judgedAgainst} | ${r.verdict} | ${r.specLine} | ${r.where} |`,
+    ),
+    "",
+  ].join("\n");
+}
+
+/** The changed files of `<merge-base>...<head>`, or null when git cannot say. */
+function changedFilesFromGit(mergeBase, head, cwd) {
+  if (!mergeBase || !head) return null;
+  const r = spawnSync("git", ["diff", "--name-only", `${mergeBase}...${head}`], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.status !== 0) return null;
+  return readChangedFiles(r.stdout);
+}
+
 export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
+  const recordPath = flag(argv, "verdicts-from-record");
+  if (recordPath) {
+    const record = readJson(recordPath, null);
+    const table = record ? renderRecordVerdicts(record) : null;
+    if (!table) {
+      console.error(
+        `gate-run: ${recordPath} carries no verdict rows` +
+          (record ? " (written before the record held them)" : " (not a readable record)"),
+      );
+      return 1;
+    }
+    console.log(table);
+    if (argv.includes("--json")) console.log(JSON.stringify(record.verdicts));
+    return 0;
+  }
+
   const changeKey = flag(argv, "key");
   if (!changeKey) {
     console.error("gate-run: --key=<CHANGE KEY> is required.");
@@ -517,9 +661,12 @@ export async function main(argv = process.argv.slice(2), cwd = process.cwd()) {
   }
 
   const { rows, faults } = parseVerdictTable(readIf(flag(argv, "verdicts")));
-  const index = baselineIndex(readJson(flag(argv, "nodes"), []));
-  const proposals = readJson(flag(argv, "proposals"), []);
-  const classified = classify({ rows, index, proposals, changeKey });
+  const index = baselineIndex(unwrapNodes(readJson(flag(argv, "nodes"), [])));
+  const proposals = unwrapProposals(readJson(flag(argv, "proposals"), []));
+  const changedFiles = flag(argv, "changed-files")
+    ? readChangedFiles(readIf(flag(argv, "changed-files")))
+    : changedFilesFromGit(flag(argv, "merge-base"), flag(argv, "head-sha"), cwd);
+  const classified = classify({ rows, index, proposals, changeKey, changedFiles });
 
   const record = runRecord({
     changeKey,

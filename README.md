@@ -9,8 +9,8 @@ This template gives a fresh repository a complete, convention-driven
 CI/CD harness: ephemeral `claude/` session branches that collapse into
 persistent `feature/` branches, auto-merged PRs to `preprod`, versioned
 releases to `main`, and a catalog of Claude Code skills that drive the
-whole lifecycle in natural language. Optionally, it deploys every
-feature branch to its own isolated Railway preview environment.
+whole lifecycle in natural language. Optionally, on Railway, a feature
+can opt into its own isolated preview environment.
 
 ## Start here (three steps)
 
@@ -32,9 +32,9 @@ foundation, `/setup` already put it in place.
 - **Railway or code-only.** Answer yes and the harness activates its
   Railway machinery: one-time provisioning of production and preprod
   environments (app service, Postgres, object-storage bucket), plus an
-  isolated preview environment per feature branch. Answer no and you
-  get the code-only variant: the full branch-and-release flow with no
-  deploy target.
+  isolated preview environment for each feature that opts in. Answer no
+  and you get the code-only variant: the full branch-and-release flow
+  with no deploy target.
 - **The technical foundation (Railway projects only).** Answer yes and
   `/setup` copies a complete, pre-built, verified application (Next.js
   16, Drizzle, Better Auth, TanStack Query, optimistic UI) into place
@@ -53,7 +53,7 @@ can trigger or fail; `/setup` either activates them or deletes them.
 claude/<name>-<sessionId>   Claude Code works here
         |
         v   GitHub Actions, driven by the branch name alone
-feature/<name>              persistent feature branch (+ preview env on Railway setups)
+feature/<name>              persistent feature branch (+ opt-in preview env on Railway)
         |
         v   /to-preprod
 preprod                         PR auto-created and auto-merged
@@ -61,6 +61,13 @@ preprod                         PR auto-created and auto-merged
         v   /release
 main                        versioned, tagged, released
 ```
+
+`/feature` sizes each change (S, M or L) at the start and runs only the
+phases and gates that size needs. `/feature --ship <prompt>` runs the whole
+path without stopping, from the first prompt to a tagged release on `main`.
+Every pull request runs the `check:` line from `.harness-version`, and a
+`tests:` line, when you add one, runs in its own job against a Postgres
+service; the merge waits for both.
 
 Run `/getting-started` in any session to see the full skill catalog.
 `.claude/HARNESS.md` documents every harness-managed file, and

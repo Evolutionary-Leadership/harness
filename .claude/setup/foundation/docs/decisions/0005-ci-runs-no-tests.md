@@ -1,6 +1,6 @@
 # 5. CI runs no tests, and a green PR check does not mean tests passed
 
-- **Status**: Accepted
+- **Status**: Superseded by [0008](./0008-run-the-unit-tier-in-ci-and-the-integration-tier-with-a-service-container.md), "Run the unit tier in CI, the integration tier with a service container, the e2e tier by hand"
 - **Date**: 2026-08-17
 
 ## Context

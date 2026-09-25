@@ -1,0 +1,621 @@
+{
+  "_about": "Every file the harness ships, at its final repo-relative path, with the class /harness-upgrade gives it and the variant that receives it (both, or railway). Managed files are replaced on upgrade: do not edit them. Files the harness never ships (your CLAUDE.md, your application code, skills you added) are project-owned and absent here. Generated from the shipped tree by the forge's scripts/gen-harness-manifest.mjs; the prose home of the classes is .claude/HARNESS.md.",
+  "classes": {
+    "_about": "The five path classes /harness-upgrade applies, in precedence order: the first rule whose paths match a file decides it. Source of truth: .claude/scripts/harness-upgrade-plan.mjs (classify). Prose: .claude/HARNESS.md, 'How an upgrade decides what to change'.",
+    "precedence": [
+      "blocked",
+      "stamp",
+      "config",
+      "starter",
+      "managed"
+    ],
+    "blocked": {
+      "outcome": "never written, in any class",
+      "paths": [
+        ".claude/setup/**",
+        ".claude/skills/setup/**",
+        ".claude/scripts/setup.sh",
+        ".github/workflows/harness-preflight.yml",
+        ".github/workflows/harness-railway.yml",
+        ".harness-bootstrap",
+        ".harness-preflight",
+        "README.md"
+      ]
+    },
+    "stamp": {
+      "outcome": "version: line amended in place; every other field survives",
+      "paths": [
+        ".harness-version"
+      ]
+    },
+    "config": {
+      "outcome": "merged, never copied over: new keys added, values the project set are kept",
+      "paths": [
+        ".claude/settings.json",
+        ".github/dependabot.yml",
+        "railway.json",
+        ".env.example"
+      ]
+    },
+    "starter": {
+      "outcome": "created only when missing, per file; never overwritten, never recreated once deleted",
+      "paths": [
+        "server.js",
+        "package.json",
+        ".gitignore",
+        "LICENSE",
+        "NOTICE",
+        "docs/**",
+        "scripts/**"
+      ],
+      "exceptions": [
+        "scripts/check-spec.mjs",
+        "scripts/gate-run.mjs",
+        "scripts/judge-plan.mjs",
+        "scripts/retrieval.mjs",
+        "scripts/spec-test-claims.mjs",
+        "scripts/strip-em-dash.sh"
+      ]
+    },
+    "managed": {
+      "outcome": "replaced with the target version's content",
+      "paths": [
+        "everything else the harness ships"
+      ],
+      "deletable_trees": [
+        ".github/workflows/",
+        ".claude/hooks/",
+        ".claude/skills/",
+        ".claude/scripts/",
+        ".claude/agents/"
+      ]
+    }
+  },
+  "files": [
+    {
+      "path": ".claude/agents/docs-updater.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/harness-manifest.json",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/HARNESS.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/hooks/post-push-railway-url.sh",
+      "class": "managed",
+      "variant": "railway"
+    },
+    {
+      "path": ".claude/hooks/prevent-em-dash.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/hooks/protect-frozen-docs.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/journey-bindings.json",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/JOURNEY.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/brief.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/cockpit.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/coordination.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/get-railway-url.sh",
+      "class": "managed",
+      "variant": "railway"
+    },
+    {
+      "path": ".claude/scripts/harness-upgrade-plan.mjs",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/journey-sync.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/journey.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/list-skills.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/registry.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/resolve-feature-name.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/session-start.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/set-feature-name.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/setup.sh",
+      "class": "blocked",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/spec-universe.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/touched-set.mjs",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/verify-deploy.sh",
+      "class": "managed",
+      "variant": "railway"
+    },
+    {
+      "path": ".claude/settings.json",
+      "class": "config",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/brainstorm/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/changelog/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/chat/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/code-review/CONNECTED.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/code-review/judge-prompt.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/code-review/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/codebase-design/DEEPENING.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/codebase-design/DESIGN-IT-TWICE.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/codebase-design/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/continue/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/deps/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/diagnosing-bugs/scripts/hitl-loop.template.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/diagnosing-bugs/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/document/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/domain-modeling/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/domain-modeling/WHEN-TO-ADR.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/endchat/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/feature/CONFLICT-PROTOCOL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/feature/CONNECTED.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/feature/SHIP.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/feature/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/getting-started/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/grilling/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/harness-upgrade/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/hotfix/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/implement/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/release/CONNECTED.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/release/RELEASE-NOTE.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/release/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/review/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/rollback/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/setup/SKILL.md",
+      "class": "blocked",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/status/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/tdd/mocking.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/tdd/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/tdd/tests.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/to-preprod/CONNECTED.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/to-preprod/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/to-spec/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/to-tickets/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/writing-for-agents/SKILL-MECHANICS.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/writing-for-agents/SKILL.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/SPEC-LOOP.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".env.example",
+      "class": "config",
+      "variant": "railway"
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "class": "config",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/claude-to-feature-branch.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/claude-to-preprod.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/feature-branch-checks.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/feature-branch-cleanup.yml",
+      "class": "managed",
+      "variant": "railway"
+    },
+    {
+      "path": ".github/workflows/feature-branch-railway.yml",
+      "class": "managed",
+      "variant": "railway"
+    },
+    {
+      "path": ".github/workflows/feature-branch-remove.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/feature-merge-cleanup.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/harness-bootstrap.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/harness-preflight.yml",
+      "class": "blocked",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/harness-railway.yml",
+      "class": "blocked",
+      "variant": "railway"
+    },
+    {
+      "path": ".github/workflows/hotfix.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/journey-sync.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".github/workflows/verify-deploy.yml",
+      "class": "managed",
+      "variant": "railway"
+    },
+    {
+      "path": ".gitignore",
+      "class": "starter",
+      "variant": "railway"
+    },
+    {
+      "path": ".harness-version",
+      "class": "stamp",
+      "variant": "both"
+    },
+    {
+      "path": "claude-md-snippet.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": "docs/agents/issue-tracker.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "docs/architecture/railway-environments.md",
+      "class": "starter",
+      "variant": "railway"
+    },
+    {
+      "path": "docs/architecture/TEMPLATE.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "docs/decisions/0001-adopt-the-ai-native-documentation-standard.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "docs/decisions/TEMPLATE.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "docs/GLOSSARY.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "docs/README.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "docs/runbooks/TEMPLATE.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "docs/SECURITY.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "docs/TESTING.md",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "LICENSE",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "NOTICE",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "package.json",
+      "class": "starter",
+      "variant": "railway"
+    },
+    {
+      "path": "railway.json",
+      "class": "config",
+      "variant": "railway"
+    },
+    {
+      "path": "scripts/check-docs.mjs",
+      "class": "starter",
+      "variant": "both"
+    },
+    {
+      "path": "scripts/check-spec.mjs",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": "scripts/gate-run.mjs",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": "scripts/judge-plan.mjs",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": "scripts/retrieval.mjs",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": "scripts/spec-test-claims.mjs",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": "scripts/strip-em-dash.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": "server.js",
+      "class": "starter",
+      "variant": "railway"
+    }
+  ]
+}

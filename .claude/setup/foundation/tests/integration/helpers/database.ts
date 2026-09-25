@@ -1,25 +1,32 @@
 import { randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { sql } from "drizzle-orm";
 import postgres from "postgres";
+import { inject } from "vitest";
 import type { DbClient } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { TEMPLATE_DATABASE, withDatabase } from "./global-setup";
 
 /**
- * The integration harness.
+ * The integration harness, per file.
  *
- * ONE container per file (vitest.config.ts sets fileParallelism: false), all
- * migrations applied from scratch, and a TRUNCATE between tests. Foreign keys are
- * real, so fixture rows must reference genuinely seeded users.
+ * ONE Postgres per run, started and migrated once by global-setup.ts. ONE
+ * database per file, cloned from the migrated template in beforeAll and dropped
+ * in afterAll, which is what lets files run in parallel (vitest.config.ts sets
+ * fileParallelism: true for this project). Between tests, a TRUNCATE and a
+ * re-seed of the fixture users. Foreign keys are real, so fixture rows must
+ * reference genuinely seeded users.
  *
- * TEST_DATABASE_URL is the documented ESCAPE HATCH: point it at any reachable
- * Postgres 16 and Testcontainers is skipped entirely. That is what makes this
- * tier runnable on a machine with no Docker daemon.
+ * The server URL comes from the environment the global setup exported
+ * (TEST_DATABASE_URL, set by hand or by the setup itself when it started a
+ * container), with Vitest's inject() as the fallback. `url` on the returned
+ * context is this file's own database, for anything that runs as a subprocess.
  */
 
 export type IntegrationDb = {
   db: DbClient;
+  /** This file's own database. Hand it to a subprocess as DATABASE_URL. */
+  url: string;
   /** Truncate every application table, then re-seed the fixture users. */
   reset: () => Promise<void>;
   teardown: () => Promise<void>;
@@ -29,59 +36,31 @@ export type IntegrationDb = {
 /** Tables the migrator owns. Never truncated. */
 const MIGRATION_TABLES = ["__drizzle_migrations"];
 
-async function startContainer(): Promise<{ url: string; stop: () => Promise<void> }> {
-  try {
-    // Imported lazily so a TEST_DATABASE_URL run never loads Testcontainers
-    // (which probes for a Docker socket on import).
-    const { PostgreSqlContainer } = await import("@testcontainers/postgresql");
-    const container = await new PostgreSqlContainer("postgres:16-alpine").start();
-    return {
-      url: container.getConnectionUri(),
-      // Wrapped rather than returned directly: stop() resolves to a
-      // StoppedTestContainer, and the caller's contract is Promise<void>.
-      stop: async () => {
-        await container.stop();
-      },
-    };
-  } catch (cause) {
-    // Testcontainers' own message ("Could not find a working container runtime
-    // strategy") does not say what to do about it, and the failure then cascades
-    // into a confusing teardown error. Say the actionable thing instead.
+function serverUrl(): string {
+  const url = process.env.TEST_DATABASE_URL ?? inject("testDatabaseUrl");
+  if (!url) {
     throw new Error(
-      "Integration tests need a Postgres 16 and found neither.\n" +
-        "  - TEST_DATABASE_URL is not set, and\n" +
-        "  - Testcontainers could not reach a Docker daemon.\n" +
-        "Fix either one:\n" +
-        "  - start Docker, or\n" +
-        "  - set TEST_DATABASE_URL to a THROWAWAY database (this harness TRUNCATEs every table).\n" +
+      "No test database: tests/integration/helpers/global-setup.ts did not run.\n" +
+        "Run the tier through its Vitest project (pnpm test:int), which registers it.\n" +
         "See docs/TESTING.md.",
-      { cause },
     );
   }
+  return url;
 }
 
 export async function setupIntegrationDb(): Promise<IntegrationDb> {
-  const configured = process.env.TEST_DATABASE_URL;
+  const server = serverUrl();
+  const template =
+    process.env.TEST_TEMPLATE_DATABASE ?? inject("testTemplateDatabase") ?? TEMPLATE_DATABASE;
+  // A Postgres identifier is at most 63 bytes; this is 37.
+  const name = `test_${randomUUID().replaceAll("-", "")}`;
 
-  let url: string;
-  let stopContainer: (() => Promise<void>) | null = null;
+  const admin = postgres(server, { max: 1, onnotice: () => {} });
+  await admin.unsafe(`CREATE DATABASE "${name}" TEMPLATE "${template}"`);
 
-  if (configured) {
-    url = configured;
-  } else {
-    const container = await startContainer();
-    url = container.url;
-    stopContainer = container.stop;
-  }
-
+  const url = withDatabase(server, name);
   const client = postgres(url, { max: 5, onnotice: () => {} });
   const db = drizzle(client, { schema });
-
-  // Every environment must be able to migrate from scratch, so the test tier
-  // exercises exactly that rather than a pre-built database.
-  await migrate(drizzle(postgres(url, { max: 1, onnotice: () => {} })), {
-    migrationsFolder: "./drizzle",
-  });
 
   const users = { alice: randomUUID(), bob: randomUUID() };
 
@@ -115,11 +94,14 @@ export async function setupIntegrationDb(): Promise<IntegrationDb> {
 
   return {
     db,
+    url,
     reset,
     users,
     teardown: async () => {
       await client.end({ timeout: 5 });
-      if (stopContainer) await stopContainer();
+      // FORCE: a subprocess the file spawned may still hold a connection.
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+      await admin.end({ timeout: 5 });
     },
   };
 }

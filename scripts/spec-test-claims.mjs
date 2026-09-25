@@ -11,8 +11,13 @@
  *     --root=<the worktree> --version=v1.2.3 --sha=<release sha> \
  *     --evidence=<URL of the comment posted on the release PR>
  *
- * stdout: one shared-client call per claim, ready to run.
+ * stdout: one claim per line, as JSON (JSONL), in the shape
+ *   `.claude/scripts/spec-universe.sh claims --file=<jsonl>` posts:
+ *   {"key", "node", "value", "basis", "criterion", "evidence"}.
+ *   Never a shell command: nothing downstream evaluates a line.
  * stderr: the evidence, as markdown, for the comment on the release PR.
+ *
+ *   node scripts/spec-test-claims.mjs --help    prints the fields
  *
  * A test-basis claim comes from a run at the release commit that the releasing
  * session performs itself, never from CI, which the harness does not ask to run
@@ -77,22 +82,40 @@ export function testClaims({ coverage, report, root }) {
   return { claims, unclaimed, files };
 }
 
-/** One bash word, single-quoted, so a quote or a `$` in a value cannot break or inject the line. */
-const shellWord = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+/** The fields of one claim line, in the order they are written. */
+export const CLAIM_FIELDS = ["key", "node", "value", "basis", "criterion", "evidence"];
 
 /**
- * One shared-client call per claim. The idempotency key ends in `-test` so it
- * never collides with the `source-code` claim's key for the same criterion:
- * the idempotency layer would otherwise answer the second basis with the
- * first claim. `release` names the version, the sha and the evidence URL.
+ * One claim object per claim, the shape `spec-universe.sh claims` posts. The
+ * idempotency key ends in `-test` so it never collides with the `source-code`
+ * claim's key for the same criterion: the idempotency layer would otherwise
+ * answer the second basis with the first claim. `release` names the version,
+ * the sha and the evidence URL; `node` is the full `<product>.<slug>` id.
  */
-export function claimCommands(claims, release, product) {
-  return claims.map(
-    (c) =>
-      `IDEMPOTENCY_KEY=${shellWord(`release-${release.version}-${c.node}-${c.criterion}-test`)} ` +
-      `bash .claude/scripts/spec-universe.sh claim ${product}.${c.node} matched test ${c.criterion} ${shellWord(release.evidence)}`,
-  );
+export function claimLines(claims, release, product) {
+  return claims.map((c) => ({
+    key: `release-${release.version}-${c.node}-${c.criterion}-test`,
+    node: `${product}.${c.node}`,
+    value: "matched",
+    basis: "test",
+    criterion: c.criterion,
+    evidence: release.evidence,
+  }));
 }
+
+/** What `--help` prints: the JSONL fields, one per line, so a caller can write the same shape. */
+export const HELP = [
+  "spec-test-claims.mjs --coverage=<json> --report=<json> --version=<v> --sha=<sha> --evidence=<url> [--root=<dir>]",
+  "",
+  "stdout: one claim per line, as JSON, for `spec-universe.sh claims --file=<jsonl>`:",
+  "  key        the Idempotency-Key, release-<version>-<node>-<criterion>[-test]",
+  "  node       <product>.<slug> (a bare slug is prefixed by the client)",
+  "  value      matched | drifted",
+  "  basis      test | source-code",
+  "  criterion  ac-N, omitted or empty for a whole-node claim",
+  "  evidence   a URL",
+  "stderr: the evidence comment, as markdown.",
+].join("\n");
 
 /** The comment for the release PR: the run, file by file, and what it proved. */
 export function evidenceMarkdown({ claims, unclaimed, files }, { sha, version }) {
@@ -125,6 +148,10 @@ function arg(argv, name) {
 }
 
 export function main(argv = process.argv.slice(2)) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(HELP);
+    return 0;
+  }
   const need = (name) => {
     const value = arg(argv, name);
     if (!value) {
@@ -154,7 +181,7 @@ export function main(argv = process.argv.slice(2)) {
     return 2;
   }
 
-  for (const line of claimCommands(result.claims, release, product)) console.log(line);
+  for (const line of claimLines(result.claims, release, product)) console.log(JSON.stringify(line));
   console.error(evidenceMarkdown(result, release));
   return 0;
 }

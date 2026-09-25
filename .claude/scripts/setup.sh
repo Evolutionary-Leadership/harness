@@ -25,7 +25,8 @@
 #
 #   setup.sh apply --railway yes|no --foundation yes|no --mcp yes|no \
 #                  [--workspace <id>] [--first-time yes|no] \
-#                  [--change-prefix <PREFIX>] [--system-key <KEY>]
+#                  [--change-prefix <PREFIX>] [--system-key <KEY>] \
+#                  [--registry on|off]
 #       Applies the chosen configuration: quarantine copies, the one
 #       package.json name substitution, the .harness-version rewrite,
 #       the self-delete (this script included), the provisioning
@@ -544,7 +545,7 @@ substitute_package_name() {
 cmd_apply() {
   PHASE="apply"
   local RAILWAY="" FOUNDATION="" MCP="" WORKSPACE_ID="" FIRST_TIME="unset"
-  local CHANGE_PREFIX="" SYSTEM_KEY=""
+  local CHANGE_PREFIX="" SYSTEM_KEY="" REGISTRY="on"
   while [ $# -gt 0 ]; do
     case "$1" in
       --railway) need_value --railway $#; RAILWAY="$2"; shift 2 ;;
@@ -554,9 +555,24 @@ cmd_apply() {
       --first-time) need_value --first-time $#; FIRST_TIME="$2"; shift 2 ;;
       --change-prefix) need_value --change-prefix $#; CHANGE_PREFIX="$2"; shift 2 ;;
       --system-key) need_value --system-key $#; SYSTEM_KEY="$2"; shift 2 ;;
+      --registry) need_value --registry $#; REGISTRY="$2"; shift 2 ;;
       *) status_add "detail" "unknown argument: $1"; finish "invalid-arguments" 1 ;;
     esac
   done
+  # --registry off says this repository has no System Registry at all, not
+  # "no entry yet": /feature then skips the lookup entirely instead of
+  # stopping at Capture for a prefix that will never come. It contradicts a
+  # prefix, which only a registry can have issued.
+  case "$REGISTRY" in
+    on|off) ;;
+    *)
+      status_add "detail" "--registry must be on or off: $REGISTRY"
+      finish "invalid-arguments" 1 ;;
+  esac
+  if [ "$REGISTRY" = off ] && [ -n "$CHANGE_PREFIX" ]; then
+    status_add "detail" "--registry off with --change-prefix: a prefix is something a registry issued, so the two contradict each other"
+    finish "invalid-arguments" 1
+  fi
   # Both identity flags are optional, and a repository whose system is not in
   # the registry yet passes neither: it is then configured exactly as before
   # this flag existed, and /feature stops at Capture with the line to add. The
@@ -649,15 +665,29 @@ cmd_apply() {
   fi
 
   # Record the variant on line 1; /harness-upgrade filters migrations by
-  # it. The foundation path also records the CI check chain, the same
-  # chain the concurrent verification below runs.
+  # it. The foundation path also records the two CI gate lines: check: is
+  # the chain feature-branch-checks.yml's check job runs on every PR (the
+  # workflow installs, so the chain does not; the railway variant builds,
+  # because a deploy is what its merge leads to), and tests: is the unit
+  # suite its tests job runs against a Postgres service. The concurrent
+  # verification below runs the install, typecheck, lint and check:docs
+  # only: it omits the railway build and the tests: line, which the
+  # first pull request runs.
   local variant="harness-plain"
   [ "$RAILWAY" = yes ] && variant="harness-railway"
   if [ -f .harness-version ]; then
     { printf 'harness: %s\n' "$variant"; tail -n +2 .harness-version; } > .harness-version.setup-tmp
     mv .harness-version.setup-tmp .harness-version
     if [ "$FOUNDATION" = yes ] && ! grep -q '^check:' .harness-version; then
-      printf 'check: pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm check:docs\n' >> .harness-version
+      local check_line='pnpm typecheck && pnpm lint && pnpm check:docs'
+      [ "$RAILWAY" = yes ] && check_line="$check_line && pnpm build"
+      printf 'check: %s\n' "$check_line" >> .harness-version
+    fi
+    if [ "$FOUNDATION" = yes ] && ! grep -q '^tests:' .harness-version; then
+      printf 'tests: pnpm test:unit\n' >> .harness-version
+    fi
+    if [ "$REGISTRY" = off ] && ! grep -q '^registry:' .harness-version; then
+      printf 'registry: off\n' >> .harness-version
     fi
     # The repository's identity in the System Registry. change-prefix is what
     # every change key of this repository carries, cached here because it is
@@ -684,6 +714,8 @@ cmd_apply() {
     "$(sed -n 's/^change-prefix: *//p' .harness-version 2>/dev/null | tail -1 | grep . || echo none)"
   status_add "system-key" \
     "$(sed -n 's/^system-key: *//p' .harness-version 2>/dev/null | tail -1 | grep . || echo none)"
+  status_add "registry" \
+    "$(sed -n 's/^registry: *//p' .harness-version 2>/dev/null | tail -1 | grep . || echo on)"
 
   # Self-delete: the quarantine, the skill, the plain path's preflight
   # workflow, and this script itself. The skill's presence is the
@@ -830,7 +862,7 @@ case "${1:-}" in
   apply) shift; cmd_apply "$@" ;;
   *)
     PHASE="none"
-    status_add "detail" "usage: setup.sh guard | prepare [--railway yes|no|unknown] [--poll-only] | apply --railway yes|no --foundation yes|no --mcp yes|no [--workspace <id>] [--first-time yes|no] [--change-prefix <PREFIX>] [--system-key <KEY>]"
+    status_add "detail" "usage: setup.sh guard | prepare [--railway yes|no|unknown] [--poll-only] | apply --railway yes|no --foundation yes|no --mcp yes|no [--workspace <id>] [--first-time yes|no] [--change-prefix <PREFIX>] [--system-key <KEY>] [--registry on|off]"
     finish "invalid-arguments" 1
     ;;
 esac

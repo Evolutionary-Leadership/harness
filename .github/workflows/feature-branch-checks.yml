@@ -11,7 +11,9 @@ name: Feature branch checks
 #   for this run's conclusion before merging when a check: command is
 #   configured in .harness-version.
 # The 'check' job id below is a contract with claude-to-preprod.yml's merge
-# gate, which polls the run by that name; do not rename it.
+# gate, which polls the run by that name; do not rename it. So is 'tests':
+# the gate waits for that run too when .harness-version carries a tests:
+# line, and the job is a no-op (checkout, read, skip) when it does not.
 on:
   push:
     branches: ['claude/**']
@@ -24,6 +26,9 @@ on:
       # pushes expensive and ration the updates the flow depends on. The
       # merge PR run still checks the full tree.
       - '.harness/feature-context/**'
+      # Journey records (journey.sh): journey-sync.yml mirrors them onto
+      # coordination; they change nothing a check would see.
+      - '.harness/journey/**'
   pull_request:
     branches: [preprod, main]
 
@@ -121,4 +126,110 @@ jobs:
         env:
           SPEC_UNIVERSE_URL: ${{ secrets.SPEC_UNIVERSE_URL }}
           SPEC_UNIVERSE_TOKEN: ${{ secrets.SPEC_UNIVERSE_TOKEN }}
+        run: ${{ steps.config.outputs.cmd }}
+
+  # The tests: line from .harness-version, run against a real Postgres.
+  # The job cannot be skipped at job level on a file's contents, so it
+  # always exists and its steps are conditioned on the line: a repository
+  # without one pays a checkout and a service start, and the gate does not
+  # wait for it. Package-manager detection and install are the check job's,
+  # duplicated because a template cannot ship a composite action.
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # One database, two names: the test runner reads TEST_DATABASE_URL and
+      # the application code under test reads DATABASE_URL. Both point at
+      # the service above, and nothing else in CI does.
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/app_test
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/app_test
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read tests command from .harness-version
+        id: config
+        run: |
+          if [ ! -f .harness-version ]; then
+            echo "No .harness-version file found. Skipping tests."
+            echo "cmd=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TESTS_CMD=$(grep '^tests:' .harness-version | sed 's/^tests: *//' || true)
+          if [ -z "$TESTS_CMD" ]; then
+            echo "No tests: line in .harness-version. Nothing to run."
+          fi
+          echo "cmd=$TESTS_CMD" >> "$GITHUB_OUTPUT"
+
+      - name: Detect package manager
+        if: steps.config.outputs.cmd != ''
+        id: pm
+        run: |
+          if [ -f bun.lockb ] || [ -f bun.lock ]; then
+            echo "manager=bun" >> "$GITHUB_OUTPUT"
+            echo "install=bun install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+            echo "cache=" >> "$GITHUB_OUTPUT"
+          elif [ -f pnpm-lock.yaml ]; then
+            echo "manager=pnpm" >> "$GITHUB_OUTPUT"
+            echo "install=pnpm install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+            echo "cache=pnpm" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ]; then
+            echo "manager=yarn" >> "$GITHUB_OUTPUT"
+            echo "install=yarn install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+            echo "cache=yarn" >> "$GITHUB_OUTPUT"
+          elif [ -f package-lock.json ]; then
+            echo "manager=npm" >> "$GITHUB_OUTPUT"
+            echo "install=npm ci" >> "$GITHUB_OUTPUT"
+            echo "cache=npm" >> "$GITHUB_OUTPUT"
+          else
+            echo "manager=" >> "$GITHUB_OUTPUT"
+            echo "install=" >> "$GITHUB_OUTPUT"
+            echo "cache=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect Node.js version
+        if: steps.config.outputs.cmd != '' && steps.pm.outputs.manager != ''
+        id: node
+        run: |
+          if [ -f .nvmrc ]; then
+            echo "version=$(cat .nvmrc)" >> "$GITHUB_OUTPUT"
+          elif [ -f .node-version ]; then
+            echo "version=$(cat .node-version)" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=22" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pnpm
+        if: steps.pm.outputs.manager == 'pnpm'
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        if: steps.config.outputs.cmd != '' && steps.pm.outputs.manager != '' && steps.pm.outputs.manager != 'bun'
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          cache: ${{ steps.pm.outputs.cache }}
+
+      - name: Setup Bun
+        if: steps.pm.outputs.manager == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        if: steps.config.outputs.cmd != '' && steps.pm.outputs.install != ''
+        run: ${{ steps.pm.outputs.install }}
+
+      - name: Run tests
+        if: steps.config.outputs.cmd != ''
         run: ${{ steps.config.outputs.cmd }}

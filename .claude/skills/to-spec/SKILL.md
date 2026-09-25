@@ -9,10 +9,27 @@ Take the current conversation context and codebase understanding and
 produce the specification of the change. Do NOT interview the user;
 `/grilling` already happened. Synthesize what you know.
 
+## The tier decides where the spec lives
+
+The change's size tier (`S`, `M` or `L`; the rubric is `/feature` phase 0,
+"Size") decides the shape of the spec and its home. Read it from the
+feature context's `## Size` line, else from the work item's `## Change key`
+section (its `Size:` sentence). No tier on record means `L`.
+
+| Tier | Shape | Home |
+|---|---|---|
+| S | One paragraph: what changes, the seam the regression test lands at, the files it expects to touch | The work item's `## Specification` section |
+| M | The template below, with the M story rule | The work item's `## Specification` section |
+| L | The template below, in full | Its own spec issue, linked from the work item's `## Specification` |
+
+For S and M there is no spec issue: the work item is the spec, and a
+resumed session reads it there. `/continue` derives the phase from that
+section, so write it whole or not at all.
+
 ## The spec loop, and the one key that switches it
 
-Where a specification lives depends on one key in `.harness-version`. Read it
-before anything else:
+Where a specification lives also depends on one key in `.harness-version`.
+Read it before anything else:
 
     SPEC_PRODUCT=$(sed -n 's/^spec_product: *//p' .harness-version | tail -1)
 
@@ -27,7 +44,8 @@ one home of what the system does, and the anchors in the code cite it
 (`.claude/SPEC-LOOP.md`). The tracker issue is then a **thin
 work item**: title, why, key, a pointer to the change view, and the tickets.
 It never holds the spec text, because a second copy of a specification is the
-copy nobody updates.
+copy nobody updates. The tier table above does not apply while the loop is
+awake: every tier writes proposals.
 
 Every Spec Universe read and write goes through the shared client:
 
@@ -44,8 +62,10 @@ not swept, so write nothing and say so.
 
 1. Explore the repo to understand the current state of the codebase, if
    you have not already. Use the vocabulary from `docs/GLOSSARY.md`
-   throughout, and respect any ADRs under `docs/decisions/` in the area you
-   are touching.
+   throughout, and respect the decision records under `docs/decisions/` in
+   the area you are touching. Inside `/feature`, the feature context's
+   `## Brief` already names the guardrails, glossary terms, decisions and
+   architecture docs that bear on the change; start from it.
 
    **(connected)** For the specification, read the `## Retrieved
    specification` section of the feature context, which `/feature` phase 1
@@ -66,24 +86,37 @@ not swept, so write nothing and say so.
    across the codebase, the better; the ideal number is one. (`/tdd` owns
    the seam vocabulary.)
 
-   Check with the user that these seams match their expectations.
+   **The seam question is the caller's.** Inside `/feature`, the plan gate
+   that follows this skill presents the seams and offers "revise seams" as
+   one of its options; do not stop to ask here. Standalone, check with the
+   user that the seams match their expectations before writing.
 
-3. **(dormant)** Write the spec using the template below and publish it as
-   one issue on the tracker. Put the feature slug in the issue title, so a
-   resumed session can find the spec (the convention is in
-   `docs/agents/issue-tracker.md`). Then report the spec issue number back to
-   the user; later phases and resumed sessions depend on it, and steps 3 to 5
-   below are the connected shape of this same step, so stop here.
+3. **(dormant)** Write the spec and publish it where the tier table says.
+
+   **S and M:** one update of the work item's body (`gh issue edit --body`,
+   or `issue_write` update where `gh` is absent, per the tracker contract):
+   read the body, replace the contents of `## Specification` with the spec
+   text, and leave every other section as it was. Report that the work
+   item now holds the spec; there is no second number to record.
+
+   **L:** publish the template as one issue on the tracker. Put the feature
+   slug in the issue title, so a resumed session can find the spec (the
+   convention is in `docs/agents/issue-tracker.md`), and write the link
+   into the work item's `## Specification`. Then report the spec issue
+   number back to the user; later phases and resumed sessions depend on it.
+
+   Steps 3 to 5 below are the connected shape of this same step, so stop
+   here.
 
 <spec-template>
 
 ## Why
 
-One or two sentences of prose: what is wrong or missing today that makes
-this worth specifying. Never a restatement of the title, and never a
-checklist, a table or a bare link. `## Problem Statement` below is the long
-form. Where the project carries `docs/agents/issue-tracker.md`, the fuller
-convention is there.
+One line: `Why: <work item URL>`. The why is written once, on the work
+item, and a spec never re-types it. Standalone, with no work item, one or
+two sentences of prose go here instead (what is wrong or missing today;
+never a restatement of the title, never a checklist, a table or a bare
+link; the fuller convention is `docs/agents/issue-tracker.md`).
 
 ## Problem Statement
 
@@ -95,12 +128,16 @@ The solution to the problem, from the user's perspective.
 
 ## User Stories
 
-A LONG, numbered list of user stories, each in the format:
+A numbered list of user stories, each in the format:
 
 1. As an <actor>, I want <a feature>, so that <benefit>
 
-This list should be extremely extensive and cover all aspects of the
-feature.
+**M:** one story per settled decision, and acceptance criteria under a
+story only where a test will assert them. A story nobody will test is a
+sentence in `## Solution`, not a story.
+
+**L:** the list is LONG and extremely extensive, covering all aspects of
+the feature.
 
 ## Implementation Decisions
 

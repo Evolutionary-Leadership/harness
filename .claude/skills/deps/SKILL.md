@@ -1,7 +1,6 @@
 ---
 name: deps
 description: Review and handle Dependabot PRs. Group by risk, batch-merge safe patches, flag breaking changes.
-disable-model-invocation: true
 allowed-tools: Bash(git *), Bash(gh *), Read, Glob, Grep
 ---
 

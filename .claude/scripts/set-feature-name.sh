@@ -9,15 +9,30 @@
 # push of its own would be a naming push, which on Railway provisions the
 # preview environment the merge path has just torn down, while the recovery
 # push that follows it is one provisioning skips.
+#
+# --preview=yes|no (default no) is line 2 of .harness-feature, `preview: yes`
+# or `preview: no`. Previews are opt-in: the railway variant's provisioning
+# workflow reads that line at the pushed commit and exits before forking an
+# environment unless it says yes. /feature phase 0 passes yes for an L change
+# and for a run bound for /review; /review flips a no to yes with a naming
+# commit of its own. Every other reader of the file takes line 1 only.
 set -euo pipefail
 NO_PUSH=false
-if [ "${1:-}" = "--no-push" ]; then
-  NO_PUSH=true
-  shift
-fi
-RAW="${1:-}"
+PREVIEW=no
+RAW=""
+for ARG in "$@"; do
+  case "$ARG" in
+    --no-push) NO_PUSH=true ;;
+    --preview=yes | --preview=no) PREVIEW="${ARG#--preview=}" ;;
+    --preview=*)
+      echo "Usage: set-feature-name.sh [--no-push] [--preview=yes|no] <slug>" >&2
+      exit 2
+      ;;
+    *) RAW="$ARG" ;;
+  esac
+done
 if [ -z "$RAW" ]; then
-  echo "Usage: set-feature-name.sh [--no-push] <slug>   (e.g. fix-login-seed)" >&2
+  echo "Usage: set-feature-name.sh [--no-push] [--preview=yes|no] <slug>   (e.g. fix-login-seed)" >&2
   exit 2
 fi
 # 27, not 40. The slug becomes a Railway environment name in the railway
@@ -62,9 +77,18 @@ if [[ "$BRANCH" != claude/* ]]; then
   echo "Not on a claude/* session branch (on '$BRANCH'); nothing to do." >&2
   exit 0
 fi
+# Idempotence compares both lines. An absent line 2 reads as `no`, the way
+# the provisioning workflow reads it, so a branch named before the marker
+# existed is not renamed for nothing.
+CURRENT_PREVIEW=no
 if [ -f .harness-feature ] &&
-  [ "$(head -n1 .harness-feature | tr -d '[:space:]')" = "$SLUG" ]; then
-  echo "Feature name already set to: $SLUG"
+  [ "$(sed -n 2p .harness-feature | tr -d '[:space:]')" = "preview:yes" ]; then
+  CURRENT_PREVIEW=yes
+fi
+if [ -f .harness-feature ] &&
+  [ "$(head -n1 .harness-feature | tr -d '[:space:]')" = "$SLUG" ] &&
+  [ "$CURRENT_PREVIEW" = "$PREVIEW" ]; then
+  echo "Feature name already set to: $SLUG (preview: $PREVIEW)"
   exit 0
 fi
 # Commit as whoever this session already is, and never write an identity.
@@ -81,17 +105,17 @@ if ! git var GIT_AUTHOR_IDENT > /dev/null 2>&1 ||
   IDENTITY=(-c "user.name=claude-code[bot]"
     -c "user.email=claude-code[bot]@users.noreply.github.com")
 fi
-printf '%s\n' "$SLUG" > .harness-feature
+printf '%s\npreview: %s\n' "$SLUG" "$PREVIEW" > .harness-feature
 git add .harness-feature
 # The ${a[@]+...} spelling keeps an empty array legal under `set -u` on the
 # bash 3.2 macOS still ships.
 git ${IDENTITY[@]+"${IDENTITY[@]}"} commit -q -m "chore: set feature name ($SLUG)"
 if [ "$NO_PUSH" = true ]; then
-  echo "Feature name set: $SLUG (committed, not pushed: the next push carries it)"
+  echo "Feature name set: $SLUG (preview: $PREVIEW; committed, not pushed: the next push carries it)"
   exit 0
 fi
 if git push -u origin "$BRANCH" 2>&1; then
-  echo "Feature name set: $SLUG  ->  feature/$SLUG"
+  echo "Feature name set: $SLUG  ->  feature/$SLUG (preview: $PREVIEW)"
 else
   (
     for delay in 2 4 8; do
@@ -100,5 +124,5 @@ else
     done
   ) &>/dev/null &
   disown 2>/dev/null || true
-  echo "Feature name set: $SLUG (push retrying in background)"
+  echo "Feature name set: $SLUG (preview: $PREVIEW; push retrying in background)"
 fi

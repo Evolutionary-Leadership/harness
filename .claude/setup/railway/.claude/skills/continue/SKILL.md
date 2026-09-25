@@ -1,7 +1,6 @@
 ---
 name: continue
 description: Resume work on an in-progress feature branch. Lists active features with their feature context and preview URLs, lets you pick one, and lands you mid-flow with the reasoning intact.
-disable-model-invocation: true
 argument-hint: "[optional: feature name to continue]"
 allowed-tools: Bash(git *), Bash(gh *), Read, Glob, Grep
 ---
@@ -44,9 +43,9 @@ out:
 
     git show "origin/feature/<name>:.harness/feature-context/<name>.md" 2>/dev/null
 
-Show the context's phase, next step, and open questions beside the git
-summary. A branch without a context file predates the flow or skipped it;
-say so rather than guessing at its state.
+Show the context's size, phase, next step, and open questions beside the
+git summary. A branch without a context file predates the flow or skipped
+it; say so rather than guessing at its state.
 
 ### 2. Select a feature
 
@@ -70,30 +69,61 @@ any such file under `.harness/feature-context/` in the working tree now
 (commit the deletion; it rides along with the next push). This is a
 safety net, not the intended path.
 
-### 5. Hand over to the feature flow
+### 5. Derive the position, and write it
+
+The touched-set record is the one field a crashed session leaves
+wrong, and a resume is the cheapest moment to correct it, so derive the
+position from the durable artefacts and WRITE it rather than trusting the
+record's own value (`.claude/JOURNEY.md`, "Quick mode and resumption").
+
+Read the work item (titled `<KEY>: ...`, the key being the leading part of
+`.harness-feature`) and its size tier from the `## Change key` section, or
+from the context's `## Size`. Then the first row that matches, top down:
+
+| Evidence on the work item | Position | Re-enter at |
+|---|---|---|
+| No work item | fresh feature | `/feature` phase 0 |
+| `parked` label | as recorded, parked | nowhere until un-parked |
+| S: `## Specification` empty | `captured` | the plan-and-go gate |
+| S: `## Specification` holds the paragraph, `## Tickets` empty or absent | `committed` | phase 4 |
+| M or L: `## Challenge` empty | `captured` | phase 1 |
+| M or L: `## Challenge` has its verdict, `## Specification` empty | `challenged` | the shaping grill (phase 1) |
+| M: `## Specification` holds text, `## Tickets` empty | `planned` | the plan gate (tickets missing) |
+| L: `## Specification` links a spec issue with no ticket sub-issues | `planned` | phase 3 |
+| `## Tickets` has an unticked line (S, M), or an open ticket sub-issue (L) | `building` | phase 4, the frontier |
+| Every line ticked (S, M), or every ticket closed (L) | `built` | phase 5 |
+
+Then write it, in one call:
+
+    bash .claude/scripts/journey.sh phase <position> "resumed at <position>"
+
+Nothing follows it: the call commits `.harness/journey/<slug>.md` and
+pushes this branch, and `journey-sync.yml` mirrors the record onto
+`coordination` and rings the cockpit (`.claude/JOURNEY.md`).
+
+A `## Blocked` section in the context means the last session stood down:
+read it first, and clear it (the section, and the `blocked` label on the
+work item) only once the block is actually gone. If the context marks the
+feature "awaiting human review" (a `/review` PR is open), say so: the
+likely work is addressing review comments, and the exit after that is
+`/to-preprod` on the same PR.
+
+### 6. Hand over to the feature flow
 
 Delegate to `/feature`'s resume logic (its phase 0): it merges the
-feature branch, loads the feature context, verifies the phase against the
-tracker artifacts, writes the journey position it landed in to the
-touched-set record (the record is the one field a crashed session leaves
-wrong, and this is the cheapest moment to correct it; `.claude/JOURNEY.md`),
-and gates before continuing. Do not improvise a separate resume here.
+feature branch, loads the feature context, and gates at the row's
+"re-enter at" before continuing. Do not improvise a separate resume here.
 
-A `parked` label on the work item means the change was parked at a gate:
-say so, and continue only if the user un-parks it. A `## Blocked` section in
-the context means the last session stood down: read it first, and clear it
-(with the `blocked` label) only once the block is actually gone.
+`--quick` and `--ship` are session-scoped: this skill re-arms neither. A
+run that was unattended resumes attended unless the user types the flag
+again.
 
-If the context marks the feature "awaiting human review" (a `/review` PR
-is open), say so: the likely work is addressing review comments, and the
-exit after that is `/to-preprod` on the same PR.
-
-### 6. Ready to work
+### 7. Ready to work
 
 Tell the user:
 
 - You are now on a working branch for this feature
-- The Railway preview URL, if one is published
-- The phase the feature context says it is in, and the recorded next step
+- The size, the position you derived and why, and the recorded next step
 - The decisions already settled (so nobody re-litigates them by accident)
+- The Railway preview URL, if one is published
 - Then confirm the next step before doing it

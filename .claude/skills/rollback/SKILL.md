@@ -1,7 +1,6 @@
 ---
 name: rollback
 description: Revert production to the previous release tag and create a tracking issue.
-disable-model-invocation: true
 argument-hint: "[optional: tag to revert to, e.g. v1.2.3]"
 allowed-tools: Bash(git *), Bash(gh *), Read, Write, Glob, Grep
 ---
@@ -19,7 +18,8 @@ deploy like any other and undoes work somebody shipped deliberately.
 
 **Check this first, before any other step.** Work you are not allowed to file
 is work you should not start, and discovering the block at the exit is the
-failure this section exists to remove (forge decision record 0037).
+failure this section exists to remove (the forge decision record on granting
+exit authority in configuration).
 
     AUTHORITY=$(sed -n 's/^agent-authority: *//p' .harness-version | tail -1)
 
@@ -31,15 +31,22 @@ Authority is satisfied by **either** of these, and by nothing else:
    do it, or picked it at a `/feature` phase 5 exit gate. A relayed report
    that somebody once approved releases is not this; the ask is in the turn.
 
+`--ship` is not a third form here. On a `/feature` run it is release
+authority for the change that run built and gated through `preprod`; a
+rollback undoes a release rather than making one, so no flag on a feature run
+reaches it. A session inside `/feature --ship` that finds a bad deploy stops
+and asks, in words, in this turn.
+
 **If neither holds, stop here and stand down.** Do not compute anything, do not
 write a signal file, do not push. Emit the stand-down block
 (`getting-started`, Step 3c) with `reason: authority-not-granted`, and say
 plainly what this session did finish and that it is not complete.
 
 **Performing these steps by hand is the same act, and is refused the same
-way.** Forge decision record 0017 lets a session reach this procedure by
-reading this file rather than invoking the skill, and that route is still open; what it is not is a way
-around this section. Writing the signal file, committing it and pushing it
+way.** The forge decision record on reaching a user-invoked skill by its file lets
+a session reach this procedure by reading this file rather than invoking the
+skill, and that route is still open; what it is not is a way around this
+section. Writing the signal file, committing it and pushing it
 without authority IS this skill, whatever it is called at the time. A guard
 that stopped only the literal invocation would guard nothing.
 

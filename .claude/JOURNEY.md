@@ -22,9 +22,11 @@ which is what makes the front half of the journey instrumentable at all.
 
 ## The record: `phase` in the touched set
 
-The touched-set record (`features/<slug>.md` on the `coordination` branch,
-contract in `.claude/HARNESS.md`) carries one scalar for this: **`phase`**,
-holding the position the feature is at, spelled exactly as the cockpit's
+The touched-set record (contract in `.claude/HARNESS.md`) lives on the
+session branch as `.harness/journey/<slug>.md` while the feature is in flight,
+and `journey-sync.yml` mirrors every push of it onto the `coordination` branch
+as `features/<slug>.md`, which is where the cockpit and every other session
+read it. It carries one scalar for this: **`phase`**, holding the position the feature is at, spelled exactly as the cockpit's
 lifecycle spells it. `touched-set.mjs` refuses any other value.
 
 ```
@@ -33,44 +35,78 @@ deciding  committed  planning  planned  building  built  verifying  verified
 reviewing  reviewed  releasing  released  adoption  used  evaluating  evaluated
 ```
 
+The record carries two more scalars beside `phase`, both optional and in this
+order after it: **`size`**, the tier the change was given at Capture (`S`, `M`
+or `L`, set by `journey.sh phase --size=`), and **`phases`**, the append-only,
+comma-separated history of every position written, in order. `phases` is what
+makes a gap readable: a record at `building` whose history reads
+`captured,committed,building` says the change took the S tier rather than
+that four states went missing. A record without either line parses as before.
+
 **Two writes per transition.** Write the transition's key the moment work on
 it starts, and the state's key the moment its artefact exists. Both are
 observations: "a session is working on `shaping`" and "the `shaped` artefact
 exists". Writing only states would leave the cockpit to infer the edge from
-nothing, and inferring from nothing is the one thing it refuses to do.
+nothing, and inferring from nothing is the one thing it refuses to do. The
+transition write exists for the cockpit's in-progress edge and is skipped
+where no cockpit is configured: `journey.sh` decides, dropping transition
+positions from a call unless `cockpit.sh configured` succeeds or the call
+passes `--all`, and says `journey: states only (no cockpit)` once per session.
+State writes happen everywhere, cockpit or not.
 
-**The write is the refresh recipe, with `--phase`.** Every write of `phase`
-is a refresh of the record, so `updated_at` moves with it:
+**Positions by tier.** An S change writes `captured`, `committed` and `built`,
+plus `building` where a cockpit reads transitions, and nothing between: the
+gap is the honest rendering of a change that took no interview and cut no
+spec. M and L write every state they pass through, and every transition where
+a cockpit reads them.
 
-    R=$(mktemp -d)
-    bash .claude/scripts/coordination.sh feature "$FEATURE_NAME" > "$R/mine.md"
-    KEY=$(sed -n 's/^key: *//p' "$R/mine.md" | tail -1)
-    node .claude/scripts/touched-set.mjs refresh --from="$R/mine.md" \
-      --phase=<position> > "$R/next.md"
+**The write is one call.** Every write of `phase` is a refresh of the record,
+so `updated_at` moves with it:
 
-then write `$R/next.md` back to `features/$FEATURE_NAME.md` on `coordination`
-with `mcp__github__create_or_update_file` and the sha you read, then **ring the
-cockpit and report the boundary**:
+    bash .claude/scripts/journey.sh phase <position> "<one sentence in the position's own terms>"
 
-    bash .claude/scripts/cockpit.sh ping --key="$KEY"
-    bash .claude/scripts/cockpit.sh report <position> "<the sentence>" --key="$KEY"
+Several positions in one call (`phase committed,building "..."`) write the
+last as `phase` and append all of them to `phases`; `--size=S|M|L` sets the
+tier. The script reads the record (the journey file on this branch, else the
+`coordination` copy), refreshes it with `touched-set.mjs`, commits that file
+alone with the sentence as the commit body, and pushes the session's
+`claude/` branch, the one ref the git proxy lets a session write. `--no-push`
+leaves the commit for a push that follows at once. Capture's first record
+goes the same way through `journey.sh declare <file>`. It is one call inside
+the claude.ai sandbox and out of it, and nothing follows it: the session
+makes no GitHub API write and no ring for a position. Every command exits 0
+and prints nothing on stdout.
 
-The key comes out of the record rather than out of the session, so the recipe
-runs the same way in a fresh session, in `/continue`, and after a crash. A
-record with no `key:` rings and reports with none, and the cockpit gets a hint
-and a sentence scoped to the repository alone, which is the fail-soft answer
-rather than a wrong key.
+The push starts `journey-sync.yml` (the check and feature-merge workflows
+ignore the path, so a journey-only push starts nothing else), which mirrors
+the file onto `coordination` under the workflow's own token, then **rings the
+cockpit and reports the boundary** (`cockpit.sh ping --key`, then
+`cockpit.sh report <position> "<the sentence>" --key`, the key read from the
+record, the sentence from the commit body). The ring needs the repository's
+Actions `BOARD_URL` (a variable or a secret) and `BOARD_TOKEN` (a secret);
+without them the record is still mirrored and nobody is rung. The session
+decides whether to write transition positions from its own environment, so
+it needs the same two variables to draw the in-progress edge. The position
+reaches `coordination` 20 to 40 seconds after the push, one runner start,
+which the cockpit's poll covers anyway. The key comes out of the record rather
+than the session, so a write lands the same way from a fresh session, from
+`/continue`, and after a crash; a record with no `key:` rings and reports
+with none, which is the fail-soft answer rather than a wrong key.
 
-`/feature` and `/continue` say "write the phase" and mean all four steps;
-`/to-preprod` never writes it, it deletes the record at the merge. A write is
-advisory like every coordination write: a failure is one line and the flow
-continues.
+`/feature` and `/continue` say "write the phase" and mean that one call;
+`/to-preprod` never writes it, it retires the record at the merge with
+`journey.sh retire`, which stages the file's deletion for its signal commit,
+whose push has `journey-sync.yml` delete the `coordination` copy. A write is
+advisory like every coordination write: a failure is one `journey:` line on
+stderr and the flow continues.
 
 **Ring AFTER the write, never before.** The ping says where to look, so a ring
 that goes out first sends the cockpit to read the position the change already
 had, and the new one then waits for the next poll: worse than not ringing.
-This is also why the ping carries a key and no position. The record is the
-fact; the ping is the doorbell (`.claude/HARNESS.md` names the client).
+The rule is now the workflow's: `journey-sync.yml` rings only once its push to
+`coordination` has landed, and a session never rings for a position itself.
+This is also why the ping carries a key and no position. The record is the fact; the ping is the doorbell
+(`.claude/HARNESS.md` names the client).
 
 **The report is the third step and not a second doorbell.** The ring says
 where to look; the report says what is happening once somebody looks. Its
@@ -129,10 +165,10 @@ later inherits its report instead of owing one.
 
 | Seam | Where it lives | Ref |
 |---|---|---|
-| A phase boundary | the phase-write recipe above, after the ring | none |
+| A phase boundary | `journey-sync.yml`, after it mirrors a `journey.sh phase` push onto `coordination` | none |
 | A question round asked | `/grilling`'s round loop | `<KEY>:<position>:round-<first question number>` |
 | The same round answered | the same loop | completes it |
-| A gate put to the user | `/feature`'s "Gates" | `<KEY>:gate-<phase>`, e.g. `gate-1a` |
+| A gate put to the user | `/feature`'s "Gates" | `<KEY>:gate-<name>`, e.g. `gate-plan-and-go` |
 | The gate's verdict | the same rules | completes it |
 | A long operation starting | `/implement`'s frontier loop and Finishing, and `/code-review`'s own steps 1 and 5 | `<KEY>:ticket-<n>`, `<KEY>:check@<sha>`, `<KEY>:review@<sha>` |
 | The same operation finishing | the same three | completes it |
@@ -250,10 +286,10 @@ entry predicate, restated so this table can be read on its own.
 
 | Transition | Skill or step | Ready when | Done when | Working seen as | Gate and verdicts |
 |---|---|---|---|---|---|
-| `challenging` | `/feature` phase 1a: a short `/grilling` on the WHY alone | The work item exists | `## Challenge` is written and the verdict is `pursue` | `phase: challenging`; comments on the work item | **worth pursuing**: pursue, drop or park |
-| `shaping` | `/feature` phase 1b: `/grilling` with `/domain-modeling` on the how | Verdict was `pursue` | The grill is satisfied: frontier empty, nothing silently assumed, vocabulary recorded, scope boundary stated | `phase: shaping`; `chore(context):` commits | none |
-| `assessing` | `/feature` phase 1c: declare the touched set fully, check the settled decisions against the specification retrieved in 1b, read the namespace | Decisions settled | The record carries its paths and nodes, the overlap is reported, every conflict has a decision | `phase: assessing`; the record's `updated_at` moving | none |
-| `deciding` | `/feature` phase 1d: the gate, put to the user | The assessment exists | The verdict is on the work item | `phase: deciding` | **build it**: build, drop or park |
+| `challenging` | `/feature` phase 1: round 1 of the one `/grilling`, on the why alone | The work item exists | `## Challenge` is written and the verdict is `pursue` | `phase: challenging`; comments on the work item | **worth pursuing**: pursue, drop or park |
+| `shaping` | `/feature` phase 1: the rounds after round 1 of the same `/grilling`, with `/domain-modeling`, on the how | Verdict was `pursue` | The grill is satisfied: frontier empty, nothing silently assumed, vocabulary recorded, scope boundary stated | `phase: shaping`; `chore(context):` commits | none |
+| `assessing` | `/feature` phase 1c, L only (a gate only when connected): declare the touched set fully, read the namespace and, connected, check the settled decisions against the specification | Decisions settled | The record carries its paths and nodes, the overlap is reported, every conflict has a decision | `phase: assessing`; the record's `updated_at` moving | none |
+| `deciding` | `/feature` phase 1d for L: the gate, put to the user; M folds it into the grill's why-and-how verdict | The assessment exists | The verdict is on the work item | `phase: deciding` | **build it**: build, drop or park |
 | `planning` | `/to-spec` then `/to-tickets` (phases 2 and 3) | Verdict was `build` | Tickets exist, each with its blocking edges and its parent | `phase: planning`; issues appearing | **plan accepted**: the phase 3 gate, whose approval starts the build |
 | `building` | `/implement` with `/tdd`, then `/code-review` (phase 4) | Tickets exist | Frontier empty, full check green, review run and acted on | `phase: building`; commits closing tickets | none |
 | `verifying` | Phase 5's push; `feature-branch-checks.yml` on the pushed head | Built | The check on the current head is green | `check_run_activity` on the branch | **checks passed** |
@@ -281,7 +317,7 @@ rest of what the flag does.
 |---|---|---|
 | `pursue` (challenging) or `build` (deciding) | Label `pursue` on the work item at challenging; a comment naming the verdict at deciding | The next transition starts and its phase is written |
 | `park` | Label `parked` on the work item, which stays OPEN; the branch, the feature context and the record stay too | The record's phase stays at the state the change was resting on. Nothing is deleted: a parked change is not a finished one, and `/continue` lists it with the label. Un-parking is removing the label and writing the next phase |
-| `drop` | The work item is closed as **not planned**, with a comment saying why; the branch is deleted; the record is deleted from `coordination`; the feature context goes with the branch | The cockpit reads a canceled tracker item as a dropped exit. Dropping by any other route (closing as completed, deleting the issue) is indistinguishable from finishing or from never having existed |
+| `drop` | The work item is closed as **not planned**, with a comment saying why; the branch is deleted; the record is deleted from `coordination` (`journey.sh retire`, committed and pushed first, has `journey-sync.yml` do it; else the next stale sweep); the feature context goes with the branch | The cockpit reads a canceled tracker item as a dropped exit. Dropping by any other route (closing as completed, deleting the issue) is indistinguishable from finishing or from never having existed |
 
 Parked and dropped are verdicts, never blockages: the change LEFT the linear
 stream, on purpose, and a reader should see that it did rather than watch it
@@ -333,7 +369,7 @@ block defined in `.claude/skills/getting-started/SKILL.md`, Step 3c, so the
 session says it in the one shape every skill uses, and never reports the work
 complete in a reply that carries it. The record is what the cockpit reads
 later; the block is what the person reading this session sees now, and the two
-failures in issue #277 were both in the second (forge decision record 0037).
+failures in issue #277 were both in the second (a forge decision record).
 
 The phase is NOT rewritten. The record keeps saying which transition was in
 progress, and its `updated_at` stops moving; after the recency window the
@@ -343,17 +379,18 @@ let a stalled session keep claiming a transition it is not working on.
 
 **A verdict of park or drop.** Not a blockage at all; see the gates above.
 
-## Quick mode and resumption
+## Tiers, quick mode and resumption
 
-`/feature --quick` skips `challenging` through `planning`: the record goes
-from `captured` straight to `building`, and the cockpit's visit history shows
-the gap. That is the honest rendering of a change that genuinely skipped four
-states, and quick mode stays available for the work it exists for.
+The size tier decides which positions a change passes through (`/feature`,
+`### Size`, owns the rubric). An S change goes `captured`, `committed` and
+`built`, plus `building` where a cockpit reads transitions, and the record's
+`phases` history shows the gap. That is the honest rendering of a change that
+genuinely skipped the interview and the plan. `--quick` forces the S tier and
+nothing else.
 
-`--ship` is orthogonal to it and leaves no gap at all: it changes who answers
-a gate, never which positions a change passes through, so a `--ship` run
-writes every phase a supervised run would. Both are session-scoped, and
-`/continue` re-arms neither.
+`--ship` is orthogonal to the tier: it changes who answers a gate, never which
+positions a change passes through, so a `--ship` run writes every position its
+tier would. Both are session-scoped, and `/continue` re-arms neither.
 
 `/continue` re-derives the phase from the durable artefacts (work item,
 challenge, spec, tickets, open tickets) and WRITES it, rather than trusting

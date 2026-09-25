@@ -1,0 +1,125 @@
+name: Verify Railway deploy
+
+# Every Railway environment that exists gets its deploy checked, in Actions
+# rather than in a session: a feature preview after each provisioning run,
+# preprod after every push to it, production after every push to main. The
+# check is verify-deploy.sh, which compares the x-harness-sha header the app
+# serves with the commit that should be live (and accepts a commit whose
+# changes touch no watched path as equivalent). The answer lands as a commit
+# status, deploy/preview, deploy/preprod or deploy/production, on the commit
+# that should be serving, so it shows on the pull request and the commit list.
+#
+# A feature that did not opt in to a preview (.harness-feature line 2 is not
+# `preview: yes`) has no .railway-url and gets no status. A repository that
+# has not finished its Railway bootstrap has no preprod-url or production-url
+# line in its history and gets no status either. Neither is a failure.
+#
+# The status is information, never a gate: the preprod merge gate waits for
+# the `check` and `tests` runs only, and /release keeps its own production
+# check before it closes the change.
+#
+# The preview check is CALLED by feature-branch-railway.yml, as a job that
+# needs its provisioning job, and is handed the session branch and commit.
+# It cannot follow that workflow by workflow_run: a run started by
+# workflow_run carries the default branch as its head, so a third link in
+# the chain would never see the claude/ branch.
+on:
+  workflow_call:
+    inputs:
+      head_branch:
+        description: The claude/ branch whose push provisioned the preview
+        required: true
+        type: string
+      head_sha:
+        description: The pushed commit
+        required: true
+        type: string
+  push:
+    branches: [preprod, main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    concurrency:
+      # A newer deploy of the same environment supersedes an older check.
+      group: verify-deploy-${{ inputs.head_branch || github.ref_name }}
+      cancel-in-progress: true
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.head_sha || github.sha }}
+          # verify-deploy.sh diffs the served commit against the expected
+          # one to decide equivalence, so it needs both in history.
+          fetch-depth: 0
+
+      - name: Work out the environment, its URL and the commit that should serve
+        id: target
+        env:
+          HEAD_BRANCH: ${{ inputs.head_branch }}
+          REF_NAME: ${{ github.ref_name }}
+          PUSHED_SHA: ${{ github.sha }}
+        run: |
+          URL=""; SHA=""; ENVIRONMENT=""
+          if [ -n "$HEAD_BRANCH" ]; then
+            case "$HEAD_BRANCH" in claude/*) ;; *) echo "Not a session branch: $HEAD_BRANCH"; exit 0 ;; esac
+            NAME=$(bash .claude/scripts/resolve-feature-name.sh "$HEAD_BRANCH")
+            if git fetch -q origin "feature/$NAME" 2>/dev/null; then
+              URL=$(git show "origin/feature/$NAME:.railway-url" 2>/dev/null | head -n1 | tr -d '[:space:]' || true)
+              SHA=$(git rev-parse "origin/feature/$NAME")
+            fi
+            ENVIRONMENT=preview
+            [ -n "$URL" ] || echo "::notice::feature/$NAME has no .railway-url (no preview requested, or not published yet); nothing to verify."
+          else
+            if [ "$REF_NAME" = main ]; then ENVIRONMENT=production; KEY=production-url; else ENVIRONMENT=preprod; KEY=preprod-url; fi
+            URL=$(git log --format=%B | sed -n "s/^$KEY: *//p" | head -n1 | tr -d '[:space:]')
+            SHA="$PUSHED_SHA"
+            [ -n "$URL" ] || echo "::notice::No $KEY line in this repository's history (Railway bootstrap not finished); nothing to verify."
+          fi
+          # Only a real URL: the bootstrap writes `(unknown)` when it could
+          # not resolve a domain, and a status aimed at that helps nobody.
+          case "$URL" in
+            http://*|https://*) ;;
+            "") ;;
+            *) echo "::notice::The $ENVIRONMENT URL on record is not a URL ($URL); nothing to verify."; URL="" ;;
+          esac
+          {
+            echo "url=$URL"
+            echo "sha=$SHA"
+            echo "environment=$ENVIRONMENT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mark the check pending
+        if: steps.target.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+          URL: ${{ steps.target.outputs.url }}
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+        run: |
+          gh api -X POST "repos/${{ github.repository }}/statuses/$SHA" \
+            -f state=pending -f context="deploy/$ENVIRONMENT" \
+            -f description="Waiting for $URL to serve ${SHA:0:7}" -f target_url="$URL" >/dev/null
+
+      - name: Verify the deploy and report it
+        if: steps.target.outputs.url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+          URL: ${{ steps.target.outputs.url }}
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+        run: |
+          RESULT=$(bash .claude/scripts/verify-deploy.sh "$URL" "$SHA" | head -n1)
+          echo "$RESULT"
+          case "$RESULT" in
+            deploy-verified:*|deploy-equivalent:*) STATE=success ;;
+            *) STATE=failure ;;
+          esac
+          # A status description is capped at 140 characters.
+          gh api -X POST "repos/${{ github.repository }}/statuses/$SHA" \
+            -f state="$STATE" -f context="deploy/$ENVIRONMENT" \
+            -f description="${RESULT:0:139}" -f target_url="$URL" >/dev/null
+          [ "$STATE" = success ] || echo "::warning::$ENVIRONMENT at $URL is not serving ${SHA:0:7}: $RESULT"

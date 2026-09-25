@@ -6,6 +6,9 @@ on:
       - 'claude/**'
     paths-ignore:
       - '.pr-description.md'
+      # A journey-only push is journey-sync.yml's alone: the record reaches
+      # feature/<name> with the next push that carries anything else.
+      - '.harness/journey/**'
 
 concurrency:
   group: feature-${{ github.ref_name }}
@@ -75,7 +78,7 @@ jobs:
 
           # Merge the session commit, resolving the one class of conflict this
           # chain produces itself. to-preprod strips the signal files from
-          # feature/<name> the moment it opens the PR; when that PR cannot
+          # feature/<name> before it opens the PR; when that PR cannot
           # merge (preprod moved), the session's recovery push still carries
           # them, often edited, and the merge stops on modify/delete. Signal
           # files are plumbing rather than reviewable content, so they resolve

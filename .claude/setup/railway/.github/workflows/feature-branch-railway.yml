@@ -35,6 +35,12 @@ jobs:
     #    environment (claude-to-preprod.yml gates the teardown on the review
     #    flag), so it still wants provisioning and healing to run.
     #
+    #    A third skip is not a subject but a marker: previews are opt-in, and
+    #    line 2 of .harness-feature at the pushed commit must read
+    #    `preview: yes` (set-feature-name.sh --preview=yes writes it; /review
+    #    flips it) or the job exits after the extract step, before the fork.
+    #    It cannot live in this guard, which sees only the event payload.
+    #
     #    The literal is a contract between the /to-preprod skill that writes it
     #    and this guard that matches it, like the bootstrap foundation marker
     #    and the preflight result subject. It is spelled out inline rather
@@ -79,17 +85,33 @@ jobs:
           # Keep this validation identical to
           # .claude/scripts/resolve-feature-name.sh and the other workflows.
           HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
-          SLUG="$(curl -fsS \
+          MARKER="$(curl -fsS \
             -H "Authorization: Bearer ${{ github.token }}" \
             -H "Accept: application/vnd.github.raw" \
             "https://api.github.com/repos/${{ github.repository }}/contents/.harness-feature?ref=$HEAD_SHA" \
-            2>/dev/null | head -n1 | tr -d '[:space:]' || true)"
+            2>/dev/null || true)"
+          SLUG="$(printf '%s\n' "$MARKER" | head -n1 | tr -d '[:space:]')"
           if printf '%s' "$SLUG" | grep -Eq '^[a-z0-9][a-z0-9-]{0,40}$' && [ "$SLUG" != preprod ] && [ "$SLUG" != dev ] && [ "$SLUG" != main ]; then FEATURE_NAME="$SLUG"; else FEATURE_NAME="$CODENAME"; fi
           echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
           echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
+          # Previews are opt-in. Line 2 of the same file at the pushed commit
+          # is the marker (`preview: yes|no`, written by set-feature-name.sh
+          # --preview=); only an exact `preview: yes` provisions. A one-line
+          # file, a `no`, or no file at all (the codename fallback above) all
+          # mean no environment, and every step below is gated on it.
+          PREVIEW=no
+          if [ "$(printf '%s\n' "$MARKER" | sed -n 2p | tr -d '[:space:]')" = "preview:yes" ]; then
+            PREVIEW=yes
+          fi
+          echo "preview=$PREVIEW" >> "$GITHUB_OUTPUT"
+
+      - name: Skip provisioning unless the feature opted in to a preview
+        if: steps.feature.outputs.preview != 'yes'
+        run: |
+          echo "::notice::No Railway preview for ${{ steps.feature.outputs.branch }}: .harness-feature at the pushed commit does not read 'preview: yes' on line 2. Nothing is forked; 'bash .claude/scripts/set-feature-name.sh --preview=yes ${{ steps.feature.outputs.name }}' or /review opts in."
 
       - name: Check if Railway environment already exists
-        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        if: steps.feature.outputs.preview == 'yes' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
         id: check
         run: |
           FEATURE_NAME="${{ steps.feature.outputs.name }}"
@@ -111,13 +133,13 @@ jobs:
           fi
 
       - uses: actions/checkout@v7
-        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        if: steps.feature.outputs.preview == 'yes' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
         with:
           ref: ${{ steps.feature.outputs.branch }}
           fetch-depth: 1
 
       - name: Create Railway environment and connect branch
-        if: steps.check.outputs.exists != 'true' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        if: steps.check.outputs.exists != 'true' && steps.feature.outputs.preview == 'yes' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
         run: |
           FEATURE_NAME="${{ steps.feature.outputs.name }}"
           FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
@@ -409,7 +431,7 @@ jobs:
         # repointed here, followed by a redeploy of the app service so
         # the running deployment matches the connected branch. Idempotent:
         # no-op when all triggers already point at the feature branch.
-        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        if: steps.feature.outputs.preview == 'yes' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
         run: |
           FEATURE_NAME="${{ steps.feature.outputs.name }}"
           FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
@@ -488,7 +510,7 @@ jobs:
         # step governs only the app + Postgres services. We deliberately
         # ship no untested storage-region mutation here. See
         # claude/HARNESS.md "Region default".
-        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        if: steps.feature.outputs.preview == 'yes' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
         run: |
           FEATURE_NAME="${{ steps.feature.outputs.name }}"
           PROJECT_ID="$RAILWAY_PROJECT_ID"
@@ -595,7 +617,7 @@ jobs:
         # claude-to-preprod.yml strips the file with .railway-url on the merge
         # path, and feature-merge-cleanup.yml removes one that reached preprod
         # anyway. Forge decision record 0043.
-        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        if: steps.feature.outputs.preview == 'yes' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
         run: |
           FEATURE_NAME="${{ steps.feature.outputs.name }}"
           FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
@@ -743,7 +765,7 @@ jobs:
         # half-provisioned run recovers on the next trigger for the same branch.
         #
         # Forge decision record 0016.
-        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
+        if: steps.feature.outputs.preview == 'yes' && env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
         run: |
           FEATURE_NAME="${{ steps.feature.outputs.name }}"
           FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
@@ -823,8 +845,8 @@ jobs:
 
           # Is the environment this URL names still there? Asked again, now,
           # because minutes can pass between the lookup above and this push:
-          # environmentCreate forks the whole preprod environment and the
-          # deployment wait that follows is slower still.
+          # environmentCreate forks the whole preprod environment, and the
+          # heal steps between it and this one each round-trip Railway.
           #
           # On the merge path claude-to-preprod.yml deletes the environment
           # BEFORE it strips the signal files and opens the merge, so an
@@ -899,66 +921,16 @@ jobs:
 
           echo "::warning::Could not push .railway-url after 5 attempts. Fetch it manually: git fetch origin $FEATURE_BRANCH && git show origin/$FEATURE_BRANCH:.railway-url"
 
-      - name: Wait for Railway deployment
-        if: env.RAILWAY_ACCOUNT_TOKEN != '' && env.RAILWAY_PROJECT_ID != ''
-        run: |
-          FEATURE_NAME="${{ steps.feature.outputs.name }}"
-          PROJECT_ID="$RAILWAY_PROJECT_ID"
-          API_URL="https://backboard.railway.com/graphql/v2"
-
-          # Same retry-hardened helper as the create step: never trust a
-          # single malformed response from a slow Railway mutation.
-          gql() {
-            local resp
-            for _try in 1 2 3; do
-              resp=$(curl -s --max-time 120 -X POST "$API_URL" \
-                -H "Authorization: Bearer $RAILWAY_ACCOUNT_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "{\"query\":\"$1\"}") || true
-              if echo "$resp" | jq . >/dev/null 2>&1; then
-                echo "$resp"
-                return 0
-              fi
-              sleep 5
-            done
-            echo '{"data":null}'
-          }
-
-          # Find the environment ID for this feature
-          ENVS=$(gql "query { environments(projectId: \\\"$PROJECT_ID\\\") { edges { node { id name } } } }")
-          ENV_ID=$(echo "$ENVS" | jq -r ".data.environments.edges[].node | select(.name == \"$FEATURE_NAME\") | .id" 2>/dev/null) || true
-
-          if [ -z "$ENV_ID" ]; then
-            echo "Could not find Railway environment for '$FEATURE_NAME', skipping deployment wait"
-            exit 0
-          fi
-
-          # Find the app service ID (filter out managed services like Postgres/storage)
-          SERVICES=$(gql "query { project(id: \\\"$PROJECT_ID\\\") { services { edges { node { id name } } } } }")
-          SERVICE_ID=$(echo "$SERVICES" | jq -r '[.data.project.services.edges[].node | select(.name | test("postgres|db|storage"; "i") | not)][0].id // empty' 2>/dev/null) || true
-
-          if [ -z "$SERVICE_ID" ]; then
-            echo "Could not find any services, skipping deployment wait"
-            exit 0
-          fi
-
-          # Poll for deployment status (max 3 minutes)
-          echo "Waiting for Railway deployment to complete..."
-          for i in $(seq 1 18); do
-            sleep 10
-            RESULT=$(gql "query { deployments(input: { projectId: \\\"$PROJECT_ID\\\", serviceId: \\\"$SERVICE_ID\\\", environmentId: \\\"$ENV_ID\\\" }, first: 1) { edges { node { id status } } } }")
-            STATUS=$(echo "$RESULT" | jq -r '.data.deployments.edges[0].node.status // empty' 2>/dev/null) || true
-            echo "  Status: $STATUS (check $i/18)"
-
-            if [ "$STATUS" = "SUCCESS" ]; then
-              echo "Railway deployment succeeded!"
-              exit 0
-            fi
-
-            if [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CRASHED" ]; then
-              echo "::warning::Railway deployment $STATUS"
-              exit 0
-            fi
-          done
-
-          echo "::warning::Timed out waiting for Railway deployment (3 minutes)"
+  # The deploy check for the preview this job provisioned. Called here, not
+  # chained by workflow_run, because a workflow_run-started run sees the
+  # default branch as its head; this job still has the session's branch and
+  # commit in its own event. Skipped with the job it needs.
+  verify-preview:
+    needs: provision-railway
+    permissions:
+      contents: read
+      statuses: write
+    uses: ./.github/workflows/verify-deploy.yml
+    with:
+      head_branch: ${{ github.event.workflow_run.head_branch }}
+      head_sha: ${{ github.event.workflow_run.head_sha }}

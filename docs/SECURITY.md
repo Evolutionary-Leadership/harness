@@ -1,8 +1,8 @@
 # Security
 
 What this project trusts, what it does not, and which tests prove it. Update
-this file in the same commit as any change to auth, sessions, secrets, input
-validation, or limits.
+this file in the same pull request as any change to auth, sessions, secrets,
+input validation, or limits.
 
 This is not a policy document. It is the map an agent needs before touching
 anything security-relevant, so it names files and exports rather than

@@ -17,18 +17,9 @@ const run = promisify(execFile);
 // Definite assignment: beforeAll sets it. The one place that cannot assume so
 // is afterAll, which runs even when beforeAll threw, and guards with `?.`.
 let ctx!: IntegrationDb;
-let databaseUrl: string;
 
 beforeAll(async () => {
   ctx = await setupIntegrationDb();
-  const url = process.env.TEST_DATABASE_URL;
-  if (!url) {
-    throw new Error(
-      "tests/integration/seed.test.ts needs TEST_DATABASE_URL: the seed runs as a " +
-        "subprocess, so it cannot reach a Testcontainers URL held only in this process.",
-    );
-  }
-  databaseUrl = url;
 });
 
 afterAll(async () => {
@@ -48,7 +39,10 @@ async function runSeed(env: SeedEnv = {}): Promise<{ stdout: string; code: numbe
     const result = await run("pnpm", ["seed"], {
       env: {
         ...process.env,
-        DATABASE_URL: databaseUrl,
+        // This file's own database, cloned from the template the global setup
+        // migrated. A subprocess can reach it because the global setup exported
+        // the server URL into the environment before the workers forked.
+        DATABASE_URL: ctx.url,
         BETTER_AUTH_SECRET: "integration-test-secret-that-is-long-enough",
         SEED_DATA: "true",
         RAILWAY_ENVIRONMENT_NAME: undefined,

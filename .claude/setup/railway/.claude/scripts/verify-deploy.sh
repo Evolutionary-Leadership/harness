@@ -61,7 +61,7 @@ if [[ -z "$URL" ]]; then
   fi
   FEATURE_NAME=$(bash "$SCRIPT_DIR/resolve-feature-name.sh" "$BRANCH")
   FEATURE_BRANCH="feature/$FEATURE_NAME"
-  URL=$(bash "$SCRIPT_DIR/get-railway-url.sh" "$FEATURE_BRANCH")
+  URL=$(bash "$SCRIPT_DIR/get-railway-url.sh" "$FEATURE_BRANCH" --wait)
   if [[ -z "$URL" ]]; then
     echo "deploy-pending: (no-url) serving=none"
     exit 0

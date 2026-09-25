@@ -3,6 +3,9 @@
 # Prefer the explicit slug in .harness-feature (set via set-feature-name.sh),
 # otherwise fall back to the random session codename. Keeps the shell consumers
 # in agreement with the GitHub workflows.
+# Only line 1 of .harness-feature is the slug. Line 2, when present, is the
+# preview marker (`preview: yes|no`) that only feature-branch-railway.yml
+# reads; this resolver and every other reader take `head -n1`.
 # Usage: resolve-feature-name.sh [<branch>]
 set -euo pipefail
 BRANCH="${1:-$(git branch --show-current 2>/dev/null || echo "")}"

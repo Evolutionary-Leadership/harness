@@ -407,8 +407,80 @@ jobs:
             sleep "$i"
           done
 
+      # --- Landing on main ---------------------------------------------------
+      # Two paths, one outcome: main's tip becomes a merge commit whose second
+      # parent is preprod's tip. The direct path merges and pushes from here,
+      # as the PAT, so that the push starts the workflows that watch main (a
+      # GITHUB_TOKEN push starts none). It is the whole release when nothing
+      # protects main. The pull request path below is the fallback, kept
+      # whole for a repository whose branch protection refuses a direct push:
+      # it opens the PR, merges it, and is the one place that waits on a PR.
+      # Each later step reads the landed commit from whichever path ran, so
+      # the tag and the fast-forward never poll a PR that was never opened.
+      - name: Merge preprod into main
+        id: direct
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          set -uo pipefail
+          VERSION="${{ steps.release.outputs.version }}"
+          VERSION="v${VERSION#v}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # The PAT goes into the remote URL and the push resets the http
+          # extraheader that checkout persisted, because git sends only that
+          # header when it is set and ignores URL credentials. Outside Actions
+          # (the tests run this block against a local remote) there is no
+          # token and no header, so the push is a plain one.
+          PUSH_CONFIG=()
+          if [ -n "${GH_TOKEN:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+            git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            PUSH_CONFIG=(-c "http.https://github.com/.extraheader=")
+          fi
+
+          fall_back() {
+            echo "::warning::$1 Falling back to a release pull request."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          if ! git fetch origin main preprod; then
+            fall_back "Could not fetch main and preprod (a scaffold with no main branch yet?)."
+          fi
+
+          PUSH_ERR="${RUNNER_TEMP:-/tmp}/direct-push.err"
+          for attempt in 1 2 3; do
+            git checkout -q -B main origin/main || fall_back "Could not check out main."
+            if ! git merge --no-ff origin/preprod -m "release: ${VERSION}"; then
+              git merge --abort > /dev/null 2>&1 || true
+              fall_back "preprod does not merge cleanly into main."
+            fi
+
+            if git ${PUSH_CONFIG[@]+"${PUSH_CONFIG[@]}"} push origin main 2> "$PUSH_ERR"; then
+              echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
+              echo "preprod merged into main directly as ${VERSION}: $(git rev-parse --short HEAD)."
+              exit 0
+            fi
+
+            cat "$PUSH_ERR" >&2
+            # A protected branch refuses every attempt the same way, so retrying
+            # only delays the fallback. Anything else (a lost race on main, a
+            # transient failure) is worth a fresh merge onto the new tip.
+            if grep -qiE 'protected|required status' "$PUSH_ERR"; then
+              fall_back "main refused a direct push (branch protection)."
+            fi
+            echo "Direct push attempt $attempt failed; refetching main..."
+            git fetch origin main || true
+            sleep "$attempt"
+          done
+          fall_back "main refused a direct push three times."
+
       - name: Create release PR
         id: pr
+        if: steps.direct.outputs.pushed != 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
@@ -425,6 +497,7 @@ jobs:
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Merge release PR
+        if: steps.direct.outputs.pushed != 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
@@ -445,26 +518,41 @@ jobs:
             done
           fi
 
-      - name: Back-merge main into preprod (sync ahead/behind to 0)
+      # The one merged-wait. The direct path knows it merged, so only the
+      # fallback has a PR to watch; the steps after this read the landed
+      # commit from this step or from the direct one, never by polling again.
+      - name: Wait for the release PR to merge
+        id: merged
+        if: steps.direct.outputs.pushed != 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           PR_NUMBER="${{ steps.pr.outputs.number }}"
 
+          STATE=""
           for i in $(seq 1 30); do
             STATE=$(gh pr view "$PR_NUMBER" --json state --jq .state)
             if [ "$STATE" = "MERGED" ]; then
               break
             fi
-            echo "Waiting for PR #$PR_NUMBER to merge before back-merge... ($i/30)"
+            echo "Waiting for PR #$PR_NUMBER to merge... (attempt $i/30)"
             sleep 10
           done
 
           if [ "$STATE" != "MERGED" ]; then
-            echo "::warning::PR not merged after 5 minutes. Skipping back-merge; next release will re-sync."
+            echo "::warning::PR #$PR_NUMBER not merged after 5 minutes. Skipping the back-merge and the tag; create the tag manually after the merge, and the next release will re-sync preprod."
+            echo "merged=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          echo "merge_sha=$(gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid)" >> "$GITHUB_OUTPUT"
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Back-merge main into preprod (sync ahead/behind to 0)
+        if: steps.direct.outputs.pushed == 'true' || steps.merged.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -486,26 +574,13 @@ jobs:
           exit 0
 
       - name: Create git tag and GitHub Release
+        if: steps.direct.outputs.pushed == 'true' || steps.merged.outputs.merged == 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           VERSION="${{ steps.release.outputs.version }}"
-          PR_NUMBER="${{ steps.pr.outputs.number }}"
-
-          # Wait for PR to actually be merged (handles --auto case)
-          for i in $(seq 1 30); do
-            STATE=$(gh pr view "$PR_NUMBER" --json state --jq .state)
-            if [ "$STATE" = "MERGED" ]; then
-              break
-            fi
-            echo "Waiting for PR #$PR_NUMBER to merge... (attempt $i/30)"
-            sleep 10
-          done
-
-          if [ "$STATE" != "MERGED" ]; then
-            echo "::warning::PR #$PR_NUMBER not yet merged after 5 minutes. Skipping tag. Create tag manually after merge."
-            exit 0
-          fi
+          # The commit that landed on main, from whichever path put it there.
+          MERGE_SHA="${{ steps.direct.outputs.merge_sha || steps.merged.outputs.merge_sha }}"
 
           # --- Refuse to publish an incoherent tag -------------------------
           # Where a version bump workflow maintains a VERSION file, the tag
@@ -519,8 +594,11 @@ jobs:
           #
           # Forge decision record 0018.
           git fetch origin main
-          if git cat-file -e origin/main:VERSION 2>/dev/null; then
-            MAIN_VERSION=$(git show origin/main:VERSION | tr -d '[:space:]')
+          if [ -z "$MERGE_SHA" ]; then
+            MERGE_SHA=$(git rev-parse origin/main)
+          fi
+          if git cat-file -e "${MERGE_SHA}:VERSION" 2>/dev/null; then
+            MAIN_VERSION=$(git show "${MERGE_SHA}:VERSION" | tr -d '[:space:]')
             if [ "$VERSION" != "v${MAIN_VERSION}" ]; then
               echo "::error::Refusing to tag ${VERSION}: VERSION on main is ${MAIN_VERSION}, so the tag should be v${MAIN_VERSION}. The tag publishes the version; it does not carry one of its own."
               exit 1
@@ -533,7 +611,7 @@ jobs:
           fi
 
           # Tag the merge commit on main
-          git tag "$VERSION" origin/main
+          git tag "$VERSION" "$MERGE_SHA"
           git push origin "$VERSION"
 
           # Create GitHub Release

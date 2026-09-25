@@ -7,6 +7,9 @@
  *   node scripts/check-docs.mjs            # ERRORs exit 1, WARNs exit 0
  *   node scripts/check-docs.mjs --warn-only # never exit non-zero
  *   node scripts/check-docs.mjs --quiet     # only print problems
+ *   node scripts/check-docs.mjs --strict    # surface-count drift is an ERROR
+ *   node scripts/check-docs.mjs --diff <ref> # what the change since <ref>
+ *                                            # means for the docs (see below)
  *
  * Wire it into `.harness-version` so broken docs block auto-merge:
  *
@@ -22,6 +25,7 @@
  *   ERROR  docs/... paths mentioned in source files resolve
  *   ERROR  ADR files carry Status: and Date: lines
  *   ERROR  surface-count directives match the code they claim to describe
+ *          (under --strict or on a pull_request CI run; a warning otherwise)
  *   WARN   docs nothing links to except the index (orphans)
  *   WARN   files over their layer's line budget
  *   WARN   anchor links whose heading is missing
@@ -29,15 +33,42 @@
  *
  * Add a `.checkdocsignore` at the repo root (one glob per line) to hide
  * subtrees whose markdown describes some other repo's layout.
+ *
+ * `--diff <ref>` runs none of the checks. It answers one question for the
+ * agent that keeps the docs honest: what does the change since <ref> (the
+ * working tree against the merge base of <ref> and HEAD, plus untracked
+ * files) mean for the docs? One line per finding, three shapes:
+ *
+ *   doc: docs/architecture/<file>.md (sources: <glob>) <- <changed path>
+ *   count: docs/<file>.md glob=<glob> pattern=<pattern> <old> -> <new>
+ *   ref: <docs path or ADR id newly referenced in the diff>
+ *
+ * or the single word `nothing`. Exit 0 either way.
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, relative, dirname, resolve, sep, extname, basename } from "node:path";
 
 const ROOT = process.cwd();
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+// `--diff <ref>` and `--diff=<ref>` both work; the ref is not a flag.
+let DIFF_REF = null;
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--diff") DIFF_REF = argv[i + 1] ?? "";
+  else if (argv[i].startsWith("--diff=")) DIFF_REF = argv[i].slice("--diff=".length);
+}
+const args = new Set(argv.filter((a, i) => !(a === "--diff" || argv[i - 1] === "--diff")));
 const WARN_ONLY = args.has("--warn-only");
 const QUIET = args.has("--quiet");
+// A surface-count mismatch blocks a pull request and only nags a feature
+// branch: the `check:` line is one command for both runs, so the checker
+// reads the event name itself. `--strict` forces the blocking form anywhere.
+const STRICT = args.has("--strict") || process.env.GITHUB_EVENT_NAME === "pull_request";
+if (DIFF_REF === "") {
+  console.error("check-docs: --diff needs a ref (a branch, tag or commit)");
+  process.exit(1);
+}
 
 /** Line budgets per layer. Over budget means the content wants a new home. */
 const BUDGETS = {
@@ -175,6 +206,62 @@ function parseFrontMatter(text) {
   return text.slice(text.indexOf("\n") + 1, end + 1);
 }
 
+/** The `sources:` globs of an architecture doc's front-matter. */
+function sourceGlobs(fm) {
+  return [...fm.matchAll(/^\s*-\s*(.+?)\s*$/gm)].map((m) => m[1].replace(/^["']|["']$/g, ""));
+}
+
+const ADR_MENTION = /\bADR[ -]?(\d{4})\b/g;
+// Lookbehind so `other-repo/docs/x.md` is not read as a path in THIS repo.
+const DOC_PATH = /(?<![\w/-])(docs\/[A-Za-z0-9._\-/]+\.md)/g;
+const isDocPathClaim = (p) => !(p.includes("*") || p.includes("<") || p.includes("NNNN"));
+
+/**
+ * The surface-count directives in a markdown file, each with the number of
+ * body rows in the table that follows it. Declared directly above the table
+ * it governs:
+ *
+ *   <!-- surface-count: glob=src/routes/**\/*.ts pattern=app\.(get|post)\( -->
+ *
+ * Patterns compile with the "m" flag so ^ and $ anchor per line; without it a
+ * ^-anchored directive silently matches nothing and reports zero instead of
+ * failing loudly. An invalid pattern comes back with `re: null`.
+ */
+function surfaceDirectives(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const directive = lines[i].match(/<!--\s*surface-count:\s*glob=(\S+)\s+pattern=(.+?)\s*-->/);
+    if (!directive) continue;
+    const [, glob, patternSrc] = directive;
+    let re = null;
+    try {
+      re = new RegExp(patternSrc, "gm");
+    } catch {
+      // reported by the caller
+    }
+    let j = i + 1;
+    while (j < lines.length && !lines[j].trim().startsWith("|")) j++;
+    let rows = 0;
+    let sawSeparator = false;
+    for (; j < lines.length && lines[j].trim().startsWith("|"); j++) {
+      if (/^\s*\|[\s|:-]+\|\s*$/.test(lines[j])) {
+        sawSeparator = true;
+        continue;
+      }
+      if (sawSeparator) rows++;
+    }
+    out.push({ glob, patternSrc, re, rows });
+  }
+  return out;
+}
+
+/** Regex matches of `re` summed over `files`, each read through `readFile`. */
+function countMatches(re, files, readFile) {
+  let n = 0;
+  for (const f of files) n += (readFile(f).match(re) || []).length;
+  return n;
+}
+
 // -------------------------------------------------------------- collect data
 
 /**
@@ -205,7 +292,100 @@ const INDEX = "docs/README.md";
 const hasDocsDir = docFiles.length > 0;
 
 if (!hasDocsDir) {
-  if (!QUIET) console.log("check-docs: no docs/ directory found, nothing to check.");
+  if (DIFF_REF !== null) console.log("nothing");
+  else if (!QUIET) console.log("check-docs: no docs/ directory found, nothing to check.");
+  process.exit(0);
+}
+
+// ------------------------------------------------- --diff <ref>: what changed
+//
+// The docs agent used to read the whole diff and decide for itself what the
+// docs had to say about it. This mode does the mechanical half of that
+// reading: which architecture docs claim a changed path in `sources:`, which
+// surface tables count differently now, and which docs paths and ADR ids the
+// diff starts mentioning. The agent gets the list as its whole scope, and
+// runs only when the list is not `nothing`.
+
+if (DIFF_REF !== null) {
+  const gitOut = (...gitArgs) =>
+    execFileSync("git", gitArgs, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  // The merge base is what `<ref>...HEAD` compares against, and comparing the
+  // working tree to it counts uncommitted work too.
+  let base;
+  try {
+    base = gitOut("merge-base", DIFF_REF, "HEAD").trim();
+  } catch {
+    try {
+      base = gitOut("rev-parse", "--verify", "--quiet", `${DIFF_REF}^{commit}`).trim();
+    } catch {
+      console.error(`check-docs: --diff ${DIFF_REF}: not a commit in this repository`);
+      process.exit(1);
+    }
+  }
+  const splitLines = (text) => text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const untracked = splitLines(gitOut("ls-files", "--others", "--exclude-standard"));
+  const changed = [...new Set([...splitLines(gitOut("diff", "--name-only", base)), ...untracked])].sort();
+  const findings = [];
+
+  // doc: an architecture doc whose `sources:` glob claims a changed path.
+  for (const f of docFiles.filter((d) => d.startsWith("docs/architecture/"))) {
+    if (TEMPLATE_BASENAMES.has(basename(f))) continue;
+    const fm = parseFrontMatter(read(join(ROOT, f)));
+    if (!fm) continue;
+    for (const g of sourceGlobs(fm)) {
+      const re = globToRegExp(g);
+      for (const p of changed) if (re.test(p)) findings.push(`doc: ${f} (sources: ${g}) <- ${p}`);
+    }
+  }
+
+  // count: a surface-count directive whose code count moved. The old side is
+  // the base commit's tree, read through `git show`, under the same ignore
+  // globs the live side uses.
+  const oldTree = splitLines(gitOut("ls-tree", "-r", "--name-only", base)).filter(
+    (f) => !ignoreGlobs.some((re) => re.test(f))
+  );
+  const readOld = (p) => {
+    try {
+      return gitOut("show", `${base}:${p}`);
+    } catch {
+      return "";
+    }
+  };
+  for (const f of markdownFiles) {
+    if (TEMPLATE_BASENAMES.has(basename(f))) continue;
+    for (const { glob, patternSrc, re } of surfaceDirectives(read(join(ROOT, f)).split("\n"))) {
+      if (!re) continue;
+      const globRe = globToRegExp(glob);
+      const now = countMatches(re, allFiles.filter((c) => globRe.test(c)), (c) => read(join(ROOT, c)));
+      const before = countMatches(re, oldTree.filter((c) => globRe.test(c)), readOld);
+      if (before !== now) findings.push(`count: ${f} glob=${glob} pattern=${patternSrc} ${before} -> ${now}`);
+    }
+  }
+
+  // ref: a docs path or ADR id the added lines mention and the removed lines
+  // do not. A reference that only moved is not news.
+  const collect = (text, into) => {
+    for (const m of text.matchAll(ADR_MENTION)) into.add(`ADR ${m[1]}`);
+    for (const m of text.matchAll(DOC_PATH)) if (isDocPathClaim(m[1])) into.add(m[1]);
+  };
+  const added = new Set();
+  const removed = new Set();
+  for (const line of gitOut("diff", base).split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) collect(line.slice(1), added);
+    else if (line.startsWith("-")) collect(line.slice(1), removed);
+  }
+  for (const p of untracked) {
+    if (!(p.endsWith(".md") || SOURCE_EXT.has(extname(p)))) continue;
+    try {
+      collect(read(join(ROOT, p)), added);
+    } catch {
+      // unreadable untracked file: nothing to reference
+    }
+  }
+  for (const r of [...added].sort()) if (!removed.has(r)) findings.push(`ref: ${r}`);
+
+  console.log(findings.length ? findings.join("\n") : "nothing");
   process.exit(0);
 }
 
@@ -307,7 +487,7 @@ for (const f of docFiles.filter((d) => d.startsWith("docs/architecture/"))) {
     error(f, "architecture docs need YAML front-matter with a `sources:` list of globs so drift is detectable");
     continue;
   }
-  const globs = [...fm.matchAll(/^\s*-\s*(.+?)\s*$/gm)].map((m) => m[1].replace(/^["']|["']$/g, ""));
+  const globs = sourceGlobs(fm);
   if (globs.length === 0) {
     error(f, "`sources:` is empty; list the globs this doc describes");
     continue;
@@ -321,10 +501,6 @@ for (const f of docFiles.filter((d) => d.startsWith("docs/architecture/"))) {
 }
 
 // --------------------------------------------------- ERROR: ADR back-references
-
-const ADR_MENTION = /\bADR[ -]?(\d{4})\b/g;
-// Lookbehind so `other-repo/docs/x.md` is not read as a path in THIS repo.
-const DOC_PATH = /(?<![\w/-])(docs\/[A-Za-z0-9._\-/]+\.md)/g;
 
 for (const f of [...sourceFiles, ...markdownFiles]) {
   // TEMPLATE.md files are scaffolding: their examples are illustrations, not
@@ -349,7 +525,7 @@ for (const f of [...sourceFiles, ...markdownFiles]) {
   }
   for (const m of scanned.matchAll(DOC_PATH)) {
     const target = m[1];
-    if (target.includes("*") || target.includes("<") || target.includes("NNNN")) continue;
+    if (!isDocPathClaim(target)) continue;
     if (!fileSet.has(target)) {
       error(f, `references ${target}, which does not exist`);
     }
@@ -368,28 +544,21 @@ for (const f of adrFiles) {
   }
 }
 
-// -------------------------------------------------- ERROR: surface-table counts
+// ------------------------------------ ERROR or WARN: surface-table counts
 //
-// Declare a counted surface directly above the table it governs:
-//
-//   <!-- surface-count: glob=src/routes/**/*.ts pattern=app\.(get|post)\( -->
-//
-// The checker counts regex matches across the glob and compares against the
-// number of body rows in the next markdown table. Patterns compile with the
-// "m" flag so ^ and $ anchor per line; without it a ^-anchored directive
-// silently matches nothing and reports zero instead of failing loudly.
+// The checker counts regex matches across the directive's glob (see
+// surfaceDirectives) and compares against the number of body rows in the
+// next markdown table. A malformed directive is always an error. A mismatch
+// is an error only under STRICT: on a feature branch the table is allowed to
+// lag the code until the pull request, where it blocks.
+
+const surfaceMismatch = (file, msg) =>
+  STRICT ? error(file, msg) : warnings.push({ file, msg, label: "warning:" });
 
 for (const f of markdownFiles) {
   if (TEMPLATE_BASENAMES.has(basename(f))) continue;
-  const lines = read(join(ROOT, f)).split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const directive = lines[i].match(/<!--\s*surface-count:\s*glob=(\S+)\s+pattern=(.+?)\s*-->/);
-    if (!directive) continue;
-    const [, glob, patternSrc] = directive;
-    let re;
-    try {
-      re = new RegExp(patternSrc, "gm");
-    } catch {
+  for (const { glob, patternSrc, re, rows } of surfaceDirectives(read(join(ROOT, f)).split("\n"))) {
+    if (!re) {
       error(f, `surface-count directive has an invalid pattern: ${patternSrc}`);
       continue;
     }
@@ -399,23 +568,9 @@ for (const f of markdownFiles) {
       error(f, `surface-count glob "${glob}" matches no files`);
       continue;
     }
-    let codeCount = 0;
-    for (const c of matched) {
-      codeCount += (read(join(ROOT, c)).match(re) || []).length;
-    }
-    let j = i + 1;
-    while (j < lines.length && !lines[j].trim().startsWith("|")) j++;
-    let rows = 0;
-    let sawSeparator = false;
-    for (; j < lines.length && lines[j].trim().startsWith("|"); j++) {
-      if (/^\s*\|[\s|:-]+\|\s*$/.test(lines[j])) {
-        sawSeparator = true;
-        continue;
-      }
-      if (sawSeparator) rows++;
-    }
+    const codeCount = countMatches(re, matched, (c) => read(join(ROOT, c)));
     if (rows !== codeCount) {
-      error(
+      surfaceMismatch(
         f,
         `surface table has ${rows} row(s) but the code has ${codeCount} match(es) for /${patternSrc}/ in ${glob}`
       );
@@ -462,7 +617,7 @@ for (const f of markdownFiles) {
 // --------------------------------------------------------------------- report
 
 const fmt = (list, label) =>
-  list.map(({ file, msg }) => `  ${label} ${file}: ${msg}`).join("\n");
+  list.map((item) => `  ${item.label ?? label} ${item.file}: ${item.msg}`).join("\n");
 
 if (!QUIET || errors.length || warnings.length) {
   console.log(`check-docs: scanned ${docFiles.length} doc(s), ${sourceFiles.length} source file(s)`);

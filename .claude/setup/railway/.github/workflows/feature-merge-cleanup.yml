@@ -83,7 +83,7 @@ jobs:
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" preprod-clone
           cd preprod-clone
           LEFT=""
-          for FILE in ".harness/feature-context/${SLUG}.md" ".harness/env/${SLUG}.env"; do
+          for FILE in ".harness/feature-context/${SLUG}.md" ".harness/journey/${SLUG}.md" ".harness/env/${SLUG}.env"; do
             [ -f "$FILE" ] && LEFT="$LEFT $FILE"
           done
           if [ -n "$LEFT" ]; then
@@ -95,6 +95,16 @@ jobs:
               || echo "Warning: could not push context cleanup to preprod (branch protection?)."
           else
             echo "No feature context or preview variables to clean up."
+          fi
+          if git fetch -q --depth 1 origin coordination 2>/dev/null &&
+            git cat-file -e "origin/coordination:features/${SLUG}.md" 2>/dev/null; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git checkout -q --detach origin/coordination
+            git rm -q "features/${SLUG}.md"
+            git commit -q -m "journey: ${SLUG} retired at the merge"
+            git push -q origin HEAD:coordination \
+              || echo "Warning: could not retire features/${SLUG}.md on coordination."
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

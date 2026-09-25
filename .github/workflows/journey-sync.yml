@@ -1,0 +1,42 @@
+name: Sync journey position to coordination
+
+# The other half of `journey.sh phase`: a session commits its touched-set
+# record to .harness/journey/<slug>.md and pushes its claude/ branch; this
+# mirrors the record onto the coordination branch and rings the cockpit, so
+# a journey write costs the session one Bash call and no GitHub API write
+# (which the claude.ai sandbox's proxy refuses). The same path is
+# paths-ignored by claude-to-feature-branch.yml and feature-branch-checks.yml,
+# so a journey-only push starts this workflow and nothing else.
+on:
+  push:
+    branches: ['claude/**']
+    paths:
+      - '.harness/journey/**'
+
+concurrency:
+  # One writer per session branch, in push order; different features race
+  # on coordination and the script retries against it.
+  group: journey-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event.deleted != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Enough history to find the newest commit that touched the file,
+          # whose body is the sentence the cockpit reports.
+          fetch-depth: 50
+
+      - name: Mirror the record onto coordination and ring the cockpit
+        env:
+          JOURNEY_BRANCH: ${{ github.ref_name }}
+          # Optional. Without both, the record is still mirrored and the
+          # cockpit is simply not rung.
+          BOARD_URL: ${{ vars.BOARD_URL || secrets.BOARD_URL }}
+          BOARD_TOKEN: ${{ secrets.BOARD_TOKEN }}
+        run: bash .claude/scripts/journey-sync.sh

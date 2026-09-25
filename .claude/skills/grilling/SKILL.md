@@ -52,7 +52,8 @@ reports, and this is one of the eight seams in `.claude/JOURNEY.md`
 ("Reporting activity"), which owns the voice and the rules.
 
 As the round goes out, binding the ref once so the two halves of the pair
-cannot disagree:
+cannot disagree (skip this, and every report below, when `/feature` phase 0
+found no cockpit configured):
 
     REF="$KEY:<position>:round-<first question number>"
     bash .claude/scripts/cockpit.sh report <position> "asked round <n>: <what it is about>" \
@@ -64,10 +65,20 @@ As the answers land, before the frontier is recomputed:
       --key="$KEY" --completes="$REF"
 
 The pair is what makes "waiting on a person, for eleven minutes" derivable at
-all. Inside `/feature`, `$KEY` and `<position>` are the ones that phase is at:
-`challenging` in 1a, `shaping` in 1b. A grill running on its own has neither;
-pass no `--key` and name the position the work is at, and the report is scoped
-to the repository, which is honest where a made-up key would not be.
+all. Inside `/feature`, `$KEY` and `<position>` are the ones the phase is at.
+The challenge of the why is round 1 of the shaping grill, so round 1 reports
+as `challenging` and every later round as `shaping`; the `pursue` verdict,
+the `## Challenge` rewrite and the positions themselves are written by
+`/feature` in the reply that opens round 2, not by this loop. An M change
+runs one grill and the why is its round 1; an L change runs the same grill
+with more rounds. A grill running on its own has neither key nor phase; pass
+no `--key` and name the position the work is at, and the report is scoped to
+the repository, which is honest where a made-up key would not be.
+
+**Gates are reported by the caller, never from here.** A round's pair goes
+through `cockpit.sh` as above; the position writes and the gate reports
+(one line per gate under `--ship`) belong to `/feature`. `journey.sh` writes
+positions and is not a round's report.
 
 **Autonomy changes who answers, never whether the pair is reported.** An
 auto-answered round is still a round, and a stream that went quiet for the
@@ -131,9 +142,8 @@ the answer, and resume autonomy for the rest of the grill.
 the session unattended, which grants this autonomy from the first round rather
 than mid-grill, and the two bars above still apply: a question that clears them
 is a question no one is there to answer, so the session stands down on it
-rather than talking itself past it. `/feature`'s "Not stopping at gates" owns
-the rest, including why the flag throws this switch and the gate switch
-together. A grill run outside `/feature` never sees the flag. Say plainly why
+rather than talking itself past it. `/feature`'s `SHIP.md` owns the rest,
+including why the flag throws this switch and the gate switch together. A grill run outside `/feature` never sees the flag. Say plainly why
 you broke out, so the user can see the bar being applied rather than guess
 at it. A grant that evaporated the first time you were careful would teach
 you not to be.
@@ -158,7 +168,9 @@ lost when the session ends.
 
 The session is done when the frontier is empty: every branch of the design
 tree visited, nothing left silently assumed. Do not act on the design until
-the user confirms you have reached a shared understanding.
+the user confirms you have reached a shared understanding (under
+`/feature --ship`, the session confirms it, and says so in the gate it
+feeds).
 
 ---
 Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT).

@@ -1,7 +1,6 @@
 ---
 name: status
 description: Show team dashboard. Active features, pending PRs, preview URLs, unreleased changes, and production status.
-disable-model-invocation: true
 allowed-tools: Bash(git *), Bash(gh *), Read, Glob, Grep
 ---
 

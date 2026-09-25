@@ -34,8 +34,9 @@ against internals.
 
 **Test only at pre-agreed seams.** Before writing any test, write down the
 seams under test and confirm them with the user (inside `/feature`, the
-spec from phase 2 already fixed them). No test is written at an
-unconfirmed seam. You cannot test everything; agreeing the seams up front
+spec from phase 2 already fixed them). Under `/feature --ship` the session
+answers that confirmation with its own recommendation and says so; the
+rule is `/feature`'s `SHIP.md`. No test is written at an unconfirmed seam. You cannot test everything; agreeing the seams up front
 is how testing effort lands on the critical paths and complex logic
 instead of every edge case.
 

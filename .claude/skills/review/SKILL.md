@@ -2,7 +2,7 @@
 name: review
 description: Submit a PR for team review (without auto-merge). Use when the user says "submit for review", "create a PR", or invokes /review.
 argument-hint: "[optional: PR title]"
-allowed-tools: Bash(git *), Read, Write, Glob, Grep
+allowed-tools: Bash(git *), Bash(bash .claude/scripts/set-feature-name.sh *), Bash(node scripts/check-docs.mjs*), Read, Write, Glob, Grep
 ---
 
 # Submit for review
@@ -27,7 +27,8 @@ act in the flow whose whole purpose is to put a person in the loop, so it needs
 no grant in `.harness-version` and checks for none.
 
 If you have reached this skill legitimately, finish it; do not stop to ask a
-person to open the PR for you (forge decision record 0037).
+person to open the PR for you (the forge decision record on granting exit
+authority in configuration).
 
 ## Steps
 
@@ -59,21 +60,33 @@ description.
 ### 3. Run the docs audit
 
 A PR opened for human review gets the same documentation audit as an
-auto-merged one. A reviewer reading stale docs is exactly as misled as an
-agent reading them, and review is where a missing ADR is cheapest to catch.
+auto-merged one: a reviewer reading stale docs is exactly as misled as an
+agent reading them. The audit runs once per diff, so read the feature context
+(`.harness/feature-context/<slug>.md`) first:
 
-Launch the docs-updater agent with the Agent tool:
+- **It has a `## Docs verdict` line**: `/feature` phase 4 already audited this
+  diff. Carry that verdict into the PR body (step 4) and skip the rest of
+  this step.
+- **It has none** (this skill was invoked outside `/feature`): scope the
+  audit with the checker, then run the agent only when there is scope.
 
-    Launch the docs-updater agent with prompt:
-    "Delta audit for a PR being opened for review. Base is origin/preprod.
-     Read docs/README.md as the manifest and route every finding through it.
-     Enforce architecture `sources:` globs against the changed paths, verify
-     surface-table counts, treat docs/decisions/ as append-only, and flag any
-     doc over its budget instead of adding prose. Run
-     scripts/check-docs.mjs if it exists."
+      node scripts/check-docs.mjs --diff origin/preprod
 
-Wait for it to finish. If it committed documentation changes, they ship with
-the PR. Fold its report into the PR description:
+  When it prints `nothing`, the verdict is `nothing to update`: record it at
+  step 5 and skip the agent. Otherwise launch the docs-updater agent with the
+  Agent tool, pasting the checker's output verbatim as its scope:
+
+      Launch the docs-updater agent with prompt:
+      "Delta audit for a PR being opened for review. Base is origin/preprod.
+
+       ## Scope (from check-docs --diff)
+
+       <the checker's output, every line>"
+
+  Wait for it to finish. If it committed documentation changes, they ship
+  with the PR.
+
+Either way, fold the audit into the PR description:
 
 - put anything under "Needs you" (a suggested ADR, an over-budget doc, a
   conflict it could not resolve) into the PR body under a **Docs** heading,
@@ -123,12 +136,22 @@ Format:
 ### 5. Update the feature context
 
 Mark the feature context (`.harness/feature-context/<slug>.md`, contract
-in `.claude/HARNESS.md`) "awaiting human review", with the PR reference
-and what a follow-up session should do when review comments arrive. Keep
-the file: the review window is exactly when a colleague may `/continue`
-this feature to address comments.
+in `.claude/HARNESS.md`) "awaiting human review", with the PR reference,
+the docs verdict when step 3 produced one, and what a follow-up session
+should do when review comments arrive. Keep the file: the review window is
+exactly when a colleague may `/continue` this feature to address comments.
 
 ### 6. Commit and push
+
+On Railway, the preview environment is what reviewers test, and previews are
+opt-in per feature: when line 2 of `.harness-feature` is `preview: no` or
+absent, flip it first with a naming-style commit, so the push below
+provisions the preview:
+
+    bash .claude/scripts/set-feature-name.sh --no-push "$FEATURE_NAME" --preview=yes
+
+The preview then lives until `feature-merge-cleanup.yml` tears it down after
+the merge.
 
     git add .pr-description.md .harness/feature-context/
     git commit -m "chore: submit for review"

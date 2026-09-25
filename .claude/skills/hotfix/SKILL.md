@@ -1,7 +1,6 @@
 ---
 name: hotfix
 description: Emergency production fix. Branch from main, fix, PR to main, auto-tag patch release, back-merge to preprod.
-disable-model-invocation: true
 argument-hint: "<description of the fix needed>"
 allowed-tools: Bash(git *), Bash(gh *), Bash(node scripts/check-docs.mjs*), Bash(python3 scripts/check-docs.py*), Read, Write, Edit, Glob, Grep
 ---
@@ -19,7 +18,8 @@ and tags a patch release from there.
 
 **Check this first, before any other step.** Work you are not allowed to file
 is work you should not start, and discovering the block at the exit is the
-failure this section exists to remove (forge decision record 0037).
+failure this section exists to remove (the forge decision record on granting
+exit authority in configuration).
 
     AUTHORITY=$(sed -n 's/^agent-authority: *//p' .harness-version | tail -1)
 
@@ -31,15 +31,22 @@ Authority is satisfied by **either** of these, and by nothing else:
    do it, or picked it at a `/feature` phase 5 exit gate. A relayed report
    that somebody once approved releases is not this; the ask is in the turn.
 
+`--ship` is not a third form here. On a `/feature` run it is release
+authority for the change that run built and gated through `preprod`; a
+hotfix skips that gate, so no flag on a feature run reaches it. A session
+inside `/feature --ship` that finds a production outage stops and asks, in
+words, in this turn.
+
 **If neither holds, stop here and stand down.** Do not compute anything, do not
 write a signal file, do not push. Emit the stand-down block
 (`getting-started`, Step 3c) with `reason: authority-not-granted`, and say
 plainly what this session did finish and that it is not complete.
 
 **Performing these steps by hand is the same act, and is refused the same
-way.** Forge decision record 0017 lets a session reach this procedure by
-reading this file rather than invoking the skill, and that route is still open; what it is not is a way
-around this section. Writing the signal file, committing it and pushing it
+way.** The forge decision record on reaching a user-invoked skill by its file lets
+a session reach this procedure by reading this file rather than invoking the
+skill, and that route is still open; what it is not is a way around this
+section. Writing the signal file, committing it and pushing it
 without authority IS this skill, whatever it is called at the time. A guard
 that stopped only the literal invocation would guard nothing.
 
@@ -115,7 +122,11 @@ the rest verbatim):
 
 ### 6. Commit and push
 
-    git add -A
+Add the paths by name, the fix's files and the signal file (`git status
+--short` lists them); this branch goes straight to production, and `-A`
+would carry a stray artifact with it:
+
+    git add .pr-description.md <each file the fix changed>
     git commit -m "hotfix: <description>"
     git push -u origin hotfix/<name>
 

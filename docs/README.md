@@ -95,7 +95,7 @@ superseded is **deleted**, not archived. Git history is the archive.
 ## Definition of done for documentation
 
 Mirrored in `CLAUDE.md` so it is always in context. If your change matches a
-row, the doc change ships in the same commit.
+row, the doc change lands in the same pull request (it need not share the commit).
 
 | You changed | Update |
 |---|---|

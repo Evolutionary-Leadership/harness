@@ -29,6 +29,8 @@
 #   spec-universe.sh change-proposals <change-id>
 #   spec-universe.sh snapshot <product> [markdown|json] [--proposals]
 #   spec-universe.sh claim <node-id> <matched|drifted> <basis> [criterion] [evidence]
+#   spec-universe.sh claims --file=<jsonl> [--concurrency=8] [--product=<slug>]
+#                                       one claim per line: {key, node, value, basis, criterion?, evidence?}
 #   spec-universe.sh propose            < body.json    POST  /v1/proposals
 #   spec-universe.sh patch-proposal <id> < body.json   PATCH /v1/proposals/{id}
 #   spec-universe.sh release <change-id>               POST  /v1/changes/{id}/released
@@ -40,6 +42,15 @@
 #
 # Writes take an optional IDEMPOTENCY_KEY in the environment, sent as the
 # Idempotency-Key header, so a retried claim or release does not land twice.
+#
+# `claims` posts a whole file of them, one POST per line, at most
+# --concurrency (default 8) in flight, each under the line's own `key` as its
+# Idempotency-Key. A `node` with no dot is prefixed with --product or the
+# `spec_product:` of .harness-version. It prints one line per failure (the
+# key, the node, the exit and the client's first line), a one-line count on
+# stderr, and exits 1 when any line failed; the keys make a re-run safe. It
+# never evaluates a line as shell, which is why `spec-test-claims.mjs` emits
+# JSONL rather than commands.
 #
 # The write dialect, proven against live /v1 on 2026-09-05 and NOT what the
 # MCP tool schema implies. A proposal body is:
@@ -150,6 +161,66 @@ if isinstance(body, dict):
   exit 2
 }
 
+# claim_fields <json line>: the six claim fields as one tab-separated line,
+# key, node, value, basis, criterion, evidence, in that order. A line that is
+# not an object, or whose value is not matched or drifted, prints nothing and
+# returns 1, so the caller lists it as a failure instead of posting nonsense.
+claim_fields() {
+  local parser='
+import json, sys
+try:
+    o = json.loads(sys.stdin.read())
+except Exception:
+    sys.exit(1)
+if not isinstance(o, dict) or o.get("value") not in ("matched", "drifted"):
+    sys.exit(1)
+f = [str(o.get(k) or "") for k in ("key", "node", "value", "basis", "criterion", "evidence")]
+if not f[1] or not f[3] or any("\t" in v or "\n" in v for v in f):
+    sys.exit(1)
+print("\t".join(f))
+'
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$1" | python3 -c "$parser"
+  else
+    printf '%s' "$1" | node -e '
+let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  let o; try { o = JSON.parse(s); } catch { process.exit(1); }
+  if (!o || typeof o !== "object" || !["matched", "drifted"].includes(o.value)) process.exit(1);
+  const f = ["key", "node", "value", "basis", "criterion", "evidence"].map((k) => String(o[k] ?? ""));
+  if (!f[1] || !f[3] || f.some((v) => /[\t\n]/.test(v))) process.exit(1);
+  process.stdout.write(f.join("\t") + "\n");
+});'
+  fi
+}
+
+# claim_line <n> <json line> <product> <work dir>: one claim, run in the
+# background by `claims`. Every outcome is a file in the work dir, so the
+# parent reads results in line order however the posts finished.
+claim_line() {
+  local n="$1" line="$2" product="$3" work="$4"
+  local fields key node value basis criterion evidence body rc
+  if ! fields=$(claim_fields "$line"); then
+    printf 'claim line %s: not a claim object (needs node, value matched|drifted, basis)\n' "$n" > "$work/$n.fail"
+    return 1
+  fi
+  IFS=$'\t' read -r key node value basis criterion evidence <<< "$fields"
+  case "$node" in *.*) ;; *) [ -n "$product" ] && node="$product.$node" ;; esac
+  body="{\"value\":$(json_string "$value"),\"basis\":$(json_string "$basis")"
+  [ -n "$criterion" ] && body+=",\"criterionId\":$(json_string "$criterion")"
+  [ -n "$evidence" ] && body+=",\"evidence\":$(json_string "$evidence")"
+  body+='}'
+  # `call` exits on failure; inside this pipeline that ends the subshell it
+  # runs in, and the pipeline's status carries the exit code out.
+  printf '%s' "$body" | IDEMPOTENCY_KEY="$key" call POST "/v1/nodes/$(enc "$node")/conformance" body \
+    > "$work/$n.out" 2> "$work/$n.err"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'claim %s (%s %s): exit %s: %s\n' "${key:-line $n}" "$node" "${criterion:-node}" "$rc" \
+      "$(head -n 1 "$work/$n.err" 2>/dev/null)" > "$work/$n.fail"
+  fi
+  return "$rc"
+}
+
 # call <method> <path> [body-from-stdin]
 # Prints the body on success. Maps every failure to one of the three exits.
 call() {
@@ -250,6 +321,37 @@ case "$cmd" in
   release)
     [ $# -ge 1 ] || usage
     printf '{}' | call POST "/v1/changes/$(enc "$1")/released" body ;;
+  claims)
+    file=""; conc=8; product=""
+    for a in "$@"; do
+      case "$a" in
+        --file=*) file="${a#--file=}" ;;
+        --concurrency=*) conc="${a#--concurrency=}" ;;
+        --product=*) product="${a#--product=}" ;;
+        *) usage ;;
+      esac
+    done
+    [ -n "$file" ] && [ -f "$file" ] || usage
+    case "$conc" in ''|*[!0-9]*|0) echo "--concurrency must be a positive integer" >&2; exit 2 ;; esac
+    [ -n "$product" ] || product=$(sed -n 's/^spec_product: *//p' .harness-version 2>/dev/null | tail -1)
+    work=$(mktemp -d)
+    n=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "${line// /}" ] || continue
+      n=$((n + 1))
+      while [ "$(jobs -rp | wc -l)" -ge "$conc" ]; do wait -n 2>/dev/null || true; done
+      claim_line "$n" "$line" "$product" "$work" &
+    done < "$file"
+    wait
+    failed=0
+    for ((i = 1; i <= n; i++)); do
+      [ -e "$work/$i.fail" ] || continue
+      cat "$work/$i.fail"
+      failed=$((failed + 1))
+    done
+    rm -rf "$work"
+    echo "claims: $((n - failed)) posted, $failed failed, of $n" >&2
+    [ "$failed" -eq 0 ] ;;
   *)
     echo "unknown command: $cmd" >&2; usage ;;
 esac

@@ -32,17 +32,20 @@ Pick model-invocation only when the agent must reach the skill on its own,
 or another skill must. If it only ever fires by hand, make it user-invoked
 and pay no context load.
 
-In this harness the split runs: entry points (`/feature`, `/brainstorm`,
-`/to-preprod`, `/review`, and the other process skills) are user-invoked;
-the technique skills they chain (`/grilling`, `/to-spec`, `/to-tickets`,
+In this harness every shipped skill is model-invocable except
+`/endchat`, which carries `disable-model-invocation: true` because it only
+ever cleans up a session the human ended. Process skills (`/feature`,
+`/brainstorm`, `/to-preprod`, `/review` and the rest) reach each other by
+name; technique skills (`/grilling`, `/to-spec`, `/to-tickets`,
 `/implement`, `/tdd`, `/code-review`, `/domain-modeling`,
-`/codebase-design`) are model-invoked, precisely so the entry points can
-reach them.
+`/codebase-design`) carry trigger-bearing descriptions so `/feature` can
+chain them. A new process skill follows the same rule: no flag.
 
-Shared reference that two user-invoked skills both need can live in
-neither: with no descriptions, neither can fire the other. Push it to a
-plain file outside the skill system: external reference any skill can
-point at (in this harness, typically a doc indexed in `docs/README.md`).
+Shared reference that a user-invoked skill needs cannot live in that
+skill: with no description, nothing else can fire it. Push it to a
+model-invoked skill, or to a plain file outside the skill system that any
+skill can point at (in this harness, typically a doc indexed in
+`docs/README.md`).
 
 ## Splitting by invocation
 
@@ -54,12 +57,12 @@ always-loaded description, so that independent reach has to be worth it.
 
 ## Router skills
 
-When user-invoked skills multiply past what you can remember, that
-piled-up cognitive load is cured by a **router skill**: one user-invoked
-skill that names the others and when to reach for each, so the human has
-one skill to remember instead of many. It can only hint, never fire them:
-user-invoked skills have no description, so nothing but the human can
-reach them. (`/getting-started` is this harness's router.)
+When skills multiply past what you can remember, that piled-up
+cognitive load is cured by a **router skill**: one skill that names the
+others and when to reach for each, so the human has one skill to remember
+instead of many. It hints rather than fires: the router orients the human,
+and the skills it names reach each other by name when the flow needs it.
+(`/getting-started` is this harness's router.)
 
 ---
 Adapted from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT).

@@ -9,14 +9,21 @@
 # because this file lands in a downstream scaffold, where a bare `ADR 0014`
 # would name that project's own record and not this one.
 #
-# This script only READS. Writing a claim needs the GitHub contents API,
-# whose per-path SHA check is the compare-and-swap, and a shell script
-# cannot call MCP. Web sessions also get a 403 from the git proxy on any
-# push outside their own claude/<branch>. So: the script reads, the skill
-# writes.
+# Reads go through git: one fetch of the coordination ref per process, then
+# `git show` against the fetched ref. Writes go through the GitHub contents
+# API, whose per-path SHA check is the compare-and-swap, because web sessions
+# get a 403 from the git proxy on any push outside their own claude/<branch>.
+# `write` and `delete` need a token (GH_TOKEN, GITHUB_TOKEN, or `gh auth
+# token`); with none they exit 2 and the caller (the stale-record sweep in
+# /feature phase 0) makes the write with the session's MCP tool instead. The
+# claude.ai sandbox proxy refuses every contents-API write with a 403 even
+# when a token is set, and that refusal is treated exactly like having no
+# token: exit 2, same fallback. A journey write does not come through here:
+# journey.sh commits the record to the session branch, and journey-sync.yml
+# mirrors it onto coordination under the workflow's token.
 #
-# Every subcommand is best-effort. A missing branch, a missing remote or a
-# dead network prints nothing and exits 0. Reading a coordination register
+# Every read subcommand is best-effort. A missing branch, a missing remote or
+# a dead network prints nothing and exits 0. Reading a coordination register
 # must never stall a session; the hard guarantee lives in check-docs.mjs.
 #
 # Nothing here checks out a branch, creates a worktree, or touches the
@@ -25,6 +32,9 @@ set -uo pipefail
 
 BRANCH="${COORDINATION_BRANCH:-coordination}"
 REMOTE="${COORDINATION_REMOTE:-origin}"
+API="${GITHUB_API_URL:-https://api.github.com}"
+CURL_TIMEOUT_SECONDS=20
+WRITE_ATTEMPTS=3
 
 usage() {
   cat >&2 <<'USAGE'
@@ -36,7 +46,26 @@ usage: coordination.sh <command> [args]
                             numbers separated by whitespace. Pure: no
                             network, no git, no filesystem.
 
-  fetch                     Fetch the coordination ref. Silent, never fatal.
+  fetch                     Fetch the coordination ref. Silent, never fatal,
+                            and once per process: every read below shares it.
+
+  write <path> --from=<file> --sha=<sha|none> [--message=<msg>]
+                            Put <file> at <path> on the coordination branch
+                            through the contents API, with <sha> as the
+                            compare-and-swap (none: the path is new). Token:
+                            GH_TOKEN, GITHUB_TOKEN, then gh auth token. Exit 0
+                            on 200 or 201; on 409 or 422 the sha is re-read
+                            after a fresh fetch and the put retried, three
+                            attempts in all; exit 2 with no token, or when
+                            the proxy refuses the write (the sandbox), so the
+                            caller can write through MCP instead; exit 1 with
+                            one line on anything else.
+
+  delete <path> [--message=<msg>]
+                            Delete <path> on the coordination branch through
+                            the contents API, sha read from the fetched ref.
+                            Same token rule and exit codes as write. A path
+                            already absent is nothing to do: exit 0.
 
   list <namespace>          Print the claimed tokens in claims/<namespace>,
                             one per line, sorted. Empty when the branch,
@@ -85,8 +114,21 @@ cmd_next_adr() {
   printf '%04d\n' "$((10#$highest + 1))"
 }
 
+# One fetch per process. A command that reads the record, then the register,
+# then a claim would otherwise pay the round trip three times for one answer;
+# the variable makes the second and third calls free. A write that must
+# re-read the sha after a lost compare-and-swap resets it (refetch) so the
+# retry sees the branch as it is now.
+FETCHED=""
 cmd_fetch() {
+  [ -z "$FETCHED" ] || return 0
+  FETCHED=1
   git fetch --quiet "$REMOTE" "$BRANCH" 2>/dev/null || return 0
+}
+
+refetch() {
+  FETCHED=""
+  cmd_fetch
 }
 
 cmd_list() {
@@ -198,6 +240,185 @@ cmd_adr_collisions() {
   return 0
 }
 
+# ---------------------------------------------------------------------------
+# Writes: the contents API
+# ---------------------------------------------------------------------------
+
+# The token, in the order a session is likely to hold one. It reaches curl's
+# argument list and nothing else: no echo, no log line, no error message.
+api_token() {
+  local found=""
+  if [ -n "${GH_TOKEN:-}" ]; then
+    found=$GH_TOKEN
+  elif [ -n "${GITHUB_TOKEN:-}" ]; then
+    found=$GITHUB_TOKEN
+  elif command -v gh >/dev/null 2>&1; then
+    found=$(gh auth token 2>/dev/null) || found=""
+  fi
+  [ -n "$found" ] || return 1
+  printf '%s' "$found"
+}
+
+# owner/repo from the remote's URL, whatever its form: https://host/o/r.git,
+# git@host:o/r.git, ssh://git@host/o/r, or the proxied URL a web session
+# sees. The last two path segments are the pair, with any .git dropped.
+origin_repo() {
+  local url pair
+  url=$(git remote get-url "$REMOTE" 2>/dev/null) || return 1
+  url=${url%/}
+  url=${url%.git}
+  pair=$(printf '%s\n' "$url" | tr ':' '/' | awk -F/ 'NF >= 2 { print $(NF-1) "/" $NF }')
+  printf '%s' "$pair" | grep -Eq '^[^/[:space:]]+/[^/[:space:]]+$' || return 1
+  printf '%s' "$pair"
+}
+
+# A JSON string literal. Backslash and quote are escaped; a newline, return
+# or tab becomes a space, because every value here is a one-line message, a
+# branch name or a sha, and none may carry a control character.
+json_string() {
+  printf '"%s"' "$(printf '%s' "$1" | tr '\n\r\t' '   ' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+# api_call <method> <repo path> <json file> <out file> <token>: one request
+# under the hard timeout, printing the status code. curl's own stderr is
+# dropped: the line a caller prints names the path and the status, which is
+# what a reader can act on.
+api_call() {
+  local method=$1 path=$2 json=$3 out=$4 token=$5 code
+  code=$(curl -sS -o "$out" -w '%{http_code}' --max-time "$CURL_TIMEOUT_SECONDS" \
+    -X "$method" "$API/repos/$path" \
+    -H "Authorization: Bearer $token" \
+    -H "Accept: application/vnd.github+json" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$json" 2>/dev/null) || code=000
+  printf '%s' "${code:-000}"
+}
+
+# The first 120 characters of the answer's `message` field, or of the body
+# when there is none, on one line with every control character dropped.
+refusal_excerpt() {
+  local file=$1 text
+  text=$(tr -d '\000-\037' < "$file" 2>/dev/null |
+    sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  [ -n "$text" ] || text=$(tr -d '\000-\037' < "$file" 2>/dev/null)
+  printf '%s' "${text:0:120}"
+}
+
+# The claude.ai sandbox proxy answers every contents-API write with this 403
+# body while reads and a set token both work. It is the "no token" case in
+# every way that matters to a caller: the write must go through MCP.
+proxy_refused() {
+  grep -q 'not permitted through this proxy' "$1" 2>/dev/null
+}
+
+# The blob sha of <path> on the fetched ref, or `none` when it is not there.
+# It is the sha the contents API wants as its compare-and-swap, computed
+# locally, so no read of the API precedes a write.
+blob_sha() {
+  git rev-parse --verify --quiet "$REMOTE/$BRANCH:$1" 2>/dev/null || printf 'none'
+}
+
+cmd_write() {
+  local path="${1-}" from="" sha="" message="" arg token repo json out code why attempt
+  [ -n "$path" ] || { usage; return 1; }
+  shift
+  for arg in "$@"; do
+    case "$arg" in
+      --from=*) from=${arg#--from=} ;;
+      --sha=*) sha=${arg#--sha=} ;;
+      --message=*) message=${arg#--message=} ;;
+      *) echo "unknown flag: $arg" >&2; usage; return 1 ;;
+    esac
+  done
+  if [ -z "$from" ] || [ -z "$sha" ]; then usage; return 1; fi
+  [ -f "$from" ] || { echo "coordination: $from is not a file; nothing written" >&2; return 1; }
+  token=$(api_token) || return 2
+  repo=$(origin_repo) || { echo "coordination: cannot read owner/repo from the $REMOTE url; nothing written" >&2; return 1; }
+  [ -n "$message" ] || message="coordination: write $path"
+  json=$(mktemp)
+  out=$(mktemp)
+  attempt=0
+  while :; do
+    attempt=$((attempt + 1))
+    {
+      printf '{"message":%s,"branch":%s,"content":"%s"' \
+        "$(json_string "$message")" "$(json_string "$BRANCH")" "$(base64 < "$from" | tr -d '\n')"
+      [ "$sha" = none ] || printf ',"sha":%s' "$(json_string "$sha")"
+      printf '}'
+    } > "$json"
+    code=$(api_call PUT "$repo/contents/$path" "$json" "$out" "$token")
+    case "$code" in
+      200 | 201) rm -f "$json" "$out"; return 0 ;;
+      409 | 422)
+        # A lost compare-and-swap: someone wrote the path since the sha was
+        # read. Re-read it from a fresh fetch and try again, a bounded number
+        # of times, so two sessions refreshing one namespace both land.
+        if [ "$attempt" -lt "$WRITE_ATTEMPTS" ]; then
+          refetch
+          sha=$(blob_sha "$path")
+          continue
+        fi
+        ;;
+      403)
+        if proxy_refused "$out"; then rm -f "$json" "$out"; return 2; fi
+        ;;
+    esac
+    break
+  done
+  why=$(refusal_excerpt "$out")
+  rm -f "$json" "$out"
+  echo "coordination: write of $path refused ($code); nothing written${why:+: $why}" >&2
+  return 1
+}
+
+cmd_delete() {
+  local path="${1-}" message="" arg token repo sha json out code why attempt
+  [ -n "$path" ] || { usage; return 1; }
+  shift
+  for arg in "$@"; do
+    case "$arg" in
+      --message=*) message=${arg#--message=} ;;
+      *) echo "unknown flag: $arg" >&2; usage; return 1 ;;
+    esac
+  done
+  cmd_fetch
+  sha=$(blob_sha "$path")
+  # Already gone is the state a delete asks for. Checked before the token, so
+  # a session with no token is not sent to MCP to delete what is not there.
+  [ "$sha" != none ] || return 0
+  token=$(api_token) || return 2
+  repo=$(origin_repo) || { echo "coordination: cannot read owner/repo from the $REMOTE url; nothing deleted" >&2; return 1; }
+  [ -n "$message" ] || message="coordination: delete $path"
+  json=$(mktemp)
+  out=$(mktemp)
+  attempt=0
+  while :; do
+    attempt=$((attempt + 1))
+    printf '{"message":%s,"branch":%s,"sha":%s}' \
+      "$(json_string "$message")" "$(json_string "$BRANCH")" "$(json_string "$sha")" > "$json"
+    code=$(api_call DELETE "$repo/contents/$path" "$json" "$out" "$token")
+    case "$code" in
+      200) rm -f "$json" "$out"; return 0 ;;
+      409 | 422)
+        if [ "$attempt" -lt "$WRITE_ATTEMPTS" ]; then
+          refetch
+          sha=$(blob_sha "$path")
+          [ "$sha" != none ] || { rm -f "$json" "$out"; return 0; }
+          continue
+        fi
+        ;;
+      403)
+        if proxy_refused "$out"; then rm -f "$json" "$out"; return 2; fi
+        ;;
+    esac
+    break
+  done
+  why=$(refusal_excerpt "$out")
+  rm -f "$json" "$out"
+  echo "coordination: delete of $path refused ($code); nothing deleted${why:+: $why}" >&2
+  return 1
+}
+
 case "${1-}" in
   next-adr)            shift; cmd_next_adr "$@" ;;
   fetch)               shift; cmd_fetch "$@" ;;
@@ -207,6 +428,8 @@ case "${1-}" in
   feature)             shift; cmd_feature "$@" ;;
   feature-branches)    shift; cmd_feature_branches "$@" ;;
   adr-collisions)      shift; cmd_adr_collisions "$@" ;;
+  write)               shift; cmd_write "$@" ;;
+  delete)              shift; cmd_delete "$@" ;;
   -h|--help|help|"")   usage; exit 2 ;;
   *)                   echo "unknown command: $1" >&2; usage; exit 2 ;;
 esac

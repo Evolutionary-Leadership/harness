@@ -113,8 +113,12 @@ const STARTER_PREFIXES = [`docs${sep}`, `scripts${sep}`];
 //
 // This is a list rather than a prefix on purpose. A `scripts/spec/`
 // directory would classify by shape and would then quietly claim any file
-// a project later put there; naming the five files means the harness owns
+// a project later put there; naming the files means the harness owns
 // exactly what it ships and nothing else under `scripts/`.
+//
+// `strip-em-dash.sh` is the same case: the em-dash hook's companion, which
+// cleans generated text before the hook sees it. A project never adapts it,
+// and a fix to it has to reach every scaffold the hook guards.
 //
 // The loop's other files need no entry: `.claude/scripts/` and
 // `.claude/skills/` are managed trees that no starter prefix reaches, so
@@ -126,6 +130,7 @@ const MANAGED_FILES = new Set([
   join("scripts", "judge-plan.mjs"),
   join("scripts", "retrieval.mjs"),
   join("scripts", "spec-test-claims.mjs"),
+  join("scripts", "strip-em-dash.sh"),
 ]);
 
 const STARTER_FILES = new Set([

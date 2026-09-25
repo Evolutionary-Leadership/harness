@@ -22,6 +22,7 @@ Placeholders the skill fills:
 | `{DIFF}` | The diff command and the commit list |
 | `{ON_DEMAND}` | Every other file anchoring a node in this group, by path with its anchor line |
 | `{TESTS}` | The anchored tests and what the run reported for each: passed, failed, skipped or not run |
+| `{ID}` | This judge's id from the plan (`g1`, `g2`, ...), which names the file it writes its table to |
 
 ---
 
@@ -74,6 +75,8 @@ Then give one verdict:
   files that could hold it. Returning `unverifiable` without having looked is
   the one thing that wastes everybody's time.
 
+Write nothing into the repository. Anything you need to try goes under $TMPDIR.
+
 **A `drifted` verdict must show its evidence, in the `evidence` cell, in this
 exact form:**
 
@@ -98,3 +101,5 @@ One markdown table and nothing else, with exactly these seven columns:
 - `evidence` is the form above on a `drifted` row, and empty otherwise.
 
 Under 60 words per row.
+
+Write the same table to /tmp/judges/{ID}.md as well.

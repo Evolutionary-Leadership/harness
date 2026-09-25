@@ -11,12 +11,17 @@ concurrency:
   group: to-preprod-${{ github.ref_name }}
   cancel-in-progress: true
 
+# Two jobs, and the split is the point. `gate` merges the session commit
+# into feature/<name>, strips the signal files, pushes once as the PAT,
+# opens the PR and waits for CI; none of that touches preprod, so it holds
+# no lock and runs in parallel with every other writer. `merge` holds the
+# preprod-write group only around the write itself: the PR merge, the ADR
+# claim promotion, the preprod sweep. A gate that polls CI for ten minutes
+# used to hold that lock for all ten, which serialised every merge and
+# every release behind it.
 jobs:
-  to-preprod:
+  gate:
     runs-on: ubuntu-latest
-    concurrency:
-      group: preprod-write
-      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -24,6 +29,11 @@ jobs:
       # 'check' run's conclusion on the PR head via the default token, which
       # otherwise gets no checks scope on private repos.
       checks: read
+    outputs:
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      feature_branch: ${{ steps.pr.outputs.feature_branch }}
+      review: ${{ steps.pr.outputs.review }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -62,7 +72,10 @@ jobs:
           echo "name=$FEATURE_NAME" >> "$GITHUB_OUTPUT"
           echo "branch=feature/$FEATURE_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Merge claude/ into feature/ and push (idempotent, race-resistant)
+      - name: Merge claude/ into feature/, strip the signal files and push
+        id: push
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -70,9 +83,23 @@ jobs:
           FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
           CLAUDE_SHA="${{ github.sha }}"
 
+          # Preflight: the push below and the PR step after it both need a
+          # Personal Access Token. We deliberately do NOT fall back to
+          # GITHUB_TOKEN: a push made with it starts no 'check' run, and a PR
+          # merged with it triggers no downstream workflow (for example
+          # harness-version-bump.yml), which silently breaks the dogfooded
+          # version-bump chain.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::PAT_TOKEN is missing or empty in repo secrets."
+            echo "::error::This workflow needs a Personal Access Token to push feature/<name>, create the PR and trigger downstream workflows on merge. GITHUB_TOKEN cannot be used as a fallback: a push made with it starts no check run, and PRs merged with it do not trigger workflow runs (e.g. harness-version-bump.yml would never fire)."
+            echo "::error::Fix: Settings -> Secrets and variables -> Actions -> add PAT_TOKEN. Fine-grained PAT scoped to this repo with Contents: read/write, Pull requests: read/write, Workflows: read/write. Classic PAT equivalent: 'repo' + 'workflow' scopes."
+            echo "::error::After the secret is set, re-trigger this workflow from the session: change .pr-description.md, commit it as 'chore: trigger auto-merge to preprod' and push (/to-preprod step 8). A push that leaves that file alone does not start this workflow. Nothing was pushed to feature/<name>, so the signal files are still on the session branch."
+            exit 1
+          fi
+
           # Merge the session commit, resolving the one class of conflict this
           # chain produces itself. to-preprod strips the signal files from
-          # feature/<name> the moment it opens the PR; when that PR cannot
+          # feature/<name> before it opens the PR; when that PR cannot
           # merge (preprod moved), the session's recovery push still carries
           # them, often edited, and the merge stops on modify/delete. Signal
           # files are plumbing rather than reviewable content, so they resolve
@@ -125,31 +152,67 @@ jobs:
             git commit --no-edit
           }
 
+          # The signal files leave feature/<name> before the PR opens, in the
+          # same push as the merge, so the head the PR opens on is the head
+          # that merges and the PR's "opened" event starts the one 'check'
+          # run the gate waits for. .harness-feature MUST be among them: it
+          # carries this session's feature name and must not leak onto
+          # preprod, or a future session cloned from preprod would inherit
+          # this feature's name. The list is exported for the gate step's
+          # recovery, which strips the same files again.
+          SIGNAL_FILES=".pr-description.md .harness-init .harness-feature"
+          echo "signal_files=$SIGNAL_FILES" >> "$GITHUB_OUTPUT"
+          remove_signal_files() {
+            git rm -f --ignore-unmatch $SIGNAL_FILES > /dev/null 2>&1 || true
+            git commit -m "chore: remove signal files" > /dev/null 2>&1 || true
+          }
+
+          # One push, as the PAT. A push authenticated as the checkout's
+          # persisted GITHUB_TOKEN starts no workflow, and this push is what
+          # the PR's check run is started against. Two things make it run as
+          # the PAT (GH_TOKEN is PAT_TOKEN here): the PAT goes into the
+          # remote URL, and the push resets the http extraheader that
+          # checkout persisted, because git sends only that header when it
+          # is set and ignores URL credentials.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          pat_push() {
+            git -c "http.https://github.com/.extraheader=" push origin "$FEATURE_BRANCH"
+          }
+
           # claude-to-feature-branch.yml fires on the same push when files
           # other than .pr-description.md are touched. Both workflows then
           # try to push feature/, and one loses with "cannot lock ref".
-          # Loop: refetch, skip if our SHA is already merged, otherwise
-          # merge and push, retry on rejection.
+          # Loop: refetch, merge unless our SHA is already in, strip, push,
+          # retry on rejection.
           for attempt in 1 2 3 4 5; do
+            REMOTE_HEAD=""
             # Decide off the fetch result, not a separate ls-remote probe: a
             # branch claude-to-feature-branch.yml creates between the two would
             # pass the probe with no local ref to check out, and the checkout
             # would end the step before this loop could retry.
             if git fetch origin "$FEATURE_BRANCH" 2>/dev/null; then
               git checkout -B "$FEATURE_BRANCH" FETCH_HEAD
+              REMOTE_HEAD=$(git rev-parse FETCH_HEAD)
             else
               git checkout preprod
               git checkout -B "$FEATURE_BRANCH"
             fi
 
             if git merge-base --is-ancestor "$CLAUDE_SHA" HEAD 2>/dev/null; then
-              echo "feature/$FEATURE_BRANCH already contains $CLAUDE_SHA, nothing to push."
+              echo "feature/$FEATURE_BRANCH already contains $CLAUDE_SHA; stripping only."
+            else
+              merge_session "$CLAUDE_SHA"
+            fi
+            remove_signal_files
+
+            # A rerun whose merge and strip both landed already has nothing
+            # to push, and the PR step reuses the open PR.
+            if [ -n "$REMOTE_HEAD" ] && [ "$(git rev-parse HEAD)" = "$REMOTE_HEAD" ]; then
+              echo "feature/$FEATURE_BRANCH already carries $CLAUDE_SHA with no signal files; nothing to push."
               exit 0
             fi
 
-            merge_session "$CLAUDE_SHA"
-
-            if git push origin "$FEATURE_BRANCH"; then
+            if pat_push; then
               echo "Pushed feature/$FEATURE_BRANCH on attempt $attempt."
               exit 0
             fi
@@ -161,25 +224,21 @@ jobs:
           echo "::error::Failed to push feature/$FEATURE_BRANCH after 5 attempts."
           exit 1
 
-      - name: Create PR and handle merge
+      - name: Create PR and gate on CI
+        id: pr
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
-
-          # Preflight: gh requires a non-empty token. We deliberately do NOT fall
-          # back to GITHUB_TOKEN here: a PR auto-merged with GITHUB_TOKEN does not
-          # trigger downstream workflows (e.g. harness-version-bump.yml), which
-          # silently breaks the dogfooded version-bump chain.
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::PAT_TOKEN is missing or empty in repo secrets."
-            echo "::error::This workflow needs a Personal Access Token to create the PR and trigger downstream workflows on auto-merge. GITHUB_TOKEN cannot be used as a fallback because PRs merged with it do not trigger workflow runs (e.g. harness-version-bump.yml would never fire)."
-            echo "::error::Fix: Settings -> Secrets and variables -> Actions -> add PAT_TOKEN. Fine-grained PAT scoped to this repo with Contents: read/write, Pull requests: read/write, Workflows: read/write. Classic PAT equivalent: 'repo' + 'workflow' scopes."
-            echo "::error::After the secret is set, re-trigger this workflow from the session: change .pr-description.md, commit it as 'chore: trigger auto-merge to preprod' and push (/to-preprod step 8). A push that leaves that file alone does not start this workflow. The signal file is still on feature/<name> because cleanup now runs after PR creation."
-            exit 1
-          fi
+          CLAUDE_SHA="${{ github.sha }}"
+          echo "feature_branch=$FEATURE_BRANCH" >> "$GITHUB_OUTPUT"
 
           git checkout "$FEATURE_BRANCH"
+
+          # The signal file left the branch in the step above, so it is read
+          # from the pushed commit into the working tree for the parsers
+          # below, and removed again once parsed. It is never committed here.
+          git show "$CLAUDE_SHA:.pr-description.md" > .pr-description.md
 
           # Parse frontmatter fields. The front matter is read with sed, not a
           # YAML parser, so a title quoted the YAML way (the natural way to
@@ -205,10 +264,14 @@ jobs:
 
           # Parse body: everything after the second ---
           awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' .pr-description.md > /tmp/pr-body.md
+          rm -f .pr-description.md
 
-          # Create or reuse PR. Done BEFORE removing the signal file so a token
-          # failure or transient gh error can't strand feature/ with the signal
-          # file gone but no PR open.
+          # Create or reuse the PR. The stripped head is already on the
+          # branch, so opening the PR is the event that starts its check run
+          # (on a reused PR, the push's own "synchronize" event already did).
+          # A failure here leaves feature/<name> stripped with no PR, which
+          # the step 8 recovery push repairs: merge_session resolves the
+          # signal files it re-adds, and the next run strips and opens again.
           EXISTING=$(gh pr list --head "$FEATURE_BRANCH" --base preprod --state open --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then
             PR_NUMBER="$EXISTING"
@@ -216,6 +279,7 @@ jobs:
             PR_URL=$(gh pr create --base preprod --head "$FEATURE_BRANCH" --title "$TITLE" --body-file /tmp/pr-body.md)
             PR_NUMBER=$(echo "$PR_URL" | grep -oP '/pull/\K[0-9]+')
           fi
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
 
           # Assign reviewers if configured
           if [ -n "$REVIEWERS" ]; then
@@ -226,70 +290,51 @@ jobs:
             done
           fi
 
-          # Remove signal files now that the PR exists.
-          # .harness-feature MUST be removed here: it carries this session's
-          # feature name and must not leak onto preprod, or a future session
-          # cloned from preprod would inherit this feature's name.
-          #
-          # Race-resistant signal-file cleanup (both workflows can push
-          # feature/ concurrently): commit the removal, then push with a
-          # refetch-reset-retry loop. If a concurrent push already removed
-          # the signal files, the working tree matches origin and we break.
-          # The cleanup push below must start a fresh 'check' run on the
-          # final PR head, but pushes authenticated as the checkout's
-          # persisted GITHUB_TOKEN start no workflows. Two steps make the
-          # push run as the PAT instead (GH_TOKEN is PAT_TOKEN here):
-          # the PAT goes into the remote URL, and the push resets the
-          # http extraheader that checkout persisted, because git sends
-          # only that header when it is set and ignores URL credentials.
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          pat_push() {
-            git -c "http.https://github.com/.extraheader=" push origin "$FEATURE_BRANCH"
-          }
-
-          remove_signal_files() {
-            git rm -f --ignore-unmatch \
-              .pr-description.md .harness-init .harness-feature > /dev/null 2>&1 || true
-            git commit -m "chore: remove signal files" > /dev/null 2>&1 || true
-          }
-          remove_signal_files
-          for attempt in 1 2 3 4 5; do
-            if pat_push; then break; fi
-            git fetch origin "$FEATURE_BRANCH" 2>/dev/null || true
-            git reset --hard "origin/$FEATURE_BRANCH"
-            remove_signal_files
-            if git diff --quiet "origin/$FEATURE_BRANCH"; then break; fi
-            sleep "$attempt"
-          done
-
-          # If review mode: skip auto-merge, leave PR open for review
+          # If review mode: skip auto-merge, leave PR open for review. The
+          # merge job reads this output and skips the merge step.
           if [ "$REVIEW" = "true" ]; then
+            echo "review=true" >> "$GITHUB_OUTPUT"
             echo "PR #$PR_NUMBER created for review, skipping auto-merge."
             echo "::notice::PR #$PR_NUMBER is open for review at $(gh pr view $PR_NUMBER --json url --jq .url)"
             exit 0
           fi
+          echo "review=false" >> "$GITHUB_OUTPUT"
+
+          # The gate's recovery (restrip_head, below) strips the same list
+          # the push step did and pushes as the PAT for the same reason it
+          # did: only a user-identity push starts a check run. Each step is
+          # its own shell, so both helpers are defined again here.
+          SIGNAL_FILES="${{ steps.push.outputs.signal_files }}"
+          remove_signal_files() {
+            git rm -f --ignore-unmatch $SIGNAL_FILES > /dev/null 2>&1 || true
+            git commit -m "chore: remove signal files" > /dev/null 2>&1 || true
+          }
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          pat_push() {
+            git -c "http.https://github.com/.extraheader=" push origin "$FEATURE_BRANCH"
+          }
 
           # A PR that conflicts with preprod never gets a 'check' run: GitHub
           # starts no pull_request workflow for it. The gate below then waited
           # out its grace period and blamed a bot-pushed head, which sent the
           # reader hunting for a token problem that did not exist. Ask GitHub
           # first. Mergeability is computed after the push, so UNKNOWN is
-          # polled for up to two minutes, the grace the gate itself gives a
-          # missing check; anything but CONFLICTING goes on to the gate.
-          # An answer counts only for the head this run just left on the
-          # branch: right after a push GitHub can still hold the previous
-          # head's CONFLICTING, and trusting it would refuse the very PR a
-          # recovery push has just fixed.
+          # polled for up to two minutes (40 tries of 3s), the grace the gate
+          # itself gives a missing check; anything but CONFLICTING goes on to
+          # the gate. An answer counts only for the head this run just left
+          # on the branch: right after a push GitHub can still hold the
+          # previous head's CONFLICTING, and trusting it would refuse the very
+          # PR a recovery push has just fixed.
           EXPECTED_HEAD=$(git ls-remote origin "refs/heads/$FEATURE_BRANCH" 2>/dev/null | cut -f1)
           MERGEABLE=UNKNOWN
-          for _try in $(seq 1 24); do
+          for _try in $(seq 1 40); do
             ANSWER=$(gh pr view "$PR_NUMBER" --json mergeable,headRefOid --jq '"\(.mergeable) \(.headRefOid)"' 2>/dev/null || echo "UNKNOWN none")
             MERGEABLE=${ANSWER%% *}
             if [ -n "$EXPECTED_HEAD" ] && [ "${ANSWER#* }" != "$EXPECTED_HEAD" ]; then
               MERGEABLE=UNKNOWN
             fi
             [ "$MERGEABLE" = UNKNOWN ] || break
-            sleep 5
+            sleep 3
           done
           if [ "$MERGEABLE" = CONFLICTING ]; then
             echo "::error::PR #$PR_NUMBER conflicts with preprod, which moved after the signal push; merge not performed."
@@ -297,15 +342,28 @@ jobs:
             exit 1
           fi
 
-          # When a check: command is configured in .harness-version, CI is
-          # the merge gate: wait for the 'check' run on the PR HEAD and merge
-          # only on success. Never rely on 'gh pr merge --auto' for this:
-          # auto-merge only waits for checks that branch protection marks as
-          # required, and on repos without branch protection (for example a
-          # private repo on a free plan) it degrades to an immediate merge,
-          # making CI decorative for the merge decision.
+          # When a check: or tests: command is configured in .harness-version,
+          # CI is the merge gate: wait for the 'check' run on the PR HEAD (and
+          # the 'tests' run beside it when the head carries a tests: line) and
+          # hand the head to the merge job only on success. A tests: line
+          # alone still gates: the 'check' job always exists and finishes
+          # green with its steps skipped, so awaiting both names is safe. Never rely on
+          # 'gh pr merge --auto' for this: auto-merge only waits for checks
+          # that branch protection marks as required, and on repos without
+          # branch protection (for example a private repo on a free plan) it
+          # degrades to an immediate merge, making CI decorative for the
+          # merge decision. Both lines are read at the merged head, which is
+          # what the working tree holds here.
           CHECK_CMD=$(grep '^check:' .harness-version 2>/dev/null | sed 's/^check: *//' || true)
-          if [ -n "$CHECK_CMD" ]; then
+          TESTS_CMD=$(grep '^tests:' .harness-version 2>/dev/null | sed 's/^tests: *//' || true)
+          # The run names the gate waits for. 'check' is always one of them;
+          # 'tests' joins it when the merged head carries a tests: line, which
+          # is what makes feature-branch-checks.yml run that job for real.
+          AWAITED="check"
+          if [ -n "$TESTS_CMD" ]; then
+            AWAITED="check tests"
+          fi
+          if [ -n "$CHECK_CMD" ] || [ -n "$TESTS_CMD" ]; then
             # A head pushed with a bot token cannot produce a usable 'check'
             # run: GitHub does not start pull_request workflows for such a
             # push, so the run is either never created or created as
@@ -358,7 +416,17 @@ jobs:
               pat_push
             }
 
-            # Budget: 72 ticks of 10s is a hard 12-minute cap per round, and
+            # The newest run of one name on one head: its conclusion, else
+            # its status while it runs, else the synthetic 'missing'. The
+            # check-runs API needs checks:read; PAT_TOKEN may not carry that
+            # scope, so this one call uses the workflow's default token.
+            run_state() {
+              GH_TOKEN=${{ github.token }} gh api \
+                "/repos/${{ github.repository }}/commits/$1/check-runs" \
+                --jq "[.check_runs[] | select(.name==\"$2\")] | max_by(.started_at) | (.conclusion // .status // \"missing\")" 2>/dev/null || echo missing
+            }
+
+            # Budget: 144 ticks of 5s is a hard 12-minute cap per round, and
             # three rounds (the first, plus one per recovery) make 36 minutes
             # worst case. Only a round that ends in a recovery costs its full
             # 12: an unrunnable head is recognised in seconds (action_required)
@@ -366,7 +434,7 @@ jobs:
             # half an hour. A check: command that runs longer than one round
             # fails every gated merge; keep the check chain under the cap or
             # raise the budget here.
-            echo "Waiting for CI 'check' status on PR #$PR_NUMBER HEAD..."
+            echo "Waiting for CI ($AWAITED) on PR #$PR_NUMBER HEAD..."
             CI_RESULT=pending
             CHECK=missing
             UNRUNNABLE_HEAD=""
@@ -374,47 +442,64 @@ jobs:
             # How long 'missing' may persist on a bot-pushed head before it
             # counts as unrunnable. A real run's check appears within seconds;
             # two minutes is slack for a busy runner queue, not a diagnosis.
-            MISSING_GRACE_TICKS=12
+            MISSING_GRACE_TICKS=24
             for round in 1 2 3; do
               MISSING_TICKS=0
               UNRUNNABLE_HEAD=""
               PR_HEAD=""
-              for i in $(seq 1 72); do
+              for i in $(seq 1 144); do
                 PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
                 if [ -z "$PR_HEAD" ]; then
-                  echo "  [round $round] [$i/72] HEAD fetch failed, retrying next tick"
-                  sleep 10
+                  echo "  [round $round] [$i/144] HEAD fetch failed, retrying next tick"
+                  sleep 5
                   continue
                 fi
-                # The check-runs API needs checks:read; PAT_TOKEN may not
-                # carry that scope, so use the workflow's default token for
-                # this one call.
-                CHECK=$(GH_TOKEN=${{ github.token }} gh api \
-                  "/repos/${{ github.repository }}/commits/$PR_HEAD/check-runs" \
-                  --jq '[.check_runs[] | select(.name=="check")] | max_by(.started_at) | (.conclusion // .status // "missing")' 2>/dev/null || echo missing)
-                echo "  [round $round] [$i/72] HEAD=$PR_HEAD check=$CHECK"
-                if [ "$CHECK" = success ]; then
+                # Every awaited name is read on every tick and classified on
+                # its own; the tick's verdict is the worst of them. The gate
+                # merges only when every name is success. One red is a red,
+                # and anything else is a wait, except that action_required or
+                # missing on the 'check' run is a candidate for the
+                # unrunnable-head recovery. Only 'check' can say that: its job
+                # always exists, so a head GitHub ran at all has a run of it.
+                # A 'tests' run that never appears beside a real 'check' state
+                # is a workflow without the job (a downstream mid-upgrade),
+                # which the timeout below reports by name.
+                CHECK=""
+                ALL_GREEN=true
+                RED=""
+                CHECK_MISSING=false
+                CHECK_ACTION_REQUIRED=false
+                for name in $AWAITED; do
+                  state=$(run_state "$PR_HEAD" "$name")
+                  CHECK="${CHECK:+$CHECK }$name=$state"
+                  [ "$state" = success ] || ALL_GREEN=false
+                  case "$state" in
+                    failure|cancelled|timed_out) [ -n "$RED" ] || RED="$state" ;;
+                    action_required) if [ "$name" = check ]; then CHECK_ACTION_REQUIRED=true; fi ;;
+                    missing) if [ "$name" = check ]; then CHECK_MISSING=true; fi ;;
+                  esac
+                done
+                echo "  [round $round] [$i/144] HEAD=$PR_HEAD $CHECK"
+                if [ "$ALL_GREEN" = true ]; then
                   CI_RESULT=success
                   break
                 fi
-                case "$CHECK" in
-                  failure|cancelled|timed_out)
-                    CI_RESULT="$CHECK"
-                    break
-                    ;;
-                esac
+                if [ -n "$RED" ]; then
+                  CI_RESULT="$RED"
+                  break
+                fi
                 # action_required is what a never-executed run reports, but it
                 # is also what a run legitimately waiting on approval reports,
                 # so it is conclusive only on a bot-pushed head. Without that
                 # qualifier a fork or first-time-contributor PR would burn a
                 # re-strip before refusing.
-                if [ "$CHECK" = action_required ] && head_is_bot "$PR_HEAD"; then
+                if [ "$CHECK_ACTION_REQUIRED" = true ] && head_is_bot "$PR_HEAD"; then
                   UNRUNNABLE_HEAD="$PR_HEAD"
                   break
                 fi
                 # 'missing' needs a grace period (a real run appears within
                 # seconds), and only counts as unrunnable on a bot-pushed head.
-                if [ "$CHECK" = missing ]; then
+                if [ "$CHECK_MISSING" = true ]; then
                   MISSING_TICKS=$((MISSING_TICKS + 1))
                   if [ "$MISSING_TICKS" -ge "$MISSING_GRACE_TICKS" ] && head_is_bot "$PR_HEAD"; then
                     UNRUNNABLE_HEAD="$PR_HEAD"
@@ -423,7 +508,7 @@ jobs:
                 else
                   MISSING_TICKS=0
                 fi
-                sleep 10
+                sleep 5
               done
 
               # A bot-pushed head's run can also resolve 'failure' without ever
@@ -467,11 +552,11 @@ jobs:
               if [ -n "$UNRUNNABLE_HEAD" ]; then
                 # Say what is actually wrong. "CI status was pending" sends
                 # the reader looking for a broken test; there is none.
-                WHY="head $UNRUNNABLE_HEAD was pushed with a bot token, so GitHub will not run the 'check' workflow on it. CI did not fail on this PR; it never ran on this head."
+                WHY="head $UNRUNNABLE_HEAD was pushed with a bot token, so GitHub will not run CI on it (last run state: '$CHECK'). CI did not fail on this PR; it never ran on this head."
                 echo "::error::Merge not performed for PR #$PR_NUMBER: $WHY"
-                gh pr comment "$PR_NUMBER" --body "**Merge not performed: the PR head cannot produce a CI check.** The $WHY Re-trigger to-preprod from the session with a push that changes \`.pr-description.md\` (\`/to-preprod\` step 8): its re-strip is a PAT push, which starts a real check run, and it merges on the green that follows. A push that leaves that file alone starts no to-preprod run. Do not read this as a test failure."
+                gh pr comment "$PR_NUMBER" --body "**Merge not performed: the PR head cannot produce a CI check.** The $WHY Re-trigger to-preprod from the session with a push that changes \`.pr-description.md\` (\`/to-preprod\` step 8): its strip is a PAT push, which starts a real check run, and it merges on the green that follows. A push that leaves that file alone starts no to-preprod run. Do not read this as a test failure."
               else
-                # Timeouts report the last observed run state (e.g. skipped)
+                # Timeouts report the last observed run states (e.g. skipped)
                 # so the operator sees why the gate never resolved.
                 echo "::error::CI status '$CI_RESULT' (last check state: '$CHECK') for PR #$PR_NUMBER; merge not performed."
                 gh pr comment "$PR_NUMBER" --body "**Merge not performed: CI status was '$CI_RESULT'** (last check state: '$CHECK'). Fix the failure (or wait for CI to finish) and merge manually with \`gh pr merge $PR_NUMBER --merge\`, or fix it in the session and re-trigger to-preprod: a push re-triggers it only when it changes \`.pr-description.md\` (\`/to-preprod\` step 8)."
@@ -480,10 +565,58 @@ jobs:
             fi
           fi
 
-          # Merge now. With CI configured this point is only reached on a
-          # green check; without CI there is nothing to wait for. The --auto
-          # fallback stays for repos where required status checks make an
-          # immediate merge refuse.
+          # Gate passed. With CI configured this point is only reached on a
+          # green for every awaited run; without CI there is nothing to wait
+          # for. The merge job lands exactly this head: it is handed over as
+          # an output, and a head that moved in the meantime is refused
+          # there, because the green was seen on this one.
+          if [ -z "${PR_HEAD:-}" ]; then
+            PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+          fi
+          echo "head_sha=$PR_HEAD" >> "$GITHUB_OUTPUT"
+          echo "PR #$PR_NUMBER at $PR_HEAD passed the gate; handing it to the merge job."
+
+  merge:
+    needs: gate
+    runs-on: ubuntu-latest
+    # The only job that writes preprod, so the only one that holds the
+    # lock. Queued, never cancelled: a merge interrupted between the PR
+    # merge and the sweep leaves preprod carrying a signal file.
+    concurrency:
+      group: preprod-write
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Merge the PR into preprod
+        if: needs.gate.outputs.review != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          PR_NUMBER="${{ needs.gate.outputs.pr_number }}"
+          FEATURE_BRANCH="${{ needs.gate.outputs.feature_branch }}"
+          GATED_HEAD="${{ needs.gate.outputs.head_sha }}"
+
+          # The gate saw its green on one head. If the branch moved while
+          # this job waited for the lock, that green is not this head's, and
+          # the merge is refused rather than trusted. An unanswerable lookup
+          # is not evidence that it moved.
+          HEAD_NOW=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+          if [ -n "$GATED_HEAD" ] && [ -n "$HEAD_NOW" ] && [ "$HEAD_NOW" != "$GATED_HEAD" ]; then
+            echo "::error::PR #$PR_NUMBER moved from $GATED_HEAD to $HEAD_NOW after the gate passed; merge not performed."
+            gh pr comment "$PR_NUMBER" --body "**Merge not performed: the PR head moved after CI passed** (gated \`$GATED_HEAD\`, now \`$HEAD_NOW\`). The gate merges only a head it saw go green. Re-trigger to-preprod from the session with a push that changes \`.pr-description.md\` (\`/to-preprod\` step 8), which gates the new head."
+            exit 1
+          fi
+
+          # Land it. The --auto fallback stays for repos where required
+          # status checks make an immediate merge refuse; the gate has
+          # already passed, so it is a merge mechanism here, not a gate.
           merged=0
           for i in 1 2 3 4 5; do
             if gh pr merge "$PR_NUMBER" --merge; then merged=1; break; fi
@@ -501,6 +634,7 @@ jobs:
             # comment points at, is written for a run that failed.
             exit 1
           fi
+
 
       # A claimed ADR number becomes permanently reserved once its record is
       # on preprod. Until then it is only a reservation, which a reaper may
@@ -522,18 +656,18 @@ jobs:
         run: |
           set -uo pipefail
 
-          # Each step is its own shell, so both of these are re-derived here
-          # rather than inherited. PR_NUMBER is read back from the API because
-          # the step that created the PR keeps it in a local variable.
-          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          # The branch comes from the gate job; PR_NUMBER is read back from
+          # the API rather than from the gate's output, because what matters
+          # here is whether the PR is MERGED, not which number it has.
+          FEATURE_BRANCH="${{ needs.gate.outputs.feature_branch }}"
           FEATURE_NAME="${FEATURE_BRANCH#feature/}"
           REPO="${{ github.repository }}"
 
           PR_NUMBER=$(gh pr list --head "$FEATURE_BRANCH" --base preprod --state all \
             --json number,state --jq 'map(select(.state=="MERGED")) | .[0].number // empty' 2>/dev/null || true)
-          # The merge step warns rather than failing when a merge does not
-          # complete, so an unmerged PR reaches this point too. A claim must
-          # only land when its ADR actually did.
+          # The merge step may have fallen back to --auto, and a /review PR
+          # is not merged at all, so an unmerged PR reaches this point too.
+          # A claim must only land when its ADR actually did.
           if [ -z "$PR_NUMBER" ]; then
             echo "PR for $FEATURE_BRANCH is not merged; leaving claims as they are."
             exit 0
@@ -585,7 +719,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          FEATURE_BRANCH="${{ steps.feature.outputs.branch }}"
+          FEATURE_BRANCH="${{ needs.gate.outputs.feature_branch }}"
 
           # Belt and braces. The cleanup above is supposed to leave preprod clean,
           # but a signal file that does reach preprod is invisible until it breaks

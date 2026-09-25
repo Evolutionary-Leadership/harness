@@ -2,12 +2,18 @@
 # The one Product Cockpit client the skills share.
 #
 # An environment holds ONE cockpit credential and configures ONE URL, so it
-# gets one client. Four commands, one per thing the cockpit offers a session:
+# gets one client. Four commands, one per thing the cockpit offers a session,
+# and one question about the client itself:
 #
-#   post     put an ask on the Board
-#   read     read the Board
-#   ping     tell the cockpit a fact it reads has changed
-#   report   say what is happening inside the position a change is at
+#   post        put an ask on the Board
+#   read        read the Board
+#   ping        tell the cockpit a fact it reads has changed
+#   report      say what is happening inside the position a change is at
+#   configured  exit 0 when both variables are set, else 1; no network, no output
+#
+# `configured` is how a caller (`journey.sh`, `journey-sync.sh`,
+# `session-start.sh`) decides whether a ring is worth a process at all,
+# without paying for one.
 #
 # The Board is the cockpit's message surface: a thread has a marker, a
 # subject, a body, and it waits on whoever has not answered. A session posts
@@ -24,7 +30,10 @@
 # the Board has always used; renaming them would re-key every configured
 # environment to say the same thing. The token is an agent token the cockpit
 # minted (`pcb_...`); the author of every message is that credential, never
-# anything in the body.
+# anything in the body. A session's own calls read the session's environment;
+# the ring and report after a journey write run in journey-sync.yml, which
+# passes the repository's Actions `BOARD_URL` (a variable or a secret) and
+# `BOARD_TOKEN` (a secret).
 #
 # Three failures, told apart by exit code, the same three spec-universe.sh
 # uses because they have the same three fixes:
@@ -47,12 +56,17 @@
 # Both sit on a path whose work is already done. A ping only removes latency
 # from a poll that runs anyway; a report only says what a session is doing
 # while it does it. Neither may add a failure mode to what it describes. A
-# scaffold with no cockpit configured pays nothing at all: no stall, no prompt,
-# and not even a line, because a line at every seam is a nag that teaches a
-# session to skim.
+# scaffold with no cockpit configured pays one line per session and nothing
+# after it: no stall, no prompt, and no repeat, because a line at every seam
+# is a nag that teaches a session to skim.
 #
-#   neither variable set   nothing printed, exit 0. Not configured is not a
-#                          fault; there is nothing to report
+#   neither variable set   `cockpit: none` ONCE per session, then nothing,
+#                          exit 0. Not configured is not a fault; the one line
+#                          says why every later ring is free. The memory is a
+#                          marker file, `${TMPDIR:-/tmp}/cockpit-none-<hash>`,
+#                          keyed by the repository path and the session id,
+#                          so a fresh TMPDIR (a test) or a new session says it
+#                          again and two repositories never silence each other
 #   one variable set       one line naming the missing one, exit 0. Half a
 #                          cockpit IS a fault, and a silent one would never
 #                          be found
@@ -62,10 +76,14 @@
 #                          the cockpit's own `not_found` means no product is
 #                          configured against the repository, anything else
 #                          means a cockpit that predates the report route
-#   any other 4xx          for a ping, one line, exit 0, naming the status:
-#                          the fix for a refusal is in the recipe, not in the
-#                          environment, so it must not read as an outage. For
-#                          a report, said ONCE per session too, naming it
+#   any other 4xx          for a ping, one line, exit 0, naming the status and
+#                          the first 120 characters of the answer's `message`
+#                          field (or of its body), so a cockpit that says "no
+#                          product is configured against owner/repo" is read
+#                          rather than guessed at. The fix for a refusal is in
+#                          the recipe or the cockpit, not in the environment,
+#                          so it must not read as an outage. For a report,
+#                          said ONCE per session too, naming it
 #   anything else          one line, exit 0
 #   2xx                    nothing printed, exit 0. For a report that covers
 #                          both 201 (written) and 200 (this actor's `ref` was
@@ -143,6 +161,7 @@
 # Usage:
 #   cockpit.sh post <marker> <subject> [--to=<participantId>] [--product=<id>] < body.md
 #   cockpit.sh read
+#   cockpit.sh configured
 #   cockpit.sh ping [--key=<CHANGE-KEY>] [--repository=<owner/repo>] [--source=<name>]...
 #   cockpit.sh report <position> <sentence> [--key=<CHANGE-KEY>] [--branch=<name>]
 #                     [--repository=<owner/repo>] [--ref=<id>] [--completes=<id>]
@@ -327,11 +346,31 @@ derive_branch() {
   printf '%s' "$name"
 }
 
+# The marker that remembers this session already said `cockpit: none`. Keyed
+# by the repository path (two scaffolds sharing one /tmp must not silence each
+# other) and by the session id where Claude Code gives one (a new session in
+# the same checkout says the line again). `cksum` is the one hash every shell
+# has; the key is short and collision here costs a repeat, never a silence.
+none_marker() {
+  local repo id
+  repo=$(git rev-parse --show-toplevel 2>/dev/null) || repo=$PWD
+  id=$(printf '%s' "${CLAUDE_CODE_SESSION_ID:-}" | tr -cd 'A-Za-z0-9_-')
+  printf '%s/cockpit-none-%s' "${TMPDIR:-/tmp}" \
+    "$(printf '%s\n%s' "$repo" "$id" | cksum | cut -d' ' -f1)"
+}
+
 # soft_configured <noun>: 0 to go ahead, 1 to stop having said why. Never
 # exits, because both callers owe their flow an exit 0 whatever happens here.
+# With no cockpit at all, the one line is said once per session (the header
+# says why) and a marker that cannot be written costs a repeat, not a silence.
 soft_configured() {
-  local noun=$1
+  local noun=$1 marker
   if [ -z "${BOARD_URL:-}" ] && [ -z "${BOARD_TOKEN:-}" ]; then
+    marker=$(none_marker)
+    if [ ! -f "$marker" ]; then
+      echo "cockpit: none" >&2
+      : > "$marker" 2>/dev/null || true
+    fi
     return 1
   fi
   if [ -z "${BOARD_URL:-}" ]; then
@@ -360,18 +399,36 @@ soft_request() {
     --data "$body" 2>/dev/null
 }
 
-# soft_post <path> <body> <noun>: the fail-soft half of the client. It reads
-# the status code and nothing else, so a hostile receiver can influence one
-# line on stderr and nothing more. The noun says which command went unheard,
-# since one line is the whole budget and a line that does not name its
-# command is one a reader has to go looking for.
+# refusal_excerpt <file>: the first 120 characters of the answer's `message`
+# field, or of the body when there is no such field, on one line with every
+# control character dropped. A hostile receiver can colour that one line and
+# nothing else: it never reaches a second line, a file or a command.
+refusal_excerpt() {
+  local file=$1 text
+  text=$(tr -d '\000-\037' < "$file" 2>/dev/null |
+    sed -n 's/.*"message"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  [ -n "$text" ] || text=$(tr -d '\000-\037' < "$file" 2>/dev/null)
+  printf '%s' "${text:0:120}"
+}
+
+# soft_post <path> <body> <noun>: the fail-soft half of the client. The noun
+# says which command went unheard, since one line is the whole budget and a
+# line that does not name its command is one a reader has to go looking for.
+# A 4xx carries the receiver's reason after the status (refusal_excerpt), so
+# the line names the cockpit's own cause where it gives one.
 soft_post() {
-  local path=$1 body=$2 noun=$3 code
-  code=$(soft_request "$path" "$body") || code=000
+  local path=$1 body=$2 noun=$3 code out why
+  out=$(mktemp)
+  code=$(soft_request "$path" "$body" "$out") || code=000
+  why=""
+  case "$code" in
+    4??) why=$(refusal_excerpt "$out") ;;
+  esac
+  rm -f "$out"
   case "$code" in
     2??) ;;
-    401 | 403) echo "cockpit rejected the credential ($code); $noun not delivered" >&2 ;;
-    4??) echo "cockpit refused the $noun ($code); nothing recorded" >&2 ;;
+    401 | 403) echo "cockpit rejected the credential ($code); $noun not delivered${why:+: $why}" >&2 ;;
+    4??) echo "cockpit refused the $noun ($code); nothing recorded${why:+: $why}" >&2 ;;
     *) echo "cockpit unreachable, $noun not delivered" >&2 ;;
   esac
 }
@@ -569,6 +626,15 @@ case "$cmd" in
   read)
     require_env
     call GET /api/board "" "board unreachable, board not read"
+    ;;
+  configured)
+    # The one question with no network and no line: a caller deciding
+    # whether a ring is worth a process at all.
+    # Non-blank, not merely set: a value of spaces is a mistake, not a URL.
+    if [[ ${BOARD_URL:-} == *[![:space:]]* && ${BOARD_TOKEN:-} == *[![:space:]]* ]]; then
+      exit 0
+    fi
+    exit 1
     ;;
   ping)
     shift
