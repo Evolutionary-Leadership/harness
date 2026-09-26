@@ -101,6 +101,7 @@ it as the PR title. Otherwise, generate a concise title from the changes.
 **Important:** Include `review: true` in the frontmatter to prevent auto-merge.
 
 Optionally read the `reviewers:` field from `.harness-version` and include it.
+The `Why:` line and the key come from the work item the feature context names.
 
 Format:
 
@@ -110,13 +111,16 @@ Format:
     reviewers: teammate1, teammate2
     ---
 
+    Why: <work item URL>
+
     ## Summary
     - 3-5 bullet points explaining what changed and why
 
     ## Spec
-    - Link to the spec issue on the tracker (the issue whose title carries
-      the feature slug), so reviewers can check the diff against what was
-      agreed. Omit only if the feature has no spec issue.
+    - The change key and work item, `<KEY>: <title>` (#N), which /release
+      closes once production serves it. Then the spec issue (the one whose
+      title carries the feature slug), if the feature has one, so reviewers
+      can check the diff against what was agreed.
 
     ## Code review findings
     - The findings summary from the /code-review run at the end of phase 4

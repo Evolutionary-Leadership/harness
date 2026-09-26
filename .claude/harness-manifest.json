@@ -333,6 +333,11 @@
       "variant": "both"
     },
     {
+      "path": ".claude/skills/release/LANDING.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
       "path": ".claude/skills/release/RELEASE-NOTE.md",
       "class": "managed",
       "variant": "both"

@@ -113,8 +113,8 @@ body names, so a record that misses the commit ships a release with nothing to c
 
 ## The PR body (step 5)
 
-The `## Spec` bullet carries the change key, its work item (`<KEY>: <title>`, #N) and the Spec
-Universe change view `{SPEC_UNIVERSE_URL}/changes/<KEY>`. Directly under `## Spec`, and before
+The `## Spec` bullet adds, after the change key and work item the core names, the Spec Universe
+change view `{SPEC_UNIVERSE_URL}/changes/<KEY>`. Directly under `## Spec`, and before
 `## Code review findings`, add these three sections in this order:
 
     ## Spec verdicts

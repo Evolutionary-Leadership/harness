@@ -26,8 +26,13 @@ jobs:
 
       - name: Extract hotfix info
         id: hotfix
+        # Every step in this job hands a value to its script through env:,
+        # never as ${{ }} in the script text, where GitHub would splice it in
+        # as source code: the title and version are free text from
+        # .pr-description.md, and a branch name can carry $( and backticks.
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
-          BRANCH="${{ github.ref_name }}"
           HOTFIX_NAME="${BRANCH#hotfix/}"
           echo "name=$HOTFIX_NAME" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
@@ -38,6 +43,8 @@ jobs:
 
       - name: Parse PR description
         id: pr_desc
+        env:
+          HOTFIX_NAME: ${{ steps.hotfix.outputs.name }}
         run: |
           # Parse title from frontmatter. Read with sed, not a YAML parser, so
           # pr_title strips one surrounding pair of quotes and takes the rest
@@ -55,7 +62,7 @@ jobs:
           }
           TITLE=$(pr_title .pr-description.md)
           if [ -z "$TITLE" ]; then
-            TITLE="Hotfix: ${{ steps.hotfix.outputs.name }}"
+            TITLE="Hotfix: $HOTFIX_NAME"
           fi
           echo "title=$TITLE" >> "$GITHUB_OUTPUT"
 
@@ -63,21 +70,22 @@ jobs:
           awk 'BEGIN{c=0} /^---$/{c++; next} c>=2{print}' .pr-description.md > /tmp/pr-body.md
 
       - name: Remove signal file
+        env:
+          BRANCH: ${{ steps.hotfix.outputs.branch }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git rm .pr-description.md
           git commit -m "chore: remove hotfix signal file"
-          git push origin "${{ steps.hotfix.outputs.branch }}"
+          git push origin "$BRANCH"
 
       - name: Create hotfix PR
         id: pr
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          BRANCH: ${{ steps.hotfix.outputs.branch }}
+          TITLE: ${{ steps.pr_desc.outputs.title }}
         run: |
-          BRANCH="${{ steps.hotfix.outputs.branch }}"
-          TITLE="${{ steps.pr_desc.outputs.title }}"
-
           EXISTING=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then
             PR_NUMBER="$EXISTING"
@@ -90,9 +98,8 @@ jobs:
       - name: Merge hotfix PR
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          PR_NUMBER="${{ steps.pr.outputs.number }}"
-
           for i in 1 2 3 4; do
             if gh pr merge "$PR_NUMBER" --merge; then
               echo "Hotfix PR #$PR_NUMBER merged into main."
@@ -107,9 +114,8 @@ jobs:
       - name: Tag release and create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          VERSION: ${{ steps.hotfix.outputs.version }}
         run: |
-          VERSION="${{ steps.hotfix.outputs.version }}"
-
           if [ -n "$VERSION" ]; then
             git fetch origin main
             git tag "$VERSION" origin/main
@@ -135,4 +141,6 @@ jobs:
           git push origin preprod
 
       - name: Delete hotfix branch
-        run: git push origin --delete "${{ steps.hotfix.outputs.branch }}" || true
+        env:
+          BRANCH: ${{ steps.hotfix.outputs.branch }}
+        run: git push origin --delete "$BRANCH" || true

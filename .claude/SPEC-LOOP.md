@@ -343,8 +343,9 @@ The run report's shape is the contract: `{ testResults: [{ name, status }] }`,
 which is what `vitest run --reporter=json --outputFile` writes. A runner that
 emits something else is converted to that shape before this step.
 
-The same step closes each change's work item naming the version, so closed
-means live means promoted.
+`/release` then closes each change's work item naming the version, as it does
+in every repository once production serves the release, so here closed means
+live means promoted.
 
 ## The change key
 

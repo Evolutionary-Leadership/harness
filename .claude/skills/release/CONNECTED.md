@@ -1,41 +1,22 @@
 # Release: the connected half of step 10b
 
-Read this only from `/release` step 10b, once `.harness-version` carries a
-`spec_product:` line. Everything here runs before step 11; nothing here runs
-when the loop is dormant.
+Read this only from `LANDING.md`, "Claim conformance, connected only", once
+`.harness-version` carries a non-empty `spec_product:` line. It runs after `LANDING.md`
+has established that production serves the release and found the change keys,
+and before it closes their work items; nothing here runs when the loop is
+dormant.
 
-The release is not done when the workflow is: it is done when production
-SERVES it. Only then is a conformance claim honest, and only then is a change
-issue closed, so that closed means live means promoted in Spec Universe.
-Branch and preprod results are never claimed, from here or anywhere.
-
-## Wait for the release to land on `main`
-
-Poll:
-
-    git fetch origin main
-    git merge-base --is-ancestor <the release commit from step 9> origin/main
-
-until it is an ancestor, capped at about ten minutes. On timeout stop and say
-so: the release workflow has not finished or has failed, nothing is claimed,
-and re-running this step by hand once `main` carries the release is the
-recovery.
-
-## Verify production
-
-This variant configures no deploy, so there is no environment to poll and
-nothing to verify against: the release is live when `main` carries it, which
-the poll above has just established. A variant that does deploy verifies
-here first and claims nothing on a pending deploy.
+A conformance claim is honest only once production SERVES the release, so
+that the close `LANDING.md` makes next means live means promoted in Spec
+Universe. Branch and preprod
+results are never claimed, from here or anywhere.
 
 ## Gather the verdicts from the gate run records
 
 They survive the merge as committed files, named by the PR bodies. For every
-pull request in the step 3 blast radius (the `(#NN)` references), read its
-body (`mcp__github__pull_request_read`) and take the change key and work item
-from its `## Spec` section and the run record path from its `## Preprod gate`
-section. Read each record from the tree production serves, and let the one
-reader print its rows:
+pull request `LANDING.md` found a change key in, take the run record path
+from its body's `## Preprod gate` section. Read each record from the tree
+production serves, and let the one reader print its rows:
 
     git show "origin/main:.harness/gate-runs/<KEY>-<n>.json" > /tmp/<KEY>-<n>.json
     node scripts/gate-run.mjs --verdicts-from-record=/tmp/<KEY>-<n>.json
@@ -56,7 +37,7 @@ already superseded:
     SU="bash .claude/scripts/spec-universe.sh"
     IDEMPOTENCY_KEY="release-$NEW_VERSION-promote-<KEY>" $SU release <KEY>
 
-once per change key the PR bodies named. The call is idempotent and is never
+once per change key `LANDING.md` found. The call is idempotent and is never
 refused: it promotes what it can and returns what it left behind, as
 `promoted`, `unacceptedAtRelease` and `notPromoted`.
 
@@ -65,8 +46,9 @@ report. **`unacceptedAtRelease` and `notPromoted` are named too, never
 swallowed**: a proposal nobody accepted is a decision that was never taken,
 and a release that promoted around it must say so, because the preprod gate
 only guards drifted-vs-current and a proposal can reach production unaccepted.
-A non-zero exit from the client stops this step exactly as a failed
-verification does, with nothing claimed and no issue closed.
+A non-zero exit from the client stops `LANDING.md` before its close,
+exactly as a failed verification does, with nothing claimed and no issue
+closed.
 
 ## Claim in one batch, over `/v1`
 
@@ -125,8 +107,8 @@ the test claims carry:
           --report="$REPORT" --root="$WT" --version="$NEW_VERSION" --sha="$RELEASE_SHA" \
           --evidence=pending 2> /tmp/evidence.md > /dev/null
 
-   Post `/tmp/evidence.md` as a comment on the work item this step is about
-   to close (the first change key's, when there are several;
+   Post `/tmp/evidence.md` as a comment on the work item `LANDING.md` is
+   about to close (the first change key's, when there are several;
    `mcp__github__add_issue_comment`) and take the comment's URL.
 
 2. Once more with that URL as `--evidence`, stdout to
@@ -146,22 +128,10 @@ A non-zero exit from the client stops the claims where they are; the keys make
 the re-run safe. Report the count claimed, the count not claimed, and the
 evidence URL.
 
-## Close the changes
-
-For every change key the PR bodies named, close its work item (`<KEY>: ...`)
-with a comment naming the version:
-
-    Shipped in <NEW_VERSION>; production serves it and its conformance is
-    claimed in Spec Universe.
-
-`/release` is the only skill that closes a work item. Tickets were closed by
-`/implement` as they landed; the work item closes here, on the strength of
-production, and nowhere earlier.
-
 ## What the closing block carries
 
 `Good to know` carries what was promoted, then the claim write-back: how many
-criteria were claimed, every `drifted` claim by node and criterion, and which
-change issues were closed under this version. The same item carries the test
+criteria were claimed and every `drifted` claim by node and criterion (the
+work items closed are `LANDING.md`'s to report). The same item carries the test
 claims: how many criteria a passed test claimed, and how many anchored tests
 did not pass and so claimed nothing, with the link to the evidence comment.

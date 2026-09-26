@@ -87,8 +87,8 @@ release is the one place the block is load-bearing rather than convenient:
 
 - `Good to know`: the **blast radius** first, always. Everything queued on
   `preprod`, not just this feature, and the number the release will consume.
-  Nobody should approve a release from prose alone. Connected: the items
-  `CONNECTED.md` names, once step 10b has run.
+  Nobody should approve a release from prose alone. Then the items
+  `LANDING.md` names, once step 10b has run.
 - `Act later`: anything this release does not carry, naming where it belongs.
 - `Act next`: the single confirmation the user owes, or, once the release is
   away, what to watch and where (the workflow, the tag, the template sync).
@@ -395,24 +395,17 @@ Tell the user:
 - **Print the step 3 blast-radius report**, whether or not step 4 asked
   anything. `--quick` and `--ship` skip the question, never the record:
   after the fact, "what shipped" has to be answerable.
-- Connected: that step 10b follows, so the session stays open until
-  production serves the release, then claims conformance and closes the
-  change issues.
+- That step 10b follows, so the session stays open until production serves
+  the release, then closes the work items it shipped.
 
-### 10b. Claim conformance and close the changes (connected)
+### 10b. Land the release and close the changes
 
-**This step forks on one key.** Read it first:
-
-    SPEC_PRODUCT=$(sed -n 's/^spec_product: *//p' .harness-version | tail -1)
-
-**Empty or absent: skip this whole step.** This repository has not connected a
-specification, there is nothing to claim and no change issue to close, and
-nothing about the loop is mentioned to the user. The release ends at step 10.
-
-**Otherwise read `CONNECTED.md` beside this file and work it in order**: wait
-for `main` to carry the release, verify production, gather the verdicts from
-the gate run records, promote each change, claim in one batch by verdict and
-by test, close the change issues, and carry its items in the closing block.
+**Every release, connected or not.** Read `LANDING.md` beside this file and
+work it in order: wait for `main` to carry the release, verify production,
+find the change keys in the PR bodies, run `CONNECTED.md` when
+`.harness-version` has a non-empty `spec_product:` line, close each change's
+work item, and carry its items in the closing block. A release production
+does not yet serve closes nothing.
 
 ### 11. Best-effort orphan branch cleanup
 

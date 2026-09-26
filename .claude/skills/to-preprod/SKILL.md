@@ -213,8 +213,8 @@ included. The `Why:` line points at the work item, whose `## Why` is written onc
     - 3-5 bullet points explaining what changed
 
     ## Spec
-    - Dormant: a link to the spec issue on the tracker, if the feature has one. Connected:
-      see CONNECTED.md, "The PR body", which adds three sections directly under this one.
+    - The change key and work item, `<KEY>: <title>` (#N), which /release closes once production
+      serves it; then the spec issue, if any. Connected: CONNECTED.md, "The PR body", adds three.
 
     ## Code review findings
     - The /code-review findings from the end of /feature phase 4, with anything deliberately

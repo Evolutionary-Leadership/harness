@@ -5,51 +5,102 @@
 
 **A turnkey, AI-native development workflow for Claude Code + GitHub.**
 
-This template gives a fresh repository a complete, convention-driven
-CI/CD harness: ephemeral `claude/` session branches that collapse into
-persistent `feature/` branches, auto-merged PRs to `preprod`, versioned
-releases to `main`, and a catalog of Claude Code skills that drive the
-whole lifecycle in natural language. Optionally, on Railway, a feature
-can opt into its own isolated preview environment.
+Create a repository from this template, run one command, and you have a
+project that knows how to build itself: Claude Code sessions that turn
+ideas into feature branches, pull requests that open and merge on green
+checks, versioned releases, and (if you want it) a live deployment for
+a feature while you are working on it. You describe what you want; the
+harness handles the rest of the ceremony.
 
-## Start here (three steps)
+## Start here
 
-1. **Click "Use this template"** and create your repository. Make sure
-   `preprod` is the default branch (it is, unless you changed it).
-2. **Open the new repository in Claude Code.** A GitHub App sees only
-   the repositories it was granted: if Claude's app, or Railway's for a
+Three steps, about ten minutes, no config files to write.
+
+1. **Click "Use this template"** and create your repository. Leave
+   `preprod` as the default branch; that is where your work lands.
+2. **Open the new repository in Claude Code** (the desktop app, the CLI,
+   or an IDE extension). The session needs a shell and a clone of the
+   repository. One check before you go on: a GitHub App sees only the
+   repositories it was granted. If Claude's app, or Railway's for a
    Railway project, was installed for selected repositories, add this
    one (or switch the app to all repositories) before `/setup`, or its
    pushes and deploys never reach the repository.
-3. **Run `/setup`.** It asks a few short questions (first time here?
-   deploy to Railway? start from the standard technical foundation? and,
-   if your Railway account has more than one workspace, which one), then
-   configures the repository, pushes one commit, and deletes itself. That
-   is the whole installation.
+3. **Run `/setup`.** It asks a handful of short questions, pushes one
+   commit, and deletes itself. That is the whole installation.
 
-After `/setup` finishes, start a fresh chat and describe your first
-feature. There is no follow-up setup step: if you chose the technical
-foundation, `/setup` already put it in place.
+When `/setup` signs off, start a fresh chat, type `/feature`, and
+describe your first idea in a sentence. There is nothing else to
+install or wire up.
 
-## What `/setup` decides
+First time here? `/setup` will point you at the
+[first-time guide](https://www.harnesscompanion.com/firsttime) before
+it touches anything. It is a short read and it covers the one-time
+account setup (Claude, GitHub, and Railway if you deploy there).
 
-- **Railway or code-only.** Answer yes and the harness activates its
-  Railway machinery: one-time provisioning of production and preprod
-  environments (app service, Postgres, object-storage bucket), plus an
-  isolated preview environment for each feature that opts in. Answer no
-  and you get the code-only variant: the full branch-and-release flow
-  with no deploy target.
-- **The technical foundation (Railway projects only).** Answer yes and
-  `/setup` copies a complete, pre-built, verified application (Next.js
-  16, Drizzle, Better Auth, TanStack Query, optimistic UI) into place
-  in the same session, replacing the minimal Express starter. No code
-  is generated; every scaffold gets byte-identical, test-covered files,
-  with a working notes app as the illustrative reference domain your
-  first features replace.
+## What `/setup` asks you
 
-Until `/setup` runs, the unconfigured Railway machinery and the
-foundation payload live inert under `.claude/setup/`. Nothing in there
+Every question is answered in the session, and `/setup` only asks the
+ones that apply to your answers so far. Roughly, in order:
+
+- **Deploy to Railway, or code only?** Yes activates the Railway
+  machinery: one-time provisioning of a production and a preprod
+  environment (app service, Postgres, object-storage bucket), plus an
+  isolated preview environment for each feature that opts in. No gives
+  you the code-only variant: the same branch-and-release flow with no
+  deploy target.
+- **Start from the technical foundation?** (Railway projects only.)
+  Yes copies a complete, pre-built, verified application into place:
+  Next.js 16, Drizzle, Better Auth, TanStack Query, optimistic UI, and
+  a working notes app as the reference domain your first features
+  replace. No code is generated; every scaffold gets the same
+  test-covered files. No keeps the minimal Express starter until your
+  first feature replaces it.
+- **Should AI agents be able to work inside your app?** (Foundation
+  projects only.) Yes ships a working MCP endpoint at `/api/mcp`,
+  authorized with the same accounts your UI uses, so an agent connects
+  as one signed-in user and reaches only that user's data. It arrives
+  with a consent screen, a first tool, tests, and a `/mcp-tool` skill
+  for adding the next one. This is the one answer that is final:
+  `/setup` deletes its payloads when it finishes, so a later yes means
+  wiring MCP by hand.
+- **What change-key prefix did the System Registry issue for this
+  system?** A short word like `MYPR`; every feature you build gets a key
+  under it (`MYPR-7`), and every branch and environment carries that
+  key. Two other answers are just as normal: "not yet" (most
+  repositories are created before their registry entry exists) and "no,
+  this repository stays off the registry" (an experiment, a throwaway, a
+  private tool). See the next section for what each one costs.
+- **Which Railway workspace?** Only if your Railway account has more
+  than one. Nothing is pre-selected.
+
+Until `/setup` runs, the unconfigured Railway machinery, the foundation
+and the MCP layer live inert under `.claude/setup/`. Nothing in there
 can trigger or fail; `/setup` either activates them or deletes them.
+
+## The one thing that can stop your first feature
+
+The change prefix. `/feature` starts by looking for one of two lines in
+`.harness-version`, because every change gets a key under that prefix
+and a key minted under the wrong one cannot be taken back:
+
+```
+change-prefix: MYPR
+```
+
+or, for a repository that deliberately stays off the registry,
+
+```
+registry: off
+```
+
+If you answered "not yet", `/feature` waits for the first line and
+nothing else is affected (branches, checks, releases and provisioning
+all work); anyone can add it, in any session, once the registry has
+issued your prefix. If you answered "no registry", `/setup` wrote the
+second line and your first feature starts at once; registering later is
+replacing that line with the first. Never guess a prefix or derive one
+from the repository name. `/setup` tells you which state you are in
+before it signs off.
 
 ## The workflow you end up with
 
@@ -60,20 +111,22 @@ claude/<name>-<sessionId>   Claude Code works here
 feature/<name>              persistent feature branch (+ opt-in preview env on Railway)
         |
         v   /to-preprod
-preprod                         PR auto-created and auto-merged
+preprod                     PR auto-created and auto-merged on green checks
         |
         v   /release
 main                        versioned, tagged, released
 ```
 
 `/feature` sizes each change (S, M or L) at the start and runs only the
-phases and gates that size needs. `/feature --ship <prompt>` runs the whole
-path without stopping, from the first prompt to a tagged release on `main`.
-Every pull request runs the `check:` line from `.harness-version`, and a
-`tests:` line, when you add one, runs in its own job against a Postgres
-service; the merge waits for both.
+phases and gates that size needs. `/feature --ship <prompt>` runs the
+whole path without stopping, from the first prompt to a tagged release on
+`main`. Every pull request runs the `check:` line from `.harness-version`,
+and a `tests:` line, when you add one, runs in its own job against a
+Postgres service; the merge waits for both.
 
-Run `/getting-started` in any session to see the full skill catalog.
+Day to day you will mostly use three skills: `/feature` to build
+something, `/to-preprod` to land it, `/release` to ship it. Run
+`/getting-started` in any session to see the full catalog.
 `.claude/HARNESS.md` documents every harness-managed file, and
 `claude-md-snippet.md` is the starting point for your own `CLAUDE.md`.
 
@@ -81,9 +134,10 @@ Run `/getting-started` in any session to see the full skill catalog.
 
 The harness is authored in
 [`evolutionary-leadership/harness-forge`](https://github.com/Evolutionary-Leadership/harness-forge)
-and synced into this template repo on every release. Established
-projects pull newer harness versions with `/harness-upgrade`; your
-variant is recorded in `.harness-version` by `/setup`.
+and synced into this template repository on every release. Established
+projects pull newer harness versions with `/harness-upgrade`;
+`.harness-version` records the variant `/setup` chose alongside the
+harness version this template shipped with.
 
 ## License
 
