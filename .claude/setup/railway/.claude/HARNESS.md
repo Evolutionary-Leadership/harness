@@ -185,8 +185,9 @@ hook does one fetch or check and returns; anything that waits is a script.
   (`verify-deploy.yml`, below), so a session rarely needs it.
 - **PreToolUse (Write, Edit, Bash and the GitHub MCP write tools)**:
   `.claude/hooks/prevent-em-dash.sh` blocks any write containing a U+2014 em
-  dash; for `Bash` only commands carrying a message or a heredoc are scanned,
-  for the MCP tools every string in the tool input.
+  dash (for `Bash` only commands carrying a message or a heredoc, for the MCP
+  tools every string in the input); `release-push-gate.sh` (same tools) admits
+  `/release`'s one push to `preprod` only under its authority check.
 - **PreToolUse (Write, Edit)**: `.claude/hooks/protect-frozen-docs.sh`
   refuses to rewrite a doc whose `docs/README.md` row reads `Frozen: Yes`
   unless the new content only appends.
@@ -417,9 +418,8 @@ is the thing that would drift.
 
 ### What a session can finish alone
 
-A session that builds for an hour and then finds it cannot merge tends to
-report itself finished, so it must know first. One axis: **does this act
-reach production?**
+A session that finds at the exit it cannot merge tends to report itself
+finished, so it must know first. One axis: **does this act reach production?**
 
 | Skill | A session alone | Why |
 |---|---|---|
@@ -438,23 +438,23 @@ agent-authority: release rollback
 
 Three things satisfy `/release`'s authority and nothing else does: that grant,
 a user asking for the skill in the turn, or `--ship` in the invocation of the
-`/feature` run that chained there (`/hotfix` and `/rollback` take the first
-two only). `--ship` counts because a person typed it about this session, and
-phase 0 says the run ends in a tagged release on `main`. A session still
-cannot assert its own authority, so there is no `--autonomous` flag; and a
-`reviewers:` line does not lower `--ship` (reviewers are requested on the PR
-for the record; the merge is not withheld).
+`/feature` run that chained there (`/hotfix` and `/rollback` take the first two
+only); `.claude/scripts/release-authority.sh` checks them. `--ship` counts
+because a person typed it about this session. A session cannot assert its own
+authority (no `--autonomous` flag), and `reviewers:` never lowers `--ship`
+(reviewers are asked for the record; the merge proceeds). The Claude Code
+permission layer is a separate check that knows none of this:
+`permissions.allow` pre-approves `/release`'s two pushes to `preprod`, and the
+`release-push-gate.sh` hook its API route, narrowing both: the script decides.
 
-**The gate binds the act, not the command.** A session may reach a skill's
-procedure by reading its `SKILL.md` and following the steps; that route stays
-open and is not a way around the gate: writing a release's signal file,
-committing and pushing it without authority is a release, whatever it is called.
+**The gate binds the act, not the command.** Following a `SKILL.md` by reading
+it stays open and is no way around the gate: writing, committing and pushing a
+release's signal file without authority is a release, whatever it is called.
 
-**A blocked session says so in one shape and never claims success.** The
-stand-down block is `.claude/skills/getting-started/SKILL.md`, Step 3c: what
-was finished, what was not, the smallest thing that would unblock it; a reply
-carrying it must not describe the work as complete, so a coordinator can tell
-a stall from a success at a glance.
+**A blocked session says so in one shape and never claims success**: the
+stand-down block (`getting-started`, Step 3c) names what was finished, what was
+not and the smallest unblock, and a reply carrying it never calls the work
+complete, so a coordinator tells a stall from a success at a glance.
 
 #### What a session cannot do at all
 

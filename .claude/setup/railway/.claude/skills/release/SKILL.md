@@ -60,10 +60,31 @@ reply, and in the feature context when `/feature` chained here): a release
 nobody was asked about is allowed; a release nobody can read afterwards is
 not.
 
-**If none of the three holds, stop here and stand down.** Do not compute
-anything, do not write a signal file, do not push. Emit the stand-down block
-(`getting-started`, Step 3c) with `reason: authority-not-granted`, and say
-plainly what this session did finish and that it is not complete.
+**Check it with the script, not by reading.** Pass the feature context when
+`/feature` chained here, and the user's own words under form 2:
+
+    bash .claude/scripts/release-authority.sh check --context=.harness/feature-context/<slug>.md --asked="<the user's words>"
+
+It tries the grant, then form 3 as the line `Invoked with: --ship` in the
+feature context as committed, then form 2 as the words passed (attested, and
+recorded verbatim). On exit 0 it stamps this clone for step 9 and records the
+form under `## Release authority` in the feature context; commit that before
+step 5 retires the file. **On exit 1 none of the three holds: stop here and
+stand down.** Do not compute anything, do not write a signal file, do not
+push. Emit the stand-down block (`getting-started`, Step 3c) with `reason:
+authority-not-granted`, and say plainly what this session did finish and
+that it is not complete.
+
+**The Claude Code permission layer is a separate check.** It knows nothing of
+these forms: it reads `.claude/settings.json`, the `allowed-tools` of a skill
+that was invoked (none when this file is followed rather than invoked), and
+its own reading of the turn. The shipped `permissions.allow` rules
+`Bash(git -C * push --dry-run origin HEAD:refs/heads/preprod)` and
+`Bash(git -C * push origin HEAD:refs/heads/preprod)` bridge the two for step
+9's pushes, and the `release-push-gate.sh` hook for its API route. That hook
+also blocks any push those rules would match that is not step 9's exact
+command under a passed check, so the script above is what stops a session
+without authority. `PUSH.md` says what to do when the layer refuses anyway.
 
 **Performing these steps by hand is the same act, and is refused the same
 way.** A forge decision record lets a session reach this procedure by reading
@@ -345,42 +366,13 @@ there is no orphan to clean up.
 
 ### 9. Push the release commit to preprod
 
-The commit carries, always, `.release-description.md` (step 8); plus
-`release-notes/<version>.md` whenever step 7b ran (the release fails without
-it); plus `CHANGELOG.md` when step 7 composed one. Its message is
-`chore: release $NEW_VERSION`. **Never push `VERSION` from here.**
-`release.yml` writes it, the migration and the changelog stamp in one commit,
-from the version in the signal file; pushing it here as well would give one
-number two owners, which is the failure that rule exists to prevent.
-
-**Try the direct path first, with a dry run.** Build the commit in a
-throwaway worktree on `origin/preprod`, so the session's branch and working
-tree never change, then ask the remote whether it would take the push:
-
-    WT=$(mktemp -d) && git worktree add --detach "$WT" origin/preprod
-    (cd "$WT" && <write the files above> && git add -A && git commit -q -m "chore: release $NEW_VERSION")
-    git -C "$WT" push --dry-run origin HEAD:refs/heads/preprod
-
-**On success, push for real:** `git -C "$WT" push origin HEAD:refs/heads/preprod`.
-
-**On refusal, push through the GitHub API instead.** In the harness sandbox,
-`origin` is a local git proxy that allows pushes only to the session's own
-`claude/<branch>`; a push to `preprod` is rejected with HTTP 403, and the dry
-run learns that before anything is sent. Call `mcp__github__push_files` with
-`owner` and `repo` from step 1, `branch` `preprod`, the message above, and
-`files` holding the same paths and contents; it creates a single commit on
-`origin/preprod` and modifies nothing locally. If it returns an error,
-surface the error and stop; the direct push was refused already, so there is
-nothing to retry.
-
-Either way, remove the worktree, then fetch so the new commit is visible:
-
-    git worktree remove --force "$WT"
-    git fetch origin preprod
-    git log origin/preprod -1 --oneline
-
-The latest commit should be `chore: release $NEW_VERSION`. **Remember which
-path took the push**; step 10 reports it.
+Read `PUSH.md` beside this file and work it in order. It verifies the
+authority stamp from `## Authority`, builds the commit (`.release-description.md`,
+plus the release note and `CHANGELOG.md` where steps 7b and 7 produced them,
+never `VERSION`), tries the direct push with a dry run, falls back to
+`mcp__github__push_files` when the git remote refuses, and stands down when the
+Claude Code permission layer refuses. **Remember which path took the push**;
+step 10 reports it.
 
 ### 10. Inform the user
 

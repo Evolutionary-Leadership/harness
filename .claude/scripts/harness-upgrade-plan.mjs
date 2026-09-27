@@ -448,17 +448,27 @@ export function configKeys(path, text) {
 // addition. A key the local side lacks entirely is a new KEY and is left to
 // `keyPaths`.
 function newListPaths(target, local, prefix = "") {
+  return Object.keys(newListEntries(target, local, prefix));
+}
+
+// The same walk, keeping WHAT is missing: key path to the target's entries
+// the local list lacks, in the target's order. `newLists` says which lists
+// differ; this says by how much, so the skill can render the entries and, for
+// the lists the harness owns (`permissions.allow` in `.claude/settings.json`),
+// add them beside the project's own without rewriting a single one of those.
+function newListEntries(target, local, prefix = "") {
   if (Array.isArray(target)) {
-    if (!Array.isArray(local)) return [];
+    if (!Array.isArray(local)) return {};
     const have = new Set(local.map((entry) => JSON.stringify(entry)));
-    return target.some((entry) => !have.has(JSON.stringify(entry))) ? [prefix] : [];
+    const missing = target.filter((entry) => !have.has(JSON.stringify(entry)));
+    return missing.length > 0 ? { [prefix]: missing } : {};
   }
-  if (target === null || typeof target !== "object") return [];
-  if (local === null || typeof local !== "object" || Array.isArray(local)) return [];
-  const out = [];
+  if (target === null || typeof target !== "object") return {};
+  if (local === null || typeof local !== "object" || Array.isArray(local)) return {};
+  const out = {};
   for (const [k, v] of Object.entries(target)) {
     if (!(k in local)) continue;
-    out.push(...newListPaths(v, local[k], prefix ? `${prefix}.${k}` : k));
+    Object.assign(out, newListEntries(v, local[k], prefix ? `${prefix}.${k}` : k));
   }
   return out;
 }
@@ -494,6 +504,7 @@ export function configDelta(path, targetText, localText) {
   return {
     newKeys: targetKeys.filter((k) => !localKeys.has(k)).sort(),
     newLists: newListPaths(target, local).sort(),
+    newEntries: newListEntries(target, local),
   };
 }
 
@@ -598,9 +609,13 @@ export function buildPlan({ targetRoot, localRoot, variant, previousRoot }) {
           } else if (delta && delta.newKeys.length === 0) {
             entry.merge = "values-only";
             entry.newLists = delta.newLists;
+            entry.newEntries = delta.newEntries;
           } else if (delta) {
             entry.newKeys = delta.newKeys;
-            if (delta.newLists.length > 0) entry.newLists = delta.newLists;
+            if (delta.newLists.length > 0) {
+              entry.newLists = delta.newLists;
+              entry.newEntries = delta.newEntries;
+            }
           }
           plan.update.push(entry);
         }

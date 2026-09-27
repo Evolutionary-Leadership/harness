@@ -391,7 +391,7 @@ own list. Never fold them together:
 | `merge` | List | Means |
 |---|---|---|
 | `true` | Config to merge | the template sets keys this project lacks. `newKeys` says which; render them, so the user sees the size before approving |
-| `"values-only"` | Only values differ | no setting is missing, but a list the template sets carries entries this one does not. `newLists` names the key paths |
+| `"values-only"` | Only values differ | no setting is missing, but a list the template sets carries entries this one does not. `newLists` names the key paths, `newEntries` the missing entries under each |
 | `"superseded"` | Already ahead | nothing the template sets is absent here. The merge would change nothing |
 
 **`"values-only"` is a question, not a verdict, and it is the user's to
@@ -455,6 +455,20 @@ command naming a `server.js` the same plan reports as deleted by the user,
 which is a broken production deploy shipped by an upgrade. Taking them in
 `.claude/settings.json` is the opposite: a hook the harness added is a
 behaviour the project should have.
+
+**`.claude/settings.json`'s `permissions.allow` is the one list the harness
+owns outright.** Add the entries `newEntries` names for that key beside the
+project's own, without a question, whichever `merge` value the entry carries;
+never remove, reorder or rewrite an entry the project has. The harness ships
+only exact rules there (the two pushes `/release` step 9 makes to `preprod`,
+which an unattended `/feature --ship` run cannot make without them), so an
+entry it adds is a behaviour this project should have. Those rules and the
+`release-push-gate.sh` hook are one bridge: the hook blocks what the rules'
+`*` would let through, so wherever the template runs that hook (on `Bash` and
+on the GitHub MCP write tools) add its command to the project's entry for the
+same matcher, or add the entry, in the same step and without a question.
+Every other list entry, the rest of `hooks` included, stays the question
+above.
 
 **`CLAUDE.md`**: never overwrite. Compare against the target's
 `claude-md-snippet.md` and *suggest* additions for the user to apply.

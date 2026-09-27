@@ -103,6 +103,11 @@
       "variant": "both"
     },
     {
+      "path": ".claude/hooks/release-push-gate.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
       "path": ".claude/journey-bindings.json",
       "class": "managed",
       "variant": "both"
@@ -154,6 +159,11 @@
     },
     {
       "path": ".claude/scripts/registry.sh",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/scripts/release-authority.sh",
       "class": "managed",
       "variant": "both"
     },
@@ -334,6 +344,11 @@
     },
     {
       "path": ".claude/skills/release/LANDING.md",
+      "class": "managed",
+      "variant": "both"
+    },
+    {
+      "path": ".claude/skills/release/PUSH.md",
       "class": "managed",
       "variant": "both"
     },

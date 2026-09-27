@@ -3,6 +3,12 @@
     "API_TIMEOUT_MS": "600000",
     "CLAUDE_CODE_MAX_RETRIES": "5"
   },
+  "permissions": {
+    "allow": [
+      "Bash(git -C * push --dry-run origin HEAD:refs/heads/preprod)",
+      "Bash(git -C * push origin HEAD:refs/heads/preprod)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -37,6 +43,10 @@
           {
             "type": "command",
             "command": "./.claude/hooks/prevent-em-dash.sh"
+          },
+          {
+            "type": "command",
+            "command": "./.claude/hooks/release-push-gate.sh"
           }
         ]
       },
@@ -46,6 +56,10 @@
           {
             "type": "command",
             "command": "./.claude/hooks/prevent-em-dash.sh"
+          },
+          {
+            "type": "command",
+            "command": "./.claude/hooks/release-push-gate.sh"
           }
         ]
       }

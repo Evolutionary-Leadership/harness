@@ -2,7 +2,7 @@
 name: continue
 description: Resume work on an in-progress feature branch. Lists active features with their feature context and preview URLs, lets you pick one, and lands you mid-flow with the reasoning intact.
 argument-hint: "[optional: feature name to continue]"
-allowed-tools: Bash(git *), Bash(gh *), Read, Glob, Grep
+allowed-tools: Bash(git *), Bash(gh *), Read, Edit, Glob, Grep
 ---
 
 # Continue an in-progress feature
@@ -116,7 +116,11 @@ feature branch, loads the feature context, and gates at the row's
 
 `--quick` and `--ship` are session-scoped: this skill re-arms neither. A
 run that was unattended resumes attended unless the user types the flag
-again.
+again. If the feature context carries an `Invoked with:` line, rewrite it to
+this session's flags (`Invoked with: none` when there are none) and commit it
+with `chore(context):` before handing over: `/release`'s authority script
+reads that line, as committed, as the `--ship` form, and yesterday's flag
+must not authorize today's release.
 
 ### 7. Ready to work
 

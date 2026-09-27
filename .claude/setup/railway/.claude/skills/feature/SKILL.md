@@ -81,9 +81,9 @@ and go all the way to implement* option at the L 1d gate and the M why-and-how v
 `.claude/HARNESS.md` owns its format and lifecycle (only the pushed copy survives the
 container), and it is a rewritten summary, never a log. Beside what that contract names,
 this skill writes `## Change`, `## Size`, `## Brief`, the key and work item, the gate
-verdicts, `Exit route`, whether autopilot or grill autonomy was granted (naming `--ship`
-where the flag did), `## Parallel work`, `## Blocked` while standing down, and `## Docs
-verdict`. Refresh it whenever finished work changes what a fresh reader needs (commit prefix
+verdicts, `Exit route`, whether autopilot or grill autonomy was granted (as `Invoked with:
+<flags>`, rewritten each session), `## Parallel work`, `## Blocked` while standing down, and
+`## Docs verdict`. Refresh it whenever finished work changes what a fresh reader needs (commit prefix
 `chore(context):` when it is the only file touched). **The touched set rides the same
 beat**: when the plan reaches an undeclared path, widen the record in place (`touched-set.mjs
 refresh --from=.harness/journey/<slug>.md --path=`, written back to that file; the next
@@ -116,7 +116,7 @@ nobody answers there takes the furthest exit the grant allows: with `agent-autho
 release` it releases, without it it will stop at `preprod` through `/to-preprod` and say so.
 **With `--ship`, this run ends in a tagged release on `main`**: the flag takes `/release`
 (`SHIP.md`). Say which in phase 0's closing block, in one line, and record it under `Exit
-route` in the context. Under `--ship`, probe the alert path once (`SHIP.md`).
+route` in the context. Under `--ship`, write `Invoked with:` and probe the alert path (`SHIP.md`).
 
 ### Capture the change, and mint its key
 

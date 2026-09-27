@@ -111,9 +111,12 @@ Going backwards stays allowed. If the plan gate exposes a hole, return to the gr
 that branch of the tree; neither entry point is a reason to build on a gap.
 
 **Neither switch survives the session.** Record in the feature context which one was
-used, so a reader knows why the run carries no approvals. A resumed `/continue` session
-never re-arms either: a switch flipped yesterday, or a flag typed yesterday, must not
-drive a session started today.
+used, so a reader knows why the run carries no approvals. Under `--ship`, phase 0 writes
+the line `Invoked with: --ship` (the flags as typed) under `## Autonomy granted` and
+commits it with the naming push: `/release`'s authority script reads that line, as
+committed, as the third form. A resumed `/continue` session never re-arms either, and
+rewrites the line to its own invocation: a switch flipped yesterday, or a flag typed
+yesterday, must not drive a session started today.
 
 ## The gate report under `--ship`
 
@@ -181,7 +184,20 @@ recommendation and say that you did; never drop the question silently. The seams
 `--ship` is release authority, and phase 5 takes `/release` by reading
 `.claude/skills/release/SKILL.md` and working its steps in order, to the end. Read its
 `## Authority` before following the file: the flag is its third form, and it is the only
-thing that has to be true for this run to release. Under it, step 4's confirmation is
+thing that has to be true for this run to release. Its authority script checks the form;
+commit the `## Release authority` record it writes before the chained `/to-preprod` retires
+the context.
+
+**The Claude Code permission layer is a separate check from the authority forms.** It
+never reads `--ship`: a skill followed by reading its file carries no `allowed-tools`, and
+in auto mode its classifier does not count a flag in a skill argument as the user asking.
+What bridges the two is shipped: `permissions.allow` in `.claude/settings.json` names
+exactly step 9's two pushes (`Bash(git -C * push --dry-run origin
+HEAD:refs/heads/preprod)` and `Bash(git -C * push origin HEAD:refs/heads/preprod)`), and
+the `release-push-gate.sh` hook pre-approves the API route only while the authority check
+has stamped the clone, and blocks any push those rules match that is not step 9's exact
+command under that stamp. A refusal from that layer anyway is `/release`'s named stand-down
+(`PUSH.md`), never a reason to try the other route. Under it, step 4's confirmation is
 skipped and step 3's blast-radius report is produced and recorded, as above. The floor
 stands: a block on the way stands the session down (`SKILL.md`, "Standing down"), and a
 session never reports the feature complete while its work sits unmerged, whatever the
